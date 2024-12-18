@@ -32,6 +32,7 @@ pub trait Packet {
 
 // 包装结构体，必须实现以seq比较，才能用于数据包排序
 #[derive(Debug, Clone)]
+#[repr(transparent)]
 pub struct PacketWrapper<T>(pub T);
 
 impl<T: Packet> PartialEq for PacketWrapper<T> {
