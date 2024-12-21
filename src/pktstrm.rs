@@ -265,63 +265,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-    struct MyPacket {
-        sport: u16,
-        dport: u16,
-        sequence: u32,
-        syn_flag: bool,
-        fin_flag: bool,
-        data: Vec<u8>,
-    }
-
-    impl MyPacket {
-        pub fn new(seq: u32, fin: bool) -> Self {
-            MyPacket {
-                sport: 54321,
-                dport: 8080,
-                sequence: seq,
-                syn_flag: false,
-                fin_flag: fin,
-                data: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-            }
-        }
-    }
-
-    impl Packet for MyPacket {
-        fn trans_proto(&self) -> TransProto {
-            TransProto::Tcp
-        }
-
-        fn tu_sport(&self) -> u16 {
-            self.sport
-        }
-
-        fn tu_dport(&self) -> u16 {
-            self.dport
-        }
-
-        fn seq(&self) -> u32 {
-            self.sequence
-        }
-
-        fn syn(&self) -> bool {
-            self.syn_flag
-        }
-
-        fn fin(&self) -> bool {
-            self.fin_flag
-        }
-
-        fn payload_len(&self) -> usize {
-            self.data.len()
-        }
-
-        fn payload(&self) -> &[u8] {
-            &self.data
-        }
-    }
+    use crate::test_utils::MyPacket;
 
     #[test]
     fn test_pktstrm_peek() {

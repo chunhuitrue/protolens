@@ -13,6 +13,7 @@ use nom::{
 use std::fmt;
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::Arc;
 
 pub enum MetaSmtp {
     User(String),
@@ -38,15 +39,26 @@ impl fmt::Debug for MetaSmtp {
     }
 }
 
+type UserCallback = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct SmtpParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
+    callback_user: Option<UserCallback>,
 }
 
 impl<T: Packet + Ord + 'static> SmtpParser<T> {
     pub fn new() -> Self {
         Self {
             _phantom: PhantomData,
+            callback_user: None,
         }
+    }
+
+    pub fn set_callback_user<F>(&mut self, callback: F)
+    where
+        F: Fn(&str) + Send + Sync + 'static,
+    {
+        self.callback_user = Some(Arc::new(callback));
     }
 }
 
@@ -64,6 +76,8 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
         stream: *const PktStrm<Self::PacketType>,
         mut meta_tx: mpsc::Sender<Meta>,
     ) -> Pin<Box<dyn Future<Output = ()>>> {
+        let callback_user = self.callback_user.clone();
+
         Box::pin(async move {
             let stm: &mut PktStrm<Self::PacketType>;
             unsafe {
@@ -81,6 +95,9 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
                 .unwrap()
                 .trim_end_matches("\r\n")
                 .to_string();
+            if let Some(cb) = callback_user {
+                cb(&user);
+            }
             let meta = Meta::Smtp(MetaSmtp::User(user));
             let _ = meta_tx.send(meta).await;
 
