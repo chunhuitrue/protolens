@@ -1,7 +1,7 @@
 use crate::Parser;
+use crate::ParserFuture;
 use crate::PktStrm;
 use crate::{Meta, Packet};
-use futures::Future;
 use futures_channel::mpsc;
 use futures_util::SinkExt;
 use nom::{
@@ -12,7 +12,6 @@ use nom::{
 };
 use std::fmt;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -76,7 +75,7 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
         &self,
         stream: *const PktStrm<Self::PacketType>,
         mut meta_tx: mpsc::Sender<Meta>,
-    ) -> Pin<Box<dyn Future<Output = ()>>> {
+    ) -> ParserFuture {
         let callback_user = self.callback_user.clone();
 
         Box::pin(async move {
@@ -86,19 +85,11 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
             }
 
             // 忽略前面不需要的命令
-            if stm.readline().await.is_err() {
-                return;
-            }
-            if stm.readline().await.is_err() {
-                return;
-            }
+            stm.readline().await?;
+            stm.readline().await?;
 
             // user
-            let user = match stm.readline().await {
-                Ok(line) => line.trim_end_matches("\r\n").to_string(),
-                Err(_) => return,
-            };
-            
+            let user = stm.readline().await?.trim_end_matches("\r\n").to_string();
             if let Some(cb) = callback_user {
                 cb.lock().unwrap()(user.clone());
             }
@@ -106,46 +97,35 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
             let _ = meta_tx.send(meta).await;
 
             // pass
-            let pass = match stm.readline().await {
-                Ok(line) => line.trim_end_matches("\r\n").to_string(),
-                Err(_) => return,
-            };
+            let pass = stm.readline().await?.trim_end_matches("\r\n").to_string();
             let meta = Meta::Smtp(MetaSmtp::Pass(pass));
             let _ = meta_tx.send(meta).await;
 
             // mail from
-            let line = match stm.readline().await {
-                Ok(line) => line.trim_end_matches("\r\n").to_string(),
-                Err(_) => return,
-            };
-            match mail_from(&line) {
-                Ok((_, (email, size))) => {
-                    let meta = Meta::Smtp(MetaSmtp::MailFrom(email.to_string(), size));
-                    let _ = meta_tx.send(meta).await;
-                }
-                Err(_err) => return,
+            let line = stm.readline().await?.trim_end_matches("\r\n").to_string();
+            if let Ok((_, (email, size))) = mail_from(&line) {
+                let meta = Meta::Smtp(MetaSmtp::MailFrom(email.to_string(), size));
+                let _ = meta_tx.send(meta).await;
+            } else {
+                return Err(());
             }
 
             // rcpt to
-            let line = match stm.readline().await {
-                Ok(line) => line.trim_end_matches("\r\n").to_string(),
-                Err(_) => return,
-            };
-            match rcpt_to(&line) {
-                Ok((_, mail)) => {
-                    let meta = Meta::Smtp(MetaSmtp::RcptTo(mail.to_string()));
-                    let _ = meta_tx.send(meta).await;
-                }
-                Err(_err) => return,
+            let line = stm.readline().await?.trim_end_matches("\r\n").to_string();
+            if let Ok((_, mail)) = rcpt_to(&line) {
+                let meta = Meta::Smtp(MetaSmtp::RcptTo(mail.to_string()));
+                let _ = meta_tx.send(meta).await;
+            } else {
+                return Err(());
             }
 
             // DATA
-            if stm.readline().await.is_err() {
-                return;
-            }
+            stm.readline().await?;
 
             // mail head
             let (_content_type, _bdry) = mail_head(stm, &mut meta_tx).await;
+
+            Ok(())
         })
     }
 }

@@ -1,10 +1,9 @@
 use crate::Parser;
+use crate::ParserFuture;
 use crate::PktStrm;
 use crate::{Meta, Packet};
-use futures::Future;
 use futures_channel::mpsc;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -46,7 +45,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
         &self,
         stream: *const PktStrm<Self::PacketType>,
         mut _meta_tx: mpsc::Sender<Meta>,
-    ) -> Pin<Box<dyn Future<Output = ()>>> {
+    ) -> ParserFuture {
         let callback = self.callback_readn.clone();
         let read_size = self.read_size;
 
@@ -65,6 +64,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
                     callback.lock().unwrap()(bytes);
                 }
             }
+            Ok(())
         })
     }
 }

@@ -1,11 +1,10 @@
 use crate::Parser;
+use crate::ParserFuture;
 use crate::PktStrm;
 use crate::{Meta, Packet};
-use futures::Future;
 use futures::StreamExt;
 use futures_channel::mpsc;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -45,7 +44,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamNextParser<T> {
         &self,
         stream: *const PktStrm<Self::PacketType>,
         mut _meta_tx: mpsc::Sender<Meta>,
-    ) -> Pin<Box<dyn Future<Output = ()>>> {
+    ) -> ParserFuture {
         let callback = self.callback_next_byte.clone();
 
         Box::pin(async move {
@@ -59,6 +58,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamNextParser<T> {
                     callback.lock().unwrap()(byte);
                 }
             }
+            Ok(())
         })
     }
 }
@@ -187,7 +187,7 @@ mod tests {
         task.run(pkt3, dir.clone());
         task.run(pkt4, dir.clone());
 
-        // 验证收到了三组相同的字节序列 (1-10 重复三次)
+        // 验证收到了三���相同的字节序列 (1-10 重复三次)
         let expected: Vec<u8> = vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第一个包的数据
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第二个包的数据

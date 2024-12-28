@@ -189,16 +189,16 @@ where
         self.take(num).collect::<Vec<u8>>().await
     }
 
-    pub async fn readline(&mut self) -> Result<String, std::string::FromUtf8Error> {
+    pub async fn readline(&mut self) -> Result<String, ()> {
         let mut res = self
             .take_while(|x| future::ready(*x != b'\n'))
             .collect::<Vec<u8>>()
             .await;
         if res.is_empty() {
-            String::from_utf8(res)
+            String::from_utf8(res).map_err(|_| ())
         } else {
             res.push(b'\n');
-            String::from_utf8(res)
+            String::from_utf8(res).map_err(|_| ())
         }
     }
 
@@ -913,7 +913,7 @@ mod tests {
         assert_eq!(res, None);
     }
 
-    // pop_ord. 一��syn，一个正常包。
+    // pop_ord. 一个syn，一个正常包。
     #[test]
     fn test_pktstrm_pop_ord_syn() {
         // syn 包seq占一个

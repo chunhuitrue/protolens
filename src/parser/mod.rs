@@ -25,31 +25,33 @@ pub enum Meta {
     Http(MetaHttp),
 }
 
+pub type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
+
 pub trait Parser {
     type PacketType: Packet + Ord + 'static;
 
     fn c2s_parser(
         &self,
         _stream: *const PktStrm<Self::PacketType>,
-        mut _meta_tx: mpsc::Sender<Meta>,
-    ) -> Pin<Box<dyn Future<Output = ()>>> {
-        Box::pin(async move {})
+        _meta_tx: mpsc::Sender<Meta>,
+    ) -> ParserFuture {
+        Box::pin(async { Ok(()) })
     }
 
     fn s2c_parser(
         &self,
         _stream: *const PktStrm<Self::PacketType>,
-        mut _meta_tx: mpsc::Sender<Meta>,
-    ) -> Pin<Box<dyn Future<Output = ()>>> {
-        Box::pin(async move {})
+        _meta_tx: mpsc::Sender<Meta>,
+    ) -> ParserFuture {
+        Box::pin(async { Ok(()) })
     }
 
     fn bdir_parser(
         &self,
         _c2s_stream: *const PktStrm<Self::PacketType>,
         _s2c_stream: *const PktStrm<Self::PacketType>,
-        mut _meta_tx: mpsc::Sender<Meta>,
-    ) -> Pin<Box<dyn Future<Output = ()>>> {
-        Box::pin(async move {})
+        _meta_tx: mpsc::Sender<Meta>,
+    ) -> ParserFuture {
+        Box::pin(async { Ok(()) })
     }
 }

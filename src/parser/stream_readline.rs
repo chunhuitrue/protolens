@@ -1,10 +1,9 @@
 use crate::Parser;
+use crate::ParserFuture;
 use crate::PktStrm;
 use crate::{Meta, Packet};
-use futures::Future;
 use futures_channel::mpsc;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -44,7 +43,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadlineParser<T> {
         &self,
         stream: *const PktStrm<Self::PacketType>,
         mut _meta_tx: mpsc::Sender<Meta>,
-    ) -> Pin<Box<dyn Future<Output = ()>>> {
+    ) -> ParserFuture {
         let callback = self.callback_readline.clone();
 
         Box::pin(async move {
@@ -66,6 +65,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadlineParser<T> {
                     Err(_) => break,
                 }
             }
+            Ok(())
         })
     }
 }
@@ -109,7 +109,7 @@ mod tests {
         let seq1 = 1;
         let payload1 = [b'H', b'e', b'l', b'l', b'o', b'\n', b'W', b'o', b'r', b' '];
         let pkt1 = build_pkt_line(seq1, payload1);
-        
+
         // 第二个包包含 "ld!\nBye\n"
         let seq2 = 11;
         let payload2 = [b'l', b'd', b'!', b'\n', b'B', b'y', b'e', b'\n', b'x', b'x'];
@@ -147,12 +147,12 @@ mod tests {
         // 创建SYN包
         let seq1 = 1;
         let pkt_syn = build_pkt_syn(seq1);
-        
+
         // 创建数据包
         let seq2 = 2; // SYN占一个序列号
         let payload1 = [b'H', b'e', b'l', b'l', b'o', b'\n', b'W', b'o', b'r', b'l'];
         let pkt1 = build_pkt_line(seq2, payload1);
-        
+
         let seq3 = 12;
         let payload2 = [b'd', b'!', b'\n', b'B', b'y', b'e', b'\n', b'x', b'x', b'x'];
         let pkt2 = build_pkt_line(seq3, payload2);

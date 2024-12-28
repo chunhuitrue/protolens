@@ -1,10 +1,9 @@
 use crate::Parser;
+use crate::ParserFuture;
 use crate::PktStrm;
 use crate::{Meta, Packet};
-use futures::Future;
 use futures_channel::mpsc;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -44,7 +43,7 @@ impl<T: Packet + Ord + 'static> Parser for OrdPacketParser<T> {
         &self,
         stream: *const PktStrm<Self::PacketType>,
         mut _meta_tx: mpsc::Sender<Meta>,
-    ) -> Pin<Box<dyn Future<Output = ()>>> {
+    ) -> ParserFuture {
         let callback = self.callback_ord_pkt.clone();
 
         Box::pin(async move {
@@ -61,6 +60,7 @@ impl<T: Packet + Ord + 'static> Parser for OrdPacketParser<T> {
                     }
                 }
             }
+            Ok(())
         })
     }
 }
@@ -195,7 +195,7 @@ mod tests {
         let seq1 = syn_seq + 1; // SYN占用一个序列号
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
-        
+
         let seq2 = seq1 + pkt1.payload_len() as u32;
         let pkt2 = build_pkt(seq2, false);
         let _ = pkt2.decode();
@@ -215,8 +215,8 @@ mod tests {
 
         // 首先发送SYN包，然后乱序发送数据包
         task.run(pkt_syn, dir.clone()); // 先发送SYN包
-        task.run(pkt2, dir.clone());    // 乱序发送数据包
-        task.run(pkt1, dir.clone());    // 乱序发送数据包
+        task.run(pkt2, dir.clone()); // 乱序发送数据包
+        task.run(pkt1, dir.clone()); // 乱序发送数据包
 
         // 验证最终收到的数据应该是有序的
         let expected: Vec<u8> = vec![

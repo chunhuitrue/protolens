@@ -1,10 +1,9 @@
 use crate::Parser;
+use crate::ParserFuture;
 use crate::PktStrm;
 use crate::{Meta, Packet};
-use futures::Future;
 use futures_channel::mpsc;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -44,7 +43,7 @@ impl<T: Packet + Ord + 'static> Parser for RawPacketParser<T> {
         &self,
         stream: *const PktStrm<Self::PacketType>,
         mut _meta_tx: mpsc::Sender<Meta>,
-    ) -> Pin<Box<dyn Future<Output = ()>>> {
+    ) -> ParserFuture {
         let callback = self.callback_raw_pkt.clone();
 
         Box::pin(async move {
@@ -53,7 +52,7 @@ impl<T: Packet + Ord + 'static> Parser for RawPacketParser<T> {
                 stm = &mut *(stream as *mut PktStrm<Self::PacketType>);
             }
 
-            loop {
+            while !stm.fin() {
                 let pkt = stm.next_raw_pkt().await;
                 if let Some(ref callback) = callback {
                     if let Some(pkt) = pkt {
@@ -61,6 +60,7 @@ impl<T: Packet + Ord + 'static> Parser for RawPacketParser<T> {
                     }
                 }
             }
+            Ok(())
         })
     }
 }

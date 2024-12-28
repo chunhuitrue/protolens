@@ -1,10 +1,10 @@
 use crate::Meta;
 use crate::Packet;
 use crate::Parser;
+use crate::ParserFuture;
 use crate::PktDirection;
 use crate::PktStrm;
 use core::{
-    future::Future,
     pin::Pin,
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
@@ -16,9 +16,9 @@ const MAX_CHANNEL_SIZE: usize = 64;
 pub struct Task<T: Packet + Ord + std::fmt::Debug + 'static> {
     stream_c2s: Box<PktStrm<T>>,
     stream_s2c: Box<PktStrm<T>>,
-    c2s_parser: Option<Pin<Box<dyn Future<Output = ()>>>>,
-    s2c_parser: Option<Pin<Box<dyn Future<Output = ()>>>>,
-    bdir_parser: Option<Pin<Box<dyn Future<Output = ()>>>>,
+    c2s_parser: Option<ParserFuture>,
+    s2c_parser: Option<ParserFuture>,
+    bdir_parser: Option<ParserFuture>,
     c2s_state: TaskState,
     s2c_state: TaskState,
     bdir_state: TaskState,
@@ -104,9 +104,8 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
             let waker = dummy_waker();
             let mut context = Context::from_waker(&waker);
             match Pin::as_mut(parser).poll(&mut context) {
-                Poll::Ready(()) => {
-                    self.c2s_state = TaskState::End;
-                }
+                Poll::Ready(Ok(())) => self.c2s_state = TaskState::End,
+                Poll::Ready(Err(())) => self.c2s_state = TaskState::Error,
                 Poll::Pending => {}
             }
         }
@@ -121,7 +120,8 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
             let waker = dummy_waker();
             let mut context = Context::from_waker(&waker);
             match Pin::as_mut(parser).poll(&mut context) {
-                Poll::Ready(()) => self.s2c_state = TaskState::End,
+                Poll::Ready(Ok(())) => self.s2c_state = TaskState::End,
+                Poll::Ready(Err(())) => self.s2c_state = TaskState::Error,
                 Poll::Pending => {}
             }
         }
@@ -136,7 +136,8 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
             let waker = dummy_waker();
             let mut context = Context::from_waker(&waker);
             match Pin::as_mut(parser).poll(&mut context) {
-                Poll::Ready(()) => self.bdir_state = TaskState::End,
+                Poll::Ready(Ok(())) => self.bdir_state = TaskState::End,
+                Poll::Ready(Err(())) => self.bdir_state = TaskState::Error,
                 Poll::Pending => {}
             }
         }
