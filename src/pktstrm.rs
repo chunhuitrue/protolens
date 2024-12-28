@@ -38,6 +38,10 @@ where
     }
 
     pub fn push(&mut self, packet: T) {
+        if self.fin {
+            return;
+        }
+
         if packet.trans_proto() != TransProto::Tcp {
             return;
         }
@@ -52,6 +56,9 @@ where
     // 无论是否严格seq连续，peek一个当前最有序的包
     // 不更新next_seq
     pub fn peek(&self) -> Option<&T> {
+        if self.fin {
+            return None;
+        }
         self.cache.peek().map(|r| &r.0 .0)
     }
 
@@ -84,6 +91,10 @@ where
 
     // 严格有序。peek一个seq严格有序的包，可能包含payload为0的。如果当前top有序，就peek，否则就none。
     pub fn peek_ord(&mut self) -> Option<&T> {
+        if self.fin {
+            return None;
+        }
+
         if self.next_seq == 0 {
             if let Some(pkt) = self.peek() {
                 self.next_seq = pkt.seq();
@@ -103,6 +114,10 @@ where
     // 严格有序。弹出一个严格有序的包，可能包含载荷为0的。否则为none
     // 并不需要关心fin标记，这不是pkt这一层关心的问题
     pub fn pop_ord(&mut self) -> Option<T> {
+        if self.fin {
+            return None;
+        }
+
         if let Some(pkt) = self.peek_ord() {
             let seq = pkt.seq();
             let payload_len = pkt.payload_len() as u32;
@@ -120,6 +135,10 @@ where
 
     // 严格有序。peek出一个带数据的严格有序的包。否则为none
     pub fn peek_ord_data(&mut self) -> Option<&T> {
+        if self.fin {
+            return None;
+        }
+
         while let Some(pkt) = self.peek_ord() {
             if pkt.payload_len() == 0 {
                 self.pop_ord();
@@ -133,6 +152,10 @@ where
 
     // 严格有序。pop一个带数据的严格有序的包。否则为none
     pub fn pop_ord_data(&mut self) -> Option<T> {
+        if self.fin {
+            return None;
+        }
+
         if let Some(pkt) = self.peek_ord_data() {
             let seq = pkt.seq();
             let payload_len = pkt.payload_len() as u32;
@@ -158,6 +181,10 @@ where
         self.cache.clear();
     }
 
+    pub fn fin(&self) -> bool {
+        self.fin
+    }
+
     pub async fn readn(&mut self, num: usize) -> Vec<u8> {
         self.take(num).collect::<Vec<u8>>().await
     }
@@ -167,13 +194,30 @@ where
             .take_while(|x| future::ready(*x != b'\n'))
             .collect::<Vec<u8>>()
             .await;
-        if !res.is_empty() {
+        if res.is_empty() {
+            String::from_utf8(res)
+        } else {
             res.push(b'\n');
+            String::from_utf8(res)
         }
-        String::from_utf8(res)
     }
 
+    // 异步方式获取下一个严格有序的包。包含载荷为0的
+    pub fn next_ord_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
+        poll_fn(|_cx| {
+            if self.fin {
+                return Poll::Ready(None);
+            }
+            if let Some(pkt) = self.pop_ord() {
+                return Poll::Ready(Some(pkt));
+            }
+            Poll::Pending
+        })
+    }
+
+    // 这个接口没必要提供
     // 异步方式获取下一个原始顺序的包。包含载荷为0的。如果cache中每到来一个包，就调用，那就是原始到来的包顺序
+    #[cfg(test)]
     pub fn next_raw_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
         poll_fn(|_cx| {
             if let Some(_pkt) = self.peek() {
@@ -183,18 +227,13 @@ where
         })
     }
 
-    // 异步方式获取下一个严格有序的包。包含载荷为0的
-    pub fn next_ord_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
-        poll_fn(|_cx| {
-            if let Some(pkt) = self.pop_ord() {
-                return Poll::Ready(Some(pkt));
-            }
-            if self.fin {
-                return Poll::Ready(None);
-            }
-            Poll::Pending
-        })
-    }
+    // fn read_pkt_byte(&mut self, index: usize) -> u8 {
+    //     let pkt = self.peek_ord_data().unwrap();
+    //     let byte = pkt.payload()[index];
+    //     // next_seq 更改必须在peek_ord_data之后。因为next_seq以变就会影响排序。所以只能读取数据之后才能更改next_seq
+    //     self.next_seq += 1;
+    //     byte
+    // }
 }
 
 impl<T> Default for PktStrm<T>
@@ -232,40 +271,90 @@ where
     type Item = u8;
 
     fn poll_next(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        let this = self.get_mut();
+        if self.fin {
+            return Poll::Ready(None);
+        }
 
-        let (seq, payload_len) = if let Some(pkt) = this.peek_ord_data() {
+        let (seq, payload_len) = if let Some(pkt) = self.peek_ord_data() {
             (pkt.seq(), pkt.payload_len())
         } else {
-            return if this.fin {
+            return if self.fin {
                 Poll::Ready(None)
             } else {
                 Poll::Pending
             };
         };
 
-        let index = this.next_seq - seq;
+        let index = self.next_seq - seq;
         if (index as usize) >= payload_len {
-            return if this.fin {
+            return if self.fin {
                 Poll::Ready(None)
             } else {
                 Poll::Pending
             };
         }
 
-        this.next_seq += 1;
-        let pkt = this.peek_ord_data().unwrap();
-        Poll::Ready(Some(pkt.payload()[index as usize]))
+        let pkt = self.peek_ord_data().unwrap();
+        let byte = pkt.payload()[index as usize];
+        // next_seq 更改必须在peek_ord_data之后。因为next_seq以变就会影响排序。所以只能读取数据之后才能更改next_seq
+        self.next_seq += 1;
+        Poll::Ready(Some(byte))
+
+        // let byte = self.read_pkt_byte(index as usize);
+        // Poll::Ready(Some(byte))
     }
+
+    // fn poll_next(
+    //     mut self: Pin<&mut Self>,
+    //     _cx: &mut Context<'_>,
+    // ) -> std::task::Poll<Option<Self::Item>> {
+    //     if let Some(pkt) = self.peek_ord_data() {
+    //         let index = *self.next_seq.borrow() - pkt.seq();
+    //         if (index as usize) < pkt.payload_len() {
+    //             *self.next_seq.borrow_mut() += 1;
+    //             let byte = pkt.payload()[index as usize];
+    //             return Poll::Ready(Some(byte));
+    //         }
+    //     }
+    //     if self.fin {
+    //         return Poll::Ready(None);
+    //     }
+    //     Poll::Pending
+    // }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::MyPacket;
+    use crate::test_utils::*;
+
+    #[test]
+    fn test_pkt() {
+        let pkt1 = make_pkt_data(123);
+        let _ = pkt1.decode();
+        assert_eq!(72, pkt1.data_len);
+        assert_eq!(62, pkt1.header.borrow().as_ref().unwrap().payload_offset);
+        assert_eq!(10, pkt1.header.borrow().as_ref().unwrap().payload_len);
+        assert_eq!(25, pkt1.header.borrow().as_ref().unwrap().sport());
+    }
+
+    #[test]
+    fn test_pktstrm_push() {
+        let mut stm = PktStrm::new();
+
+        let pkt1 = make_pkt_data(123);
+        let _ = pkt1.decode();
+        stm.push(pkt1);
+        assert_eq!(1, stm.len());
+
+        let pkt2 = make_pkt_data(123);
+        let _ = pkt2.decode();
+        stm.push(pkt2);
+        assert_eq!(2, stm.len());
+    }
 
     #[test]
     fn test_pktstrm_peek() {
@@ -552,7 +641,6 @@ mod tests {
         assert_eq!(3, stm.len());
         assert_eq!(seq2, stm.peek().unwrap().seq()); // 此时pkt2在top
         assert_eq!(seq2, stm.pop_ord().unwrap().seq()); // 弹出pkt2, 通过pop_ord更新next_seq
-        assert_eq!(seq2 + pkt2.payload_len() as u32, stm.next_seq);
 
         assert_eq!(2, stm.len());
         assert_eq!(seq3, stm.peek().unwrap().seq()); // 此时pkt3在top
@@ -823,5 +911,214 @@ mod tests {
         pkt_strm.next_seq = 1000;
         let res = pkt_strm.pop_ord_data();
         assert_eq!(res, None);
+    }
+
+    // pop_ord. 一��syn，一个正常包。
+    #[test]
+    fn test_pktstrm_pop_ord_syn() {
+        // syn 包seq占一个
+        let syn_pkt_seq = 1;
+        let syn_pkt = build_pkt_syn(syn_pkt_seq);
+        let _ = syn_pkt.decode();
+        // 2 - 11
+        let seq1 = syn_pkt_seq + 1;
+        let pkt1 = build_pkt(seq1, false);
+        let _ = pkt1.decode();
+
+        let mut stm = PktStrm::new();
+        stm.push(syn_pkt);
+        stm.push(pkt1);
+
+        let ret_syn_pkt = stm.pop_ord();
+        assert_eq!(1, ret_syn_pkt.unwrap().seq());
+        let ret_pkt1 = stm.pop_ord();
+        assert_eq!(2, ret_pkt1.unwrap().seq());
+    }
+
+    // pop_ord. syn包从0开始
+    #[test]
+    fn test_pktstrm_pop_ord_syn_seq0() {
+        // syn 包seq占一个
+        let syn_pkt_seq = 0;
+        let syn_pkt = build_pkt_syn(syn_pkt_seq);
+        let _ = syn_pkt.decode();
+        // 1 - 10
+        let seq1 = syn_pkt_seq + 1;
+        let pkt1 = build_pkt(seq1, false);
+        let _ = pkt1.decode();
+
+        let mut stm = PktStrm::new();
+        stm.push(syn_pkt);
+        stm.push(pkt1);
+
+        let ret_syn_pkt = stm.pop_ord();
+        assert_eq!(0, ret_syn_pkt.unwrap().seq());
+        let ret_pkt1 = stm.pop_ord();
+        assert_eq!(1, ret_pkt1.unwrap().seq());
+    }
+
+    // 可以多次peek。有一个独立的syn包
+    #[test]
+    fn test_pktstrm_peek_pkt_syn() {
+        // syn 包seq占一个
+        let syn_pkt_seq = 1;
+        let syn_pkt = build_pkt_syn(syn_pkt_seq);
+        let _ = syn_pkt.decode();
+        // 2 - 11
+        let seq1 = syn_pkt_seq + 1;
+        let pkt1 = build_pkt(seq1, false);
+        let _ = pkt1.decode();
+
+        let mut stm = PktStrm::new();
+        stm.push(syn_pkt);
+        stm.push(pkt1);
+
+        let ret_syn_pkt = stm.peek();
+        assert_eq!(syn_pkt_seq, ret_syn_pkt.unwrap().seq());
+        let ret_syn_pkt2 = stm.peek();
+        assert_eq!(syn_pkt_seq, ret_syn_pkt2.unwrap().seq());
+        let ret_syn_pkt3 = stm.peek();
+        assert_eq!(syn_pkt_seq, ret_syn_pkt3.unwrap().seq());
+    }
+
+    // 可以多次peek_ord。有一个独立的syn包
+    #[test]
+    fn test_pktstrm_peek_ord_pkt_syn() {
+        // syn 包seq占一个
+        let syn_pkt_seq = 1;
+        let syn_pkt = build_pkt_syn(syn_pkt_seq);
+        let _ = syn_pkt.decode();
+        // 2 - 11
+        let seq1 = syn_pkt_seq + 1;
+        let pkt1 = build_pkt(seq1, false);
+        let _ = pkt1.decode();
+
+        let mut stm = PktStrm::new();
+        stm.push(syn_pkt);
+        stm.push(pkt1);
+
+        let ret_syn_pkt = stm.peek_ord();
+        assert_eq!(syn_pkt_seq, ret_syn_pkt.unwrap().seq());
+        let ret_syn_pkt2 = stm.peek_ord();
+        assert_eq!(syn_pkt_seq, ret_syn_pkt2.unwrap().seq());
+        let ret_syn_pkt3 = stm.peek_ord();
+        assert_eq!(syn_pkt_seq, ret_syn_pkt3.unwrap().seq());
+    }
+
+    // pop_ord_data. syn包，3个数据，一个纯fin包
+    #[test]
+    fn test_pktstrm_pop_data_syn() {
+        // syn 包seq占一个
+        let syn_pkt_seq = 1;
+        let syn_pkt = build_pkt_syn(syn_pkt_seq);
+        let _ = syn_pkt.decode();
+        // 2 - 11
+        let seq1 = syn_pkt_seq + 1;
+        let pkt1 = build_pkt(seq1, false);
+        let _ = pkt1.decode();
+        // 12 - 21
+        let seq2 = seq1 + pkt1.payload_len();
+        let pkt2 = build_pkt(seq2, false);
+        let _ = pkt2.decode();
+        // 22 - 31
+        let seq3 = seq2 + pkt2.payload_len();
+        let pkt3 = build_pkt(seq3, false);
+        let _ = pkt3.decode();
+        // 32 无数据，fin
+        let seq4 = seq3 + pkt3.payload_len();
+        let pkt4 = build_pkt_fin(seq4);
+        let _ = pkt4.decode();
+
+        let mut stm = PktStrm::new();
+        stm.push(syn_pkt);
+        stm.push(pkt2);
+        stm.push(pkt3);
+        stm.push(pkt1);
+        stm.push(pkt4);
+
+        let ret_syn_pkt = stm.peek_ord(); // peek ord pkt 可以看到syn包
+        assert_eq!(syn_pkt_seq, ret_syn_pkt.unwrap().seq());
+        let ret_syn_pkt2 = stm.peek_ord(); // 可以再次peek到syn包
+        assert_eq!(syn_pkt_seq, ret_syn_pkt2.unwrap().seq());
+
+        let ret_pkt1 = stm.peek_ord_data(); // peek ord data 可以看到pkt1
+        assert_eq!(seq1, ret_pkt1.unwrap().seq());
+
+        let ret_pkt1 = stm.pop_ord_data(); // pop ord data 可以弹出pkt1
+        assert_eq!(seq1, ret_pkt1.unwrap().seq());
+    }
+
+    // pop_ord. 独立的fin包
+    #[test]
+    fn test_pktstrm_pop_ord_fin() {
+        // 1 - 10
+        let seq1 = 1;
+        let pkt1 = build_pkt(seq1, false);
+        let _ = pkt1.decode();
+        // 11 - 20
+        let seq2 = seq1 + pkt1.payload_len();
+        let pkt2 = build_pkt_fin(seq2);
+        let _ = pkt2.decode();
+
+        let mut stm = PktStrm::new();
+        stm.push(pkt1);
+        stm.push(pkt2);
+
+        let ret_pkt1 = stm.pop_ord();
+        assert_eq!(1, ret_pkt1.unwrap().seq());
+        let ret_pkt2 = stm.pop_ord();
+        assert_eq!(11, ret_pkt2.unwrap().seq());
+    }
+
+    // pop_ord. 独立的fin包。4个包乱序
+    #[test]
+    fn test_pktstrm_pop_ord_fin_4pkt() {
+        // syn pkt
+        let syn_seq = 0;
+        let syn_pkt = build_pkt_syn(syn_seq);
+        let _ = syn_pkt.decode();
+        // 1 - 10
+        let seq1 = syn_seq + 1;
+        let pkt1 = build_pkt(seq1, false);
+        let _ = pkt1.decode();
+        // 11 - 20
+        let seq2 = seq1 + pkt1.payload_len();
+        let pkt2 = build_pkt(seq2, false);
+        let _ = pkt2.decode();
+        // 21 - 30
+        let seq3 = seq2 + pkt2.payload_len();
+        let pkt3 = build_pkt(seq3, false);
+        let _ = pkt3.decode();
+        // 31 - 40
+        let seq4 = seq3 + pkt3.payload_len();
+        let pkt4 = build_pkt(seq4, false);
+        let _ = pkt4.decode();
+        // 41
+        let fin_seq = seq4 + pkt3.payload_len();
+        let fin_pkt = build_pkt_fin(fin_seq);
+        let _ = fin_pkt.decode();
+
+        let mut stm = PktStrm::new();
+        stm.push(syn_pkt);
+        stm.push(pkt1);
+        stm.push(pkt4);
+        stm.push(pkt3);
+        stm.push(pkt2);
+        stm.push(fin_pkt);
+
+        let ret_syn_pkt = stm.pop_ord();
+        assert_eq!(syn_seq, ret_syn_pkt.clone().unwrap().seq());
+        assert_eq!(0, ret_syn_pkt.unwrap().payload_len());
+        let ret_pkt1 = stm.pop_ord();
+        assert_eq!(seq1, ret_pkt1.unwrap().seq());
+        let ret_pkt2 = stm.pop_ord();
+        assert_eq!(seq2, ret_pkt2.unwrap().seq());
+        let ret_pkt3 = stm.pop_ord();
+        assert_eq!(seq3, ret_pkt3.unwrap().seq());
+        let ret_pkt4 = stm.pop_ord();
+        assert_eq!(seq4, ret_pkt4.unwrap().seq());
+        let ret_fin = stm.pop_ord();
+        assert_eq!(fin_seq, ret_fin.clone().unwrap().seq());
+        assert_eq!(0, ret_fin.unwrap().payload_len());
     }
 }

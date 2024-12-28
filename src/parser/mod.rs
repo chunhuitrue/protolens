@@ -5,7 +5,16 @@ use futures::Future;
 use futures_channel::mpsc;
 use std::pin::Pin;
 
+pub mod ordpacket;
+#[cfg(test)]
+pub mod rawpacket;
 pub mod smtp;
+#[cfg(test)]
+pub mod stream_next;
+#[cfg(test)]
+pub mod stream_readline;
+#[cfg(test)]
+pub mod stream_readn;
 
 #[derive(Debug)]
 pub enum MetaHttp {}

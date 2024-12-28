@@ -104,7 +104,9 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
             let waker = dummy_waker();
             let mut context = Context::from_waker(&waker);
             match Pin::as_mut(parser).poll(&mut context) {
-                Poll::Ready(()) => self.c2s_state = TaskState::End,
+                Poll::Ready(()) => {
+                    self.c2s_state = TaskState::End;
+                }
                 Poll::Pending => {}
             }
         }

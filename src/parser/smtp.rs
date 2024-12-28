@@ -14,6 +14,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 pub enum MetaSmtp {
     User(String),
@@ -39,7 +40,7 @@ impl fmt::Debug for MetaSmtp {
     }
 }
 
-type UserCallback = Arc<dyn Fn(&str) + Send + Sync>;
+type UserCallback = Arc<Mutex<dyn FnMut(String) + Send + Sync>>;
 
 pub struct SmtpParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -56,9 +57,9 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
 
     pub fn set_callback_user<F>(&mut self, callback: F)
     where
-        F: Fn(&str) + Send + Sync + 'static,
+        F: FnMut(String) + Send + Sync + 'static,
     {
-        self.callback_user = Some(Arc::new(callback));
+        self.callback_user = Some(Arc::new(Mutex::new(callback)));
     }
 }
 
@@ -85,69 +86,63 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
             }
 
             // 忽略前面不需要的命令
-            let _ = stm.readline().await;
-            let _ = stm.readline().await;
+            if stm.readline().await.is_err() {
+                return;
+            }
+            if stm.readline().await.is_err() {
+                return;
+            }
 
             // user
-            let user = stm
-                .readline()
-                .await
-                .unwrap()
-                .trim_end_matches("\r\n")
-                .to_string();
+            let user = match stm.readline().await {
+                Ok(line) => line.trim_end_matches("\r\n").to_string(),
+                Err(_) => return,
+            };
+            
             if let Some(cb) = callback_user {
-                cb(&user);
+                cb.lock().unwrap()(user.clone());
             }
             let meta = Meta::Smtp(MetaSmtp::User(user));
             let _ = meta_tx.send(meta).await;
 
             // pass
-            let pass = stm
-                .readline()
-                .await
-                .unwrap()
-                .trim_end_matches("\r\n")
-                .to_string();
+            let pass = match stm.readline().await {
+                Ok(line) => line.trim_end_matches("\r\n").to_string(),
+                Err(_) => return,
+            };
             let meta = Meta::Smtp(MetaSmtp::Pass(pass));
             let _ = meta_tx.send(meta).await;
 
             // mail from
-            let line = stm
-                .readline()
-                .await
-                .unwrap()
-                .trim_end_matches("\r\n")
-                .to_string();
+            let line = match stm.readline().await {
+                Ok(line) => line.trim_end_matches("\r\n").to_string(),
+                Err(_) => return,
+            };
             match mail_from(&line) {
                 Ok((_, (email, size))) => {
                     let meta = Meta::Smtp(MetaSmtp::MailFrom(email.to_string(), size));
                     let _ = meta_tx.send(meta).await;
                 }
-                Err(_err) => {}
+                Err(_err) => return,
             }
 
             // rcpt to
-            let line = stm
-                .readline()
-                .await
-                .unwrap()
-                .trim_end_matches("\r\n")
-                .to_string();
+            let line = match stm.readline().await {
+                Ok(line) => line.trim_end_matches("\r\n").to_string(),
+                Err(_) => return,
+            };
             match rcpt_to(&line) {
                 Ok((_, mail)) => {
                     let meta = Meta::Smtp(MetaSmtp::RcptTo(mail.to_string()));
                     let _ = meta_tx.send(meta).await;
                 }
-                Err(_err) => {}
+                Err(_err) => return,
             }
 
             // DATA
-            let _ = stm
-                .readline()
-                .await
-                .unwrap()
-                .trim_end_matches("\r\n")
-                .to_string();
+            if stm.readline().await.is_err() {
+                return;
+            }
 
             // mail head
             let (_content_type, _bdry) = mail_head(stm, &mut meta_tx).await;
@@ -185,7 +180,10 @@ async fn mail_head<T: Packet + Ord + 'static>(
     let mut boundary = String::new();
 
     loop {
-        let line = stm.readline().await.unwrap();
+        let line = match stm.readline().await {
+            Ok(line) => line,
+            Err(_) => break,
+        };
         if line == "\r\n" {
             break;
         }
@@ -216,7 +214,7 @@ async fn mail_head<T: Packet + Ord + 'static>(
             Err(_err) => {}
         }
     }
-    (cont_type, boundary.to_string())
+    (cont_type, boundary)
 }
 
 // Subject: biaoti
@@ -236,7 +234,7 @@ fn content_type(input: &str) -> IResult<&str, ContentType> {
     }
 }
 
-// 	boundary="----=_001_NextPart572182624333_=----"
+// \tboundary="----=_001_NextPart572182624333_=----"
 fn content_type_ext(input: &str, cont_rady: bool) -> IResult<&str, &str> {
     if !cont_rady {
         return Ok((input, ""));
@@ -245,4 +243,89 @@ fn content_type_ext(input: &str, cont_rady: bool) -> IResult<&str, &str> {
     let (input, _) = tag("\tboundary=\"")(input)?;
     let (input, bdry) = take_till(|c| c == '"')(input)?;
     Ok((input, bdry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::*;
+    use crate::*;
+    use std::env;
+    use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn test_smtp_parser() {
+        let project_root = env::current_dir().unwrap();
+        let file_path = project_root.join("tests/res/smtp.pcap");
+        let mut cap = Capture::init(file_path).unwrap();
+        let dir = PktDirection::Client2Server;
+
+        let captured_user = Arc::new(Mutex::new(String::new()));
+        let captured_user_clone = captured_user.clone();
+        let callback = move |user: String| {
+            let mut guard = captured_user_clone.lock().unwrap();
+            *guard = user;
+            dbg!("in callback user", &guard);
+        };
+
+        let mut parser = SmtpParser::<CapPacket>::new();
+        parser.set_callback_user(callback);
+        let mut task = Task::new_with_parser(parser);
+        let mut push_count = 0;
+
+        loop {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let pkt = cap.next_packet(now);
+            if pkt.is_none() {
+                break;
+            }
+            let pkt = pkt.unwrap();
+            if pkt.decode().is_err() {
+                continue;
+            }
+
+            if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
+                push_count += 1;
+                dbg!(push_count, pkt.seq());
+                task.run(pkt, dir.clone());
+                meta_recver(&mut task);
+            }
+        }
+
+        assert_eq!(
+            *captured_user.lock().unwrap(),
+            "dXNlcjEyMzQ1QGV4YW1wbGUxMjMuY29t"
+        );
+    }
+
+    fn meta_recver<T: Packet + Ord + std::fmt::Debug + 'static>(task: &mut Task<T>) {
+        while let Some(meta) = task.get_meta() {
+            match meta {
+                Meta::Smtp(smtp) => meta_smtp_recver(smtp),
+                Meta::Http(_) => {}
+            }
+        }
+    }
+
+    fn meta_smtp_recver(smtp: MetaSmtp) {
+        println!("recv meta_smtp: {:?}", smtp);
+        match smtp {
+            MetaSmtp::User(user) => assert_eq!("dXNlcjEyMzQ1QGV4YW1wbGUxMjMuY29t", user),
+            MetaSmtp::Pass(pass) => assert_eq!("MTIzNDU2Nzg=", pass),
+            MetaSmtp::MailFrom(mail, mail_size) => {
+                assert_eq!("user12345@example123.com", mail);
+                assert_eq!(10557, mail_size);
+            }
+            MetaSmtp::RcptTo(mail) => {
+                assert_eq!("user12345@example123.com", mail);
+            }
+            MetaSmtp::Subject(subject) => {
+                assert_eq!("biaoti", subject);
+            }
+        }
+    }
 }
