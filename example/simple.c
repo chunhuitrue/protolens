@@ -12,7 +12,6 @@ typedef struct {
     size_t payload_len;
 } TestPacket;
 
-// PacketVTable 的回调函数实现
 TransProto packet_trans_proto(void* packet) {
     return Tcp;
 }
@@ -50,40 +49,41 @@ const uint8_t* packet_payload(void* packet) {
     return pkt->payload;
 }
 
+void callback_smtp_user(const char* username) {
+    printf("Received SMTP username: %s\n", username);
+}
+
 int main(void) {
-    // 创建虚函数表
+    /* vtable 和callback设置一次即可，不需要每个线程，每个task都设置 */
     PacketVTable vtable = {
         .trans_proto = packet_trans_proto,
-        .tu_sport = packet_sport,
-        .tu_dport = packet_dport,
-        .seq = packet_seq,
-        .syn = packet_syn,
-        .fin = packet_fin,
+        .tu_sport    = packet_sport,
+        .tu_dport    = packet_dport,
+        .seq         = packet_seq,
+        .syn         = packet_syn,
+        .fin         = packet_fin,
         .payload_len = packet_payload_len,
-        .payload = packet_payload,
+        .payload     = packet_payload,
     };
+    task_set_smtp_user_callback(callback_smtp_user);
 
-    // 创建测试数据包
-    uint8_t payload[] = "USER test\r\n";
+    uint8_t payload[] = "line1\r\nline2\r\nUSER test\r\n";
     TestPacket test_packet = {
         .seq = 1,
         .sport = 12345,
-        .dport = 25,  // SMTP port
+        .dport = 25,
         .payload = payload,
         .payload_len = sizeof(payload) - 1,
     };
 
-    // 创建并初始化任务
     Task *task = task_new_with_parser(Smtp);
     if (!task) {
         printf("Failed to create task\n");
         return 1;
     }
 
-    // 运行任务处理数据包
     task_run(task, &test_packet, &vtable, Client2Server, 1000);
 
-    // 清理
     task_free(task);
     return 0;
 }

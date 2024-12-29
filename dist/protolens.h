@@ -3,6 +3,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 typedef enum {
     Tcp,
@@ -42,5 +45,11 @@ Task *task_new_with_parser(ParserType parser_type);
 Task *task_init_parser(Task* task_ptr, ParserType parser_type);
 void task_run(Task *task_ptr, void *packet_ptr, const PacketVTable *vtable_ptr,
               PktDirection pkt_dir, uint64_t ts);
+
+/* smtp */
+typedef void (*SmtpUserCallback)(const char* username);
+void task_set_smtp_user_callback(SmtpUserCallback callback);
+
+/* http */
 
 #endif

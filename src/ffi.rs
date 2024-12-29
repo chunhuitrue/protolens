@@ -1,10 +1,12 @@
 extern crate libc;
 use crate::packet::TransProto;
 use crate::{smtp::SmtpParser, Packet, PktDirection, Task};
+use std::ffi::CString;
+use std::os::raw::c_char;
 use std::ptr;
 
-#[repr(C)]
 #[allow(dead_code)]
+#[repr(C)]
 pub enum ParserType {
     Smtp,
     Http,
@@ -87,6 +89,24 @@ impl std::fmt::Debug for FfiPacket {
     }
 }
 
+type CSmtpUserCallback = extern "C" fn(*const c_char);
+
+#[no_mangle]
+pub extern "C" fn task_set_smtp_user_callback(callback: Option<CSmtpUserCallback>) {
+    unsafe {
+        CALLBACKS.smtp_user = callback;
+    }
+}
+
+struct CallbackTable {
+    smtp_user: Option<CSmtpUserCallback>,
+    // smtp_pass: Option<CSmtpPassCallback>,
+    // http_request: Option<CHttpRequestCallback>,
+    // ...
+}
+
+static mut CALLBACKS: CallbackTable = CallbackTable { smtp_user: None };
+
 #[no_mangle]
 pub extern "C" fn task_new() -> *mut Task<FfiPacket> {
     Box::into_raw(Box::new(Task::new()))
@@ -105,7 +125,21 @@ pub extern "C" fn task_free(ptr: *mut Task<FfiPacket>) {
 #[no_mangle]
 pub extern "C" fn task_new_with_parser(parser_type: ParserType) -> *mut Task<FfiPacket> {
     match parser_type {
-        ParserType::Smtp => Box::into_raw(Box::new(Task::new_with_parser(SmtpParser::new()))),
+        ParserType::Smtp => {
+            let mut parser = SmtpParser::new();
+
+            unsafe {
+                if let Some(cb) = CALLBACKS.smtp_user {
+                    parser.set_callback_user(move |user: String| {
+                        if let Ok(c_user) = CString::new(user) {
+                            cb(c_user.as_ptr());
+                        }
+                    });
+                }
+            }
+
+            Box::into_raw(Box::new(Task::new_with_parser(parser)))
+        }
         _ => ptr::null_mut(),
     }
 }
@@ -122,7 +156,19 @@ pub extern "C" fn task_init_parser(
     let task = unsafe { &mut *task_ptr };
     match parser_type {
         ParserType::Smtp => {
-            task.init_parser(SmtpParser::new());
+            let mut parser = SmtpParser::new();
+
+            unsafe {
+                if let Some(cb) = CALLBACKS.smtp_user {
+                    parser.set_callback_user(move |user: String| {
+                        if let Ok(c_user) = CString::new(user) {
+                            cb(c_user.as_ptr());
+                        }
+                    });
+                }
+            }
+
+            task.init_parser(parser);
             task_ptr
         }
         _ => task_ptr,

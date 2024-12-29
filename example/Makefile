@@ -1,13 +1,21 @@
-# LD_LIBRARY_PATH=target/debug/ ./c-example
+# 编译
+# make
+# 运行
+# LD_LIBRARY_PATH=../target/debug/ ./smtp
+
 CC=gcc
-# CFLAGS=--std=c11
 LDFLAGS=-L../target/debug/
 LDLIBS=-lprotolens -lpcap
 
-all: c-example
+TARGETS=simple smtp
 
-c-example: ffi.c
-	$(CC) $(CFLAGS) -o c-example ffi.c $(LDFLAGS) $(LDLIBS)
+all: $(TARGETS)
+
+simple: simple.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
+
+smtp: smtp.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
 clean:
-	rm -f c-example
+	rm -f $(TARGETS)
