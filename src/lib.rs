@@ -1,3 +1,4 @@
+mod ffi;
 mod packet;
 mod parser;
 mod pktstrm;

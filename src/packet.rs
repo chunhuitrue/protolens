@@ -1,6 +1,7 @@
 use std::cmp::{Ord, Ordering, PartialOrd};
 use std::fmt::Debug;
 
+#[repr(C)]
 #[derive(Debug, Eq, PartialEq, Clone, PartialOrd, Ord)]
 pub enum TransProto {
     Tcp,
@@ -8,6 +9,7 @@ pub enum TransProto {
     Other,
 }
 
+#[repr(C)]
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum PktDirection {
     Client2Server,
