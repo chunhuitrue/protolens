@@ -1,5 +1,5 @@
 mod config;
-mod ffi;
+// mod ffi;
 mod packet;
 mod parser;
 mod pktstrm;
@@ -17,17 +17,41 @@ pub use pool::*;
 pub use task::*;
 pub use util::*;
 
-pub struct ProtoLens<T> {
-    pool: Pool<T>,
+use std::marker::PhantomData;
+use std::sync::Arc;
+
+pub struct ProtoLens<P> {
     config: Config,
+    pool: Pool,
+    _phantom: PhantomData<P>,
 }
 
-impl<T> ProtoLens<T> {
-    pub fn new(config: Config) -> Self {
+impl<P: Packet + Ord + std::fmt::Debug + 'static> ProtoLens<P> {
+    pub fn new(config: &Config) -> Self {
         ProtoLens {
+            config: config.clone(),
             pool: Pool::new(config.pool_size),
-            config,
+            _phantom: PhantomData,
         }
+    }
+
+    pub fn new_task(&self) -> PoolBox<Task<P>> {
+        self.pool.acquire(|| Task::new())
+    }
+
+    pub fn new_parser<T: Parser<PacketType = P>>(&self) -> PoolBox<T> {
+        self.pool.acquire(|| {
+            let mut parser = T::new();
+            parser.set_pool(Arc::new(self.pool.clone()));
+            parser
+        })
+    }
+
+    pub fn new_task_with_parser<T: Parser<PacketType = P>>(
+        &self,
+        parser: PoolBox<T>,
+    ) -> PoolBox<Task<P>> {
+        self.pool.acquire(|| Task::new_with_parser(parser))
     }
 
     pub fn config(&self) -> &Config {
@@ -35,22 +59,10 @@ impl<T> ProtoLens<T> {
     }
 }
 
-impl<P: Packet + Ord + std::fmt::Debug + 'static> ProtoLens<Task<P>> {
-    pub fn new_task(&self) -> PooledObject<Task<P>> {
-        self.pool.acquire(|| Task::new())
-    }
-
-    pub fn new_task_with_parser(
-        &self,
-        parser: impl Parser<PacketType = P>,
-    ) -> PooledObject<Task<P>> {
-        self.pool.acquire(|| Task::new_with_parser(parser))
-    }
-}
-
-impl<T> Default for ProtoLens<T> {
+impl<P: Packet + Ord + std::fmt::Debug + 'static> Default for ProtoLens<P> {
     fn default() -> Self {
-        Self::new(Config::default())
+        let config = Config::default();
+        Self::new(&config)
     }
 }
 
@@ -63,7 +75,7 @@ mod tests {
 
     #[test]
     fn test_protolens_basic() {
-        let protolens = ProtoLens::<Task<MyPacket>>::default();
+        let protolens = ProtoLens::<MyPacket>::default();
         let mut task = protolens.new_task();
 
         let pkt = MyPacket::new(1, false);
@@ -72,8 +84,41 @@ mod tests {
 
     #[test]
     fn test_protolens_with_parser() {
-        let protolens = ProtoLens::<Task<MyPacket>>::default();
-        let mut task = protolens.new_task_with_parser(SmtpParser::new());
+        let protolens = ProtoLens::<MyPacket>::default();
+        let parser = protolens.new_parser::<SmtpParser<MyPacket>>();
+        let mut task = protolens.new_task_with_parser(parser);
+
+        let pkt = MyPacket::new(1, false);
+        task.run(pkt, PktDirection::Client2Server);
+    }
+
+    #[test]
+    fn test_protolens_config() {
+        let config = Config { pool_size: 20 };
+        let protolens = ProtoLens::<MyPacket>::new(&config);
+
+        assert_eq!(protolens.config.pool_size, 20);
+    }
+
+    #[test]
+    fn test_protolens_multiple_tasks() {
+        let protolens = ProtoLens::<MyPacket>::default();
+
+        let mut task1 = protolens.new_task();
+        let mut task2 = protolens.new_task();
+
+        let pkt1 = MyPacket::new(1, false);
+        let pkt2 = MyPacket::new(2, false);
+
+        task1.run(pkt1, PktDirection::Client2Server);
+        task2.run(pkt2, PktDirection::Server2Client);
+    }
+
+    #[test]
+    fn test_protolens_parser() {
+        let protolens = ProtoLens::<MyPacket>::default();
+        let parser = protolens.new_parser::<SmtpParser<MyPacket>>();
+        let mut task = protolens.new_task_with_parser(parser);
 
         let pkt = MyPacket::new(1, false);
         task.run(pkt, PktDirection::Client2Server);

@@ -1,9 +1,12 @@
 use self::smtp::MetaSmtp;
+use crate::pool::Pool;
+use crate::pool::PoolBox;
 use crate::Packet;
 use crate::PktStrm;
 use futures::Future;
 use futures_channel::mpsc;
 use std::pin::Pin;
+use std::sync::Arc;
 
 pub mod ordpacket;
 #[cfg(test)]
@@ -25,17 +28,24 @@ pub enum Meta {
     Http(MetaHttp),
 }
 
-pub type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
+pub type ParserFuture = Pin<PoolBox<dyn Future<Output = Result<(), ()>>>>;
 
 pub trait Parser {
     type PacketType: Packet + Ord + 'static;
+
+    fn pool(&self) -> &Pool;
+    fn set_pool(&mut self, pool: Arc<Pool>);
+
+    fn new() -> Self
+    where
+        Self: Sized;
 
     fn c2s_parser(
         &self,
         _stream: *const PktStrm<Self::PacketType>,
         _meta_tx: mpsc::Sender<Meta>,
     ) -> ParserFuture {
-        Box::pin(async { Ok(()) })
+        self.pool().new_future(async { Ok(()) })
     }
 
     fn s2c_parser(
@@ -43,7 +53,7 @@ pub trait Parser {
         _stream: *const PktStrm<Self::PacketType>,
         _meta_tx: mpsc::Sender<Meta>,
     ) -> ParserFuture {
-        Box::pin(async { Ok(()) })
+        self.pool().new_future(async { Ok(()) })
     }
 
     fn bdir_parser(
@@ -52,6 +62,6 @@ pub trait Parser {
         _s2c_stream: *const PktStrm<Self::PacketType>,
         _meta_tx: mpsc::Sender<Meta>,
     ) -> ParserFuture {
-        Box::pin(async { Ok(()) })
+        self.pool().new_future(async { Ok(()) })
     }
 }

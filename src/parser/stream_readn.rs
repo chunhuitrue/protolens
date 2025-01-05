@@ -1,3 +1,4 @@
+use crate::pool::Pool;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
@@ -11,6 +12,7 @@ type CallbackStreamReadn = Arc<Mutex<dyn FnMut(Vec<u8>) + Send + Sync>>;
 
 pub struct StreamReadnParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
+    pool: Option<Arc<Pool>>,
     callback_readn: Option<CallbackStreamReadn>,
     read_size: usize, // 每次读取的字节数
 }
@@ -19,6 +21,7 @@ impl<T: Packet + Ord + 'static> StreamReadnParser<T> {
     pub fn new(read_size: usize) -> Self {
         Self {
             _phantom: PhantomData,
+            pool: None,
             callback_readn: None,
             read_size,
         }
@@ -41,15 +44,27 @@ impl<T: Packet + Ord + 'static> Default for StreamReadnParser<T> {
 impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
     type PacketType = T;
 
+    fn new() -> Self {
+        Self::new(10)  // 使用默认大小 10
+    }
+
+    fn pool(&self) -> &Pool {
+        self.pool.as_ref().expect("Pool not set").as_ref()
+    }
+
+    fn set_pool(&mut self, pool: Arc<Pool>) {
+        self.pool = Some(pool);
+    }
+
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
-        mut _meta_tx: mpsc::Sender<Meta>,
+        _meta_tx: mpsc::Sender<Meta>,
     ) -> ParserFuture {
         let callback = self.callback_readn.clone();
         let read_size = self.read_size;
 
-        Box::pin(async move {
+        self.pool().new_future(async move {
             let stm: &mut PktStrm<Self::PacketType>;
             unsafe {
                 stm = &mut *(stream as *mut PktStrm<Self::PacketType>);
@@ -89,9 +104,10 @@ mod tests {
             vec_clone.lock().unwrap().extend(bytes);
         };
 
-        let mut parser = StreamReadnParser::<CapPacket>::new(5); // 每次读取5个字节
+        let protolens = ProtoLens::<CapPacket>::default();
+        let mut parser = protolens.new_parser::<StreamReadnParser<CapPacket>>();
         parser.set_callback_readn(callback);
-        let mut task = Task::new_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser);
 
         task.run(pkt1, dir.clone());
 
@@ -117,9 +133,10 @@ mod tests {
             vec_clone.lock().unwrap().extend(bytes);
         };
 
-        let mut parser = StreamReadnParser::<CapPacket>::new(8); // 每次读取8个字节
+        let protolens = ProtoLens::<CapPacket>::default();
+        let mut parser = protolens.new_parser::<StreamReadnParser<CapPacket>>();
         parser.set_callback_readn(callback);
-        let mut task = Task::new_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser);
 
         task.run(pkt1, dir.clone());
         task.run(pkt2, dir.clone());
@@ -156,9 +173,10 @@ mod tests {
             vec_clone.lock().unwrap().extend(bytes);
         };
 
-        let mut parser = StreamReadnParser::<CapPacket>::new(7); // 每次读取7个字节
+        let protolens = ProtoLens::<CapPacket>::default();
+        let mut parser = protolens.new_parser::<StreamReadnParser<CapPacket>>();
         parser.set_callback_readn(callback);
-        let mut task = Task::new_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser);
 
         // 乱序发送包
         task.run(pkt_syn, dir.clone());

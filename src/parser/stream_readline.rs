@@ -6,11 +6,13 @@ use futures_channel::mpsc;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::Mutex;
+use crate::pool::Pool;
 
 type CallbackStreamReadline = Arc<Mutex<dyn FnMut(String) + Send + Sync>>;
 
 pub struct StreamReadlineParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
+    pool: Option<Arc<Pool>>,
     callback_readline: Option<CallbackStreamReadline>,
 }
 
@@ -18,6 +20,7 @@ impl<T: Packet + Ord + 'static> StreamReadlineParser<T> {
     pub fn new() -> Self {
         Self {
             _phantom: PhantomData,
+            pool: None,
             callback_readline: None,
         }
     }
@@ -39,14 +42,26 @@ impl<T: Packet + Ord + 'static> Default for StreamReadlineParser<T> {
 impl<T: Packet + Ord + 'static> Parser for StreamReadlineParser<T> {
     type PacketType = T;
 
+    fn new() -> Self {
+        Self::new()
+    }
+
+    fn pool(&self) -> &Pool {
+        self.pool.as_ref().expect("Pool not set").as_ref()
+    }
+
+    fn set_pool(&mut self, pool: Arc<Pool>) {
+        self.pool = Some(pool);
+    }
+
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
-        mut _meta_tx: mpsc::Sender<Meta>,
+        _meta_tx: mpsc::Sender<Meta>,
     ) -> ParserFuture {
         let callback = self.callback_readline.clone();
 
-        Box::pin(async move {
+        self.pool().new_future(async move {
             let stm: &mut PktStrm<Self::PacketType>;
             unsafe {
                 stm = &mut *(stream as *mut PktStrm<Self::PacketType>);
@@ -92,9 +107,10 @@ mod tests {
             lines_clone.lock().unwrap().push(line);
         };
 
-        let mut parser = StreamReadlineParser::<CapPacket>::new();
+        let protolens = ProtoLens::<CapPacket>::default();
+        let mut parser = protolens.new_parser::<StreamReadlineParser<CapPacket>>();
         parser.set_callback_readline(callback);
-        let mut task = Task::new_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser);
 
         task.run(pkt1, dir.clone());
 
@@ -126,9 +142,10 @@ mod tests {
             lines_clone.lock().unwrap().push(line);
         };
 
-        let mut parser = StreamReadlineParser::<CapPacket>::new();
+        let protolens = ProtoLens::<CapPacket>::default();
+        let mut parser = protolens.new_parser::<StreamReadlineParser<CapPacket>>();
         parser.set_callback_readline(callback);
-        let mut task = Task::new_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser);
 
         task.run(pkt1, dir.clone());
         task.run(pkt2, dir.clone());
@@ -169,9 +186,10 @@ mod tests {
             lines_clone.lock().unwrap().push(line);
         };
 
-        let mut parser = StreamReadlineParser::<CapPacket>::new();
+        let protolens = ProtoLens::<CapPacket>::default();
+        let mut parser = protolens.new_parser::<StreamReadlineParser<CapPacket>>();
         parser.set_callback_readline(callback);
-        let mut task = Task::new_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser);
 
         // 乱序发送包
         task.run(pkt_syn, dir.clone());

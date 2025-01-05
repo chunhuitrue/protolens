@@ -4,6 +4,7 @@ use crate::Parser;
 use crate::ParserFuture;
 use crate::PktDirection;
 use crate::PktStrm;
+use crate::PoolBox;
 use core::{
     pin::Pin,
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
@@ -43,30 +44,13 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
         }
     }
 
-    pub fn new_with_parser(parser: impl Parser<PacketType = T>) -> Self {
-        let stream_c2s = Box::new(PktStrm::new());
-        let stream_s2c = Box::new(PktStrm::new());
-        let (tx, rx) = mpsc::channel(MAX_CHANNEL_SIZE);
-        let p_stream_c2s: *const PktStrm<T> = &*stream_c2s;
-        let p_stream_s2c: *const PktStrm<T> = &*stream_s2c;
-        let c2s_parser = parser.c2s_parser(p_stream_c2s, tx.clone());
-        let s2c_parser = parser.s2c_parser(p_stream_s2c, tx.clone());
-        let bdir_parser = parser.bdir_parser(p_stream_c2s, p_stream_s2c, tx.clone());
-
-        Task {
-            stream_c2s,
-            stream_s2c,
-            c2s_parser: Some(c2s_parser),
-            s2c_parser: Some(s2c_parser),
-            bdir_parser: Some(bdir_parser),
-            c2s_state: TaskState::Start,
-            s2c_state: TaskState::Start,
-            bdir_state: TaskState::Start,
-            meta_rx: Some(rx),
-        }
+    pub fn new_with_parser<P: Parser<PacketType = T>>(parser: PoolBox<P>) -> Self {
+        let mut task = Task::new();
+        task.init_parser(parser);
+        task
     }
 
-    pub fn init_parser(&mut self, parser: impl Parser<PacketType = T>) {
+    pub fn init_parser<P: Parser<PacketType = T>>(&mut self, parser: PoolBox<P>) {
         let p_stream_c2s: *const PktStrm<T> = &*(self.stream_c2s);
         let p_stream_s2c: *const PktStrm<T> = &*(self.stream_s2c);
         let (tx, rx) = mpsc::channel(MAX_CHANNEL_SIZE);

@@ -1,3 +1,4 @@
+use crate::pool::Pool;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
@@ -12,6 +13,7 @@ type CallbackOrdPkt<T> = Arc<Mutex<dyn FnMut(T) + Send + Sync>>;
 pub struct OrdPacketParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     callback_ord_pkt: Option<CallbackOrdPkt<T>>,
+    pool: Option<Arc<Pool>>,
 }
 
 impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
@@ -19,6 +21,7 @@ impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
         Self {
             _phantom: PhantomData,
             callback_ord_pkt: None,
+            pool: None,
         }
     }
 
@@ -27,6 +30,14 @@ impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
         F: FnMut(T) + Send + Sync + 'static,
     {
         self.callback_ord_pkt = Some(Arc::new(Mutex::new(callback)));
+    }
+
+    pub fn set_pool(&mut self, pool: Arc<Pool>) {
+        self.pool = Some(pool);
+    }
+
+    fn pool(&self) -> &Pool {
+        self.pool.as_ref().expect("Pool not set").as_ref()
     }
 }
 
@@ -39,6 +50,10 @@ impl<T: Packet + Ord + 'static> Default for OrdPacketParser<T> {
 impl<T: Packet + Ord + 'static> Parser for OrdPacketParser<T> {
     type PacketType = T;
 
+    fn new() -> Self {
+        Self::new()
+    }
+
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
@@ -46,7 +61,7 @@ impl<T: Packet + Ord + 'static> Parser for OrdPacketParser<T> {
     ) -> ParserFuture {
         let callback = self.callback_ord_pkt.clone();
 
-        Box::pin(async move {
+        let future = self.pool().new_future(async move {
             let stm: &mut PktStrm<Self::PacketType>;
             unsafe {
                 stm = &mut *(stream as *mut PktStrm<Self::PacketType>);
@@ -61,7 +76,16 @@ impl<T: Packet + Ord + 'static> Parser for OrdPacketParser<T> {
                 }
             }
             Ok(())
-        })
+        });
+        future
+    }
+
+    fn pool(&self) -> &Pool {
+        self.pool.as_ref().expect("Pool not set").as_ref()
+    }
+
+    fn set_pool(&mut self, pool: Arc<Pool>) {
+        self.pool = Some(pool);
     }
 }
 
@@ -75,17 +99,20 @@ mod tests {
 
     #[test]
     fn test_ordpacket_parser() {
+        println!("Starting test_ordpacket_parser");
         let project_root = env::current_dir().unwrap();
         let file_path = project_root.join("tests/res/smtp.pcap");
+        println!("Opening pcap file: {:?}", file_path);
         let mut cap = Capture::init(file_path).unwrap();
         let dir = PktDirection::Client2Server;
-
         let count = Arc::new(Mutex::new(0));
         let count_clone = count.clone();
 
         let callback = move |pkt: CapPacket| {
+            println!("Callback triggered with packet seq: {}", pkt.seq());
             let mut count = count_clone.lock().unwrap();
             *count += 1;
+            println!("Current count: {}", *count);
             dbg!(pkt.seq(), *count);
             match *count {
                 1 => assert_eq!(1341098158, pkt.seq()),
@@ -110,11 +137,17 @@ mod tests {
             }
         };
 
-        let mut parser = OrdPacketParser::<CapPacket>::new();
+        println!("Creating ProtoLens and parser");
+        let protolens = ProtoLens::<CapPacket>::default();
+        let mut parser = protolens.new_parser::<OrdPacketParser<CapPacket>>();
+        println!("Setting callback");
         parser.set_callback_ord_pkt(callback);
-        let mut task = Task::new_with_parser(parser);
+        println!("Creating task");
+        let mut task = protolens.new_task_with_parser(parser);
+        println!("Task created");
         let mut push_count = 0;
 
+        println!("Starting packet processing loop");
         loop {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -122,20 +155,23 @@ mod tests {
                 .as_millis();
             let pkt = cap.next_packet(now);
             if pkt.is_none() {
+                println!("No more packets");
                 break;
             }
             let pkt = pkt.unwrap();
             if pkt.decode().is_err() {
+                println!("Packet decode error");
                 continue;
             }
 
             if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
                 push_count += 1;
-                dbg!(push_count, pkt.seq());
+                println!("Processing packet {}: seq={}", push_count, pkt.seq());
                 task.run(pkt, dir.clone());
             }
         }
-        dbg!(*count.lock().unwrap());
+
+        println!("Loop finished. Final count: {}", *count.lock().unwrap());
         assert_eq!(*count.lock().unwrap(), 18);
     }
 
@@ -164,9 +200,10 @@ mod tests {
             vec_clone.lock().unwrap().extend(pkt.payload());
         };
 
-        let mut parser = OrdPacketParser::<CapPacket>::new();
+        let protolens = ProtoLens::<CapPacket>::default();
+        let mut parser = protolens.new_parser::<OrdPacketParser<CapPacket>>();
         parser.set_callback_ord_pkt(callback);
-        let mut task = Task::new_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser);
 
         // 乱序发送包,但至少第一个包得先发送，否则起始seq就不是第一个了
         task.run(pkt1, dir.clone()); // seq1
@@ -209,9 +246,10 @@ mod tests {
             vec_clone.lock().unwrap().extend(pkt.payload());
         };
 
-        let mut parser = OrdPacketParser::<CapPacket>::new();
+        let protolens = ProtoLens::<CapPacket>::default();
+        let mut parser = protolens.new_parser::<OrdPacketParser<CapPacket>>();
         parser.set_callback_ord_pkt(callback);
-        let mut task = Task::new_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser);
 
         // 首先发送SYN包，然后乱序发送数据包
         task.run(pkt_syn, dir.clone()); // 先发送SYN包

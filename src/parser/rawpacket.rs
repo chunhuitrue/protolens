@@ -6,12 +6,14 @@ use futures_channel::mpsc;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::Mutex;
-
+use crate::pool::Pool;
+use crate::ProtoLens;
 type CallbackRawPkt<T> = Arc<Mutex<dyn FnMut(T) + Send + Sync>>;
 
 pub struct RawPacketParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     callback_raw_pkt: Option<CallbackRawPkt<T>>,
+    pool: Option<Arc<Pool>>,
 }
 
 impl<T: Packet + Ord + 'static> RawPacketParser<T> {
@@ -19,6 +21,7 @@ impl<T: Packet + Ord + 'static> RawPacketParser<T> {
         Self {
             _phantom: PhantomData,
             callback_raw_pkt: None,
+            pool: None,
         }
     }
 
@@ -39,6 +42,10 @@ impl<T: Packet + Ord + 'static> Default for RawPacketParser<T> {
 impl<T: Packet + Ord + 'static> Parser for RawPacketParser<T> {
     type PacketType = T;
 
+    fn new() -> Self {
+        Self::new()
+    }
+
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
@@ -46,7 +53,7 @@ impl<T: Packet + Ord + 'static> Parser for RawPacketParser<T> {
     ) -> ParserFuture {
         let callback = self.callback_raw_pkt.clone();
 
-        Box::pin(async move {
+        self.pool().new_future(async move {
             let stm: &mut PktStrm<Self::PacketType>;
             unsafe {
                 stm = &mut *(stream as *mut PktStrm<Self::PacketType>);
@@ -62,6 +69,14 @@ impl<T: Packet + Ord + 'static> Parser for RawPacketParser<T> {
             }
             Ok(())
         })
+    }
+
+    fn pool(&self) -> &Pool {
+        self.pool.as_ref().expect("Pool not set").as_ref()
+    }
+
+    fn set_pool(&mut self, pool: Arc<Pool>) {
+        self.pool = Some(pool);
     }
 }
 
@@ -102,9 +117,10 @@ mod tests {
             }
         };
 
-        let mut parser = RawPacketParser::<CapPacket>::new();
+        let protolens = ProtoLens::<CapPacket>::default();
+        let mut parser = protolens.new_parser::<RawPacketParser<CapPacket>>();
         parser.set_callback_raw_pkt(callback);
-        let mut task = Task::new_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser);
 
         dbg!("1 task run");
         task.run(pkt3, dir.clone());

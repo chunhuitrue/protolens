@@ -14,6 +14,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::Mutex;
+use crate::pool::Pool;
 
 pub enum MetaSmtp {
     User(String),
@@ -44,6 +45,7 @@ type UserCallback = Arc<Mutex<dyn FnMut(String) + Send + Sync>>;
 pub struct SmtpParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     callback_user: Option<UserCallback>,
+    pool: Option<Arc<Pool>>,
 }
 
 impl<T: Packet + Ord + 'static> SmtpParser<T> {
@@ -51,6 +53,7 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
         Self {
             _phantom: PhantomData,
             callback_user: None,
+            pool: None,
         }
     }
 
@@ -71,6 +74,10 @@ impl<T: Packet + Ord + 'static> Default for SmtpParser<T> {
 impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
     type PacketType = T;
 
+    fn new() -> Self {
+        Self::new()
+    }
+
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
@@ -78,7 +85,7 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
     ) -> ParserFuture {
         let callback_user = self.callback_user.clone();
 
-        Box::pin(async move {
+        self.pool().new_future(async move {
             let stm: &mut PktStrm<Self::PacketType>;
             unsafe {
                 stm = &mut *(stream as *mut PktStrm<Self::PacketType>);
@@ -127,6 +134,14 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
 
             Ok(())
         })
+    }
+
+    fn pool(&self) -> &Pool {
+        self.pool.as_ref().expect("Pool not set").as_ref()
+    }
+
+    fn set_pool(&mut self, pool: Arc<Pool>) {
+        self.pool = Some(pool);
     }
 }
 
@@ -249,9 +264,10 @@ mod tests {
             dbg!("in callback user", &guard);
         };
 
-        let mut parser = SmtpParser::<CapPacket>::new();
+        let protolens = ProtoLens::<CapPacket>::default();
+        let mut parser = protolens.new_parser::<SmtpParser<CapPacket>>();
         parser.set_callback_user(callback);
-        let mut task = Task::new_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser);
         let mut push_count = 0;
 
         loop {

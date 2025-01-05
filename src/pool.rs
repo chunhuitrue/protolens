@@ -1,65 +1,81 @@
+use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-pub struct Pool<T> {
-    _phantom: PhantomData<T>,
+#[derive(Clone)]
+pub struct Pool {
+    _marker: PhantomData<()>,
 }
 
-pub struct PooledObject<T> {
-    inner: Option<Box<T>>,
-    pool: *const Pool<T>,
-}
-
-impl<T> Pool<T> {
+impl Pool {
     pub fn new(_capacity: usize) -> Self {
         Pool {
-            _phantom: PhantomData,
+            _marker: PhantomData,
         }
     }
+}
 
-    pub fn acquire<F>(&self, init: F) -> PooledObject<T>
+impl Pool {
+    pub fn acquire<T, F>(&self, init: F) -> PoolBox<T>
     where
         F: FnOnce() -> T,
     {
-        PooledObject {
-            inner: Some(Box::new(init())),
-            pool: self,
-        }
+        let ptr = Box::into_raw(Box::new(init()));
+        PoolBox { ptr, pool: self }
     }
 
-    fn release(&self, obj: Box<T>) {
-        // 暂时直接丢弃对象，后续实现真正的回收逻辑
-        drop(obj);
+    pub fn new_future<F>(&self, future: F) -> Pin<PoolBox<dyn Future<Output = F::Output>>>
+    where
+        F: Future + 'static,
+    {
+        let future = Box::new(future);
+        let ptr = Box::into_raw(future) as *mut dyn Future<Output = F::Output>;
+        unsafe { Pin::new_unchecked(PoolBox { ptr, pool: self }) }
     }
 }
 
-impl<T> Deref for PooledObject<T> {
+pub struct PoolBox<T: ?Sized> {
+    ptr: *mut T,
+    pool: *const Pool,
+}
+
+impl<T: ?Sized> PoolBox<T> {
+    pub fn pool(&self) -> &Pool {
+        unsafe { &*self.pool }
+    }
+}
+
+impl<T: ?Sized> Deref for PoolBox<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        self.inner.as_ref().unwrap().as_ref()
+        unsafe { &*self.ptr }
     }
 }
 
-impl<T> DerefMut for PooledObject<T> {
+impl<T: ?Sized> DerefMut for PoolBox<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.as_mut().unwrap().as_mut()
+        unsafe { &mut *self.ptr }
     }
 }
 
-impl<T> Drop for PooledObject<T> {
+impl<T: ?Sized> Drop for PoolBox<T> {
     fn drop(&mut self) {
-        // 取出内部的对象并归还给池
-        if let Some(inner) = self.inner.take() {
-            unsafe {
-                (*self.pool).release(inner);
-            }
+        unsafe {
+            let _ = Box::from_raw(self.ptr);
         }
     }
 }
 
-impl<T> Default for Pool<T> {
-    fn default() -> Self {
-        Self::new(10)
+impl<F: Future> Future for PoolBox<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        unsafe {
+            let future = &mut *self.get_unchecked_mut().ptr;
+            Pin::new_unchecked(future).poll(cx)
+        }
     }
 }
 
@@ -67,17 +83,40 @@ impl<T> Default for Pool<T> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_pool_basic_usage() {
-        struct TestObj {
-            value: i32,
-        }
+    #[derive(Debug, PartialEq)]
+    struct TestObj {
+        value: i32,
+    }
 
-        let pool = Pool::<TestObj>::new(5);
-        
+    #[test]
+    fn test_pool_basic() {
+        let pool = Pool::new(10);
         let obj = pool.acquire(|| TestObj { value: 42 });
+
         assert_eq!(obj.value, 42);
-        
-        // obj 会在这里自动 drop 并回收到池中
+    }
+
+    #[test]
+    fn test_pooled_object_deref() {
+        let pool = Pool::new(10);
+        let mut obj = pool.acquire(|| TestObj { value: 42 });
+
+        // 测试解引用
+        assert_eq!(obj.value, 42);
+
+        // 测试可变解引用
+        obj.value = 100;
+        assert_eq!(obj.value, 100);
+    }
+
+    #[test]
+    fn test_multiple_objects() {
+        let pool = Pool::new(10);
+
+        let obj1 = pool.acquire(|| TestObj { value: 1 });
+        let obj2 = pool.acquire(|| TestObj { value: 2 });
+
+        assert_eq!(obj1.value, 1);
+        assert_eq!(obj2.value, 2);
     }
 }
