@@ -6,7 +6,7 @@ use crate::PktStrm;
 use futures::Future;
 use futures_channel::mpsc;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::rc::Rc;
 
 pub mod ordpacket;
 #[cfg(test)]
@@ -28,13 +28,13 @@ pub enum Meta {
     Http(MetaHttp),
 }
 
-pub type ParserFuture = Pin<PoolBox<dyn Future<Output = Result<(), ()>>>>;
+pub(crate) type ParserFuture = Pin<PoolBox<dyn Future<Output = Result<(), ()>>>>;
 
 pub trait Parser {
     type PacketType: Packet + Ord + 'static;
 
-    fn pool(&self) -> &Pool;
-    fn set_pool(&mut self, pool: Arc<Pool>);
+    fn pool(&self) -> &Rc<Pool>;
+    fn set_pool(&mut self, pool: Rc<Pool>);
 
     fn new() -> Self
     where

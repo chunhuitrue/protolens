@@ -10,10 +10,10 @@ use std::ops::Deref;
 use std::path::Path;
 use std::rc::Rc;
 
-pub const SMTP_PORT_NET: u16 = 25;
+pub(crate) const SMTP_PORT_NET: u16 = 25;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MyPacket {
+pub(crate) struct MyPacket {
     pub sport: u16,
     pub dport: u16,
     pub sequence: u32,
@@ -23,7 +23,7 @@ pub struct MyPacket {
 }
 
 impl MyPacket {
-    pub fn new(seq: u32, fin: bool) -> Self {
+    pub(crate) fn new(seq: u32, fin: bool) -> Self {
         MyPacket {
             sport: 54321,
             dport: 8080,
@@ -69,25 +69,25 @@ impl Packet for MyPacket {
     }
 }
 
-pub const MAX_PACKET_LEN: usize = 2048;
+pub(crate) const MAX_PACKET_LEN: usize = 2048;
 
-pub enum PacketError {
+pub(crate) enum PacketError {
     DecodeErr,
 }
 
 #[derive(Eq, PartialEq, Clone)]
-pub struct PktHeader {
-    pub link: Option<Ethernet2Header>,
-    pub vlan: Option<VlanHeader>,
-    pub ip: Option<IpHeader>,
-    pub transport: Option<TransportHeader>,
-    pub payload_offset: usize,
-    pub payload_len: usize,
+pub(crate) struct PktHeader {
+    pub(crate) link: Option<Ethernet2Header>,
+    pub(crate) vlan: Option<VlanHeader>,
+    pub(crate) ip: Option<IpHeader>,
+    pub(crate) transport: Option<TransportHeader>,
+    pub(crate) payload_offset: usize,
+    pub(crate) payload_len: usize,
 }
 
 impl PktHeader {
     // 返回tcp或者udp的sport
-    pub fn sport(&self) -> u16 {
+    pub(crate) fn sport(&self) -> u16 {
         match &self.transport {
             Some(TransportHeader::Udp(udph)) => udph.source_port,
             Some(TransportHeader::Tcp(tcph)) => tcph.source_port,
@@ -96,7 +96,7 @@ impl PktHeader {
     }
 
     // 返回tcp或者udp的sport
-    pub fn dport(&self) -> u16 {
+    pub(crate) fn dport(&self) -> u16 {
         match &self.transport {
             Some(TransportHeader::Udp(udph)) => udph.destination_port,
             Some(TransportHeader::Tcp(tcph)) => tcph.destination_port,
@@ -106,11 +106,11 @@ impl PktHeader {
 }
 
 #[derive(Clone)]
-pub struct CapPacket {
-    pub timestamp: u128,
-    pub data: [u8; MAX_PACKET_LEN],
-    pub data_len: usize,
-    pub header: RefCell<Option<PktHeader>>,
+pub(crate) struct CapPacket {
+    pub(crate) timestamp: u128,
+    pub(crate) data: [u8; MAX_PACKET_LEN],
+    pub(crate) data_len: usize,
+    pub(crate) header: RefCell<Option<PktHeader>>,
 }
 
 impl Deref for CapPacket {
@@ -135,7 +135,7 @@ impl fmt::Debug for CapPacket {
 }
 
 impl CapPacket {
-    pub fn new(ts: u128, len: usize, data: &[u8]) -> CapPacket {
+    pub(crate) fn new(ts: u128, len: usize, data: &[u8]) -> CapPacket {
         let mut pkt = CapPacket {
             timestamp: ts,
             data_len: len,
@@ -147,7 +147,7 @@ impl CapPacket {
         pkt
     }
 
-    pub fn decode(&self) -> Result<(), PacketError> {
+    pub(crate) fn decode(&self) -> Result<(), PacketError> {
         match PacketHeaders::from_ethernet_slice(self) {
             Ok(headers) => {
                 if headers.ip.is_none() || headers.transport.is_none() {
@@ -169,7 +169,7 @@ impl CapPacket {
         }
     }
 
-    pub fn seq(&self) -> u32 {
+    pub(crate) fn seq(&self) -> u32 {
         if let Some(TransportHeader::Tcp(tcph)) = &self.header.borrow().as_ref().unwrap().transport
         {
             tcph.sequence_number
@@ -178,7 +178,7 @@ impl CapPacket {
         }
     }
 
-    pub fn syn(&self) -> bool {
+    pub(crate) fn syn(&self) -> bool {
         if let Some(TransportHeader::Tcp(tcph)) = &self.header.borrow().as_ref().unwrap().transport
         {
             tcph.syn
@@ -187,7 +187,7 @@ impl CapPacket {
         }
     }
 
-    pub fn fin(&self) -> bool {
+    pub(crate) fn fin(&self) -> bool {
         if let Some(TransportHeader::Tcp(tcph)) = &self.header.borrow().as_ref().unwrap().transport
         {
             tcph.fin
@@ -196,7 +196,7 @@ impl CapPacket {
         }
     }
 
-    pub fn payload_len(&self) -> u32 {
+    pub(crate) fn payload_len(&self) -> u32 {
         self.header
             .borrow()
             .as_ref()
@@ -270,15 +270,15 @@ impl PartialEq for CapPacket {
 }
 
 #[derive(Debug)]
-pub enum CaptureError {}
+pub(crate) enum CaptureError {}
 
-pub struct Capture {
+pub(crate) struct Capture {
     cap: PcapCap<Offline>,
     pkt_num: u64,
 }
 
 impl Capture {
-    pub fn init<P: AsRef<Path>>(path: P) -> Result<Capture, CaptureError> {
+    pub(crate) fn init<P: AsRef<Path>>(path: P) -> Result<Capture, CaptureError> {
         let capture = Capture {
             cap: PcapCap::from_file(path).unwrap(),
             pkt_num: 0,
@@ -286,7 +286,7 @@ impl Capture {
         Ok(capture)
     }
 
-    pub fn next_packet(&mut self, timestamp: u128) -> Option<CapPacket> {
+    pub(crate) fn next_packet(&mut self, timestamp: u128) -> Option<CapPacket> {
         self.pkt_num += 1;
         match self.cap.next_packet() {
             Ok(pcap_pkt) => {
@@ -305,7 +305,7 @@ impl Capture {
     }
 }
 
-pub fn build_pkt_nodata(seq: u32, fin: bool) -> CapPacket {
+pub(crate) fn build_pkt_nodata(seq: u32, fin: bool) -> CapPacket {
     //setup the packet headers
     let mut builder = PacketBuilder::ethernet2(
         [1, 2, 3, 4, 5, 6], //source mac
@@ -349,7 +349,7 @@ pub fn build_pkt_nodata(seq: u32, fin: bool) -> CapPacket {
 }
 
 // 独立的ack包，没有载荷
-pub fn build_pkt_ack(seq: u32, ack_seq: u32) -> CapPacket {
+pub(crate) fn build_pkt_ack(seq: u32, ack_seq: u32) -> CapPacket {
     //setup the packet headers
     let mut builder = PacketBuilder::ethernet2(
         [1, 2, 3, 4, 5, 6], //source mac
@@ -390,7 +390,7 @@ pub fn build_pkt_ack(seq: u32, ack_seq: u32) -> CapPacket {
 }
 
 // 独立的syn包，没有载荷
-pub fn build_pkt_syn(seq: u32) -> CapPacket {
+pub(crate) fn build_pkt_syn(seq: u32) -> CapPacket {
     //setup the packet headers
     let mut builder = PacketBuilder::ethernet2(
         [1, 2, 3, 4, 5, 6], //source mac
@@ -430,7 +430,7 @@ pub fn build_pkt_syn(seq: u32) -> CapPacket {
     CapPacket::new(1, result.len(), &result)
 }
 
-pub fn build_pkt_line(seq: u32, payload: [u8; 10]) -> CapPacket {
+pub(crate) fn build_pkt_line(seq: u32, payload: [u8; 10]) -> CapPacket {
     //setup the packet headers
     let mut builder = PacketBuilder::ethernet2(
         [1, 2, 3, 4, 5, 6], //source mac
@@ -468,7 +468,7 @@ pub fn build_pkt_line(seq: u32, payload: [u8; 10]) -> CapPacket {
 }
 
 // 带载荷，可以带fin
-pub fn build_pkt(seq: u32, fin: bool) -> CapPacket {
+pub(crate) fn build_pkt(seq: u32, fin: bool) -> CapPacket {
     //setup the packet headers
     let mut builder = PacketBuilder::ethernet2(
         [1, 2, 3, 4, 5, 6], //source mac
@@ -512,20 +512,20 @@ pub fn build_pkt(seq: u32, fin: bool) -> CapPacket {
 }
 
 // 独立的fin包，没有载荷
-pub fn build_pkt_fin(seq: u32) -> CapPacket {
+pub(crate) fn build_pkt_fin(seq: u32) -> CapPacket {
     build_pkt_nodata(seq, true)
 }
 
-pub fn make_pkt_data(seq: u32) -> CapPacket {
+pub(crate) fn make_pkt_data(seq: u32) -> CapPacket {
     build_pkt(seq, false)
 }
 
 #[cfg(test)]
 mod tests {
-    use pcap::Packet;
     use super::*;
     use crate::test_utils::*;
     use crate::*;
+    use pcap::Packet;
 
     #[test]
     fn test_build_pkt() {
@@ -535,18 +535,18 @@ mod tests {
 
         // 使用完全限定路径调用 trait 方法
         assert_eq!(1, crate::Packet::seq(&pkt1));
-         // 验证 fin 标志 (通过 trait 方法)
-         assert!(crate::Packet::fin(&pkt1));
+        // 验证 fin 标志 (通过 trait 方法)
+        assert!(crate::Packet::fin(&pkt1));
         // 验证端口 (通过 trait 方法)
         assert_eq!(25, crate::Packet::tu_sport(&pkt1));
         assert_eq!(4000, crate::Packet::tu_dport(&pkt1));
-        
+
         // 验证 IP (通过 header 获取)
         if let Some(IpHeader::Version4(ipv4, _)) = &pkt1.header.borrow().as_ref().unwrap().ip {
             assert_eq!([192, 168, 1, 1], ipv4.source);
             assert_eq!([192, 168, 1, 2], ipv4.destination);
         }
-        
+
         // 验证 payload (通过 trait 方法)
         let expected_payload = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         assert_eq!(expected_payload.len(), crate::Packet::payload_len(&pkt1));
@@ -668,7 +668,7 @@ mod tests {
         // 验证 TCP 标志
         if let Some(TransportHeader::Tcp(tcp)) = &header_ref.transport {
             assert!(!tcp.syn);
-            assert!(tcp.ack);  // 这个包应该有 ACK 标志
+            assert!(tcp.ack); // 这个包应该有 ACK 标志
         }
     }
 }

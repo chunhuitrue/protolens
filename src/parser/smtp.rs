@@ -1,3 +1,6 @@
+#![allow(unused)]
+
+use crate::pool::Pool;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
@@ -12,9 +15,9 @@ use nom::{
 };
 use std::fmt;
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
-use crate::pool::Pool;
 
 pub enum MetaSmtp {
     User(String),
@@ -45,11 +48,11 @@ type UserCallback = Arc<Mutex<dyn FnMut(String) + Send + Sync>>;
 pub struct SmtpParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     callback_user: Option<UserCallback>,
-    pool: Option<Arc<Pool>>,
+    pool: Option<Rc<Pool>>,
 }
 
 impl<T: Packet + Ord + 'static> SmtpParser<T> {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             _phantom: PhantomData,
             callback_user: None,
@@ -136,11 +139,11 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
         })
     }
 
-    fn pool(&self) -> &Pool {
-        self.pool.as_ref().expect("Pool not set").as_ref()
+    fn pool(&self) -> &Rc<Pool> {
+        self.pool.as_ref().expect("Pool not set")
     }
 
-    fn set_pool(&mut self, pool: Arc<Pool>) {
+    fn set_pool(&mut self, pool: Rc<Pool>) {
         self.pool = Some(pool);
     }
 }
@@ -264,7 +267,7 @@ mod tests {
             dbg!("in callback user", &guard);
         };
 
-        let protolens = ProtoLens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<SmtpParser<CapPacket>>();
         parser.set_callback_user(callback);
         let mut task = protolens.new_task_with_parser(parser);
@@ -287,7 +290,7 @@ mod tests {
             if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
                 push_count += 1;
                 dbg!(push_count, pkt.seq());
-                task.run(pkt, dir.clone());
+                protolens.run_task(&mut task, pkt, dir.clone());
                 meta_recver(&mut task);
             }
         }

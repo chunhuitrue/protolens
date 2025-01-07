@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use crate::pool::Pool;
 use crate::Parser;
 use crate::ParserFuture;
@@ -5,6 +7,7 @@ use crate::PktStrm;
 use crate::{Meta, Packet};
 use futures_channel::mpsc;
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -13,7 +16,7 @@ type CallbackOrdPkt<T> = Arc<Mutex<dyn FnMut(T) + Send + Sync>>;
 pub struct OrdPacketParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     callback_ord_pkt: Option<CallbackOrdPkt<T>>,
-    pool: Option<Arc<Pool>>,
+    pool: Option<Rc<Pool>>,
 }
 
 impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
@@ -25,19 +28,11 @@ impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
         }
     }
 
-    pub fn set_callback_ord_pkt<F>(&mut self, callback: F)
+    pub(crate) fn set_callback_ord_pkt<F>(&mut self, callback: F)
     where
         F: FnMut(T) + Send + Sync + 'static,
     {
         self.callback_ord_pkt = Some(Arc::new(Mutex::new(callback)));
-    }
-
-    pub fn set_pool(&mut self, pool: Arc<Pool>) {
-        self.pool = Some(pool);
-    }
-
-    fn pool(&self) -> &Pool {
-        self.pool.as_ref().expect("Pool not set").as_ref()
     }
 }
 
@@ -80,11 +75,11 @@ impl<T: Packet + Ord + 'static> Parser for OrdPacketParser<T> {
         future
     }
 
-    fn pool(&self) -> &Pool {
-        self.pool.as_ref().expect("Pool not set").as_ref()
+    fn pool(&self) -> &Rc<Pool> {
+        self.pool.as_ref().expect("Pool not set")
     }
 
-    fn set_pool(&mut self, pool: Arc<Pool>) {
+    fn set_pool(&mut self, pool: Rc<Pool>) {
         self.pool = Some(pool);
     }
 }
@@ -138,7 +133,7 @@ mod tests {
         };
 
         println!("Creating ProtoLens and parser");
-        let protolens = ProtoLens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<OrdPacketParser<CapPacket>>();
         println!("Setting callback");
         parser.set_callback_ord_pkt(callback);
@@ -167,7 +162,7 @@ mod tests {
             if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
                 push_count += 1;
                 println!("Processing packet {}: seq={}", push_count, pkt.seq());
-                task.run(pkt, dir.clone());
+                protolens.run_task(&mut task, pkt, dir.clone());
             }
         }
 
@@ -200,16 +195,16 @@ mod tests {
             vec_clone.lock().unwrap().extend(pkt.payload());
         };
 
-        let protolens = ProtoLens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<OrdPacketParser<CapPacket>>();
         parser.set_callback_ord_pkt(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        // 乱序发送包,但至少第一个包得先发送，否则起始seq就不是第一个了
-        task.run(pkt1, dir.clone()); // seq1
-        task.run(pkt3, dir.clone()); // seq3
-        task.run(pkt4, dir.clone()); // seq4 with fin
-        task.run(pkt2, dir.clone()); // seq2
+        // 乱序发送包
+        protolens.run_task(&mut task, pkt1, dir.clone()); // seq1
+        protolens.run_task(&mut task, pkt3, dir.clone()); // seq3
+        protolens.run_task(&mut task, pkt4, dir.clone()); // seq4 with fin
+        protolens.run_task(&mut task, pkt2, dir.clone()); // seq2
 
         // 验证最终收到的数据应该是有序的
         let expected: Vec<u8> = vec![
@@ -246,15 +241,15 @@ mod tests {
             vec_clone.lock().unwrap().extend(pkt.payload());
         };
 
-        let protolens = ProtoLens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<OrdPacketParser<CapPacket>>();
         parser.set_callback_ord_pkt(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        // 首先发送SYN包，然后乱序发送数据包
-        task.run(pkt_syn, dir.clone()); // 先发送SYN包
-        task.run(pkt2, dir.clone()); // 乱序发送数据包
-        task.run(pkt1, dir.clone()); // 乱序发送数据包
+        // 发送包
+        protolens.run_task(&mut task, pkt_syn, dir.clone()); // SYN包
+        protolens.run_task(&mut task, pkt2, dir.clone()); // 乱序数据包
+        protolens.run_task(&mut task, pkt1, dir.clone()); // 乱序数据包
 
         // 验证最终收到的数据应该是有序的
         let expected: Vec<u8> = vec![

@@ -1,7 +1,9 @@
+use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 
 #[derive(Clone)]
@@ -10,7 +12,7 @@ pub struct Pool {
 }
 
 impl Pool {
-    pub fn new(_capacity: usize) -> Self {
+    pub(crate) fn new(_capacity: usize) -> Self {
         Pool {
             _marker: PhantomData,
         }
@@ -18,32 +20,40 @@ impl Pool {
 }
 
 impl Pool {
-    pub fn acquire<T, F>(&self, init: F) -> PoolBox<T>
+    pub(crate) fn get<T, F>(&self, init: F) -> PoolBox<T>
     where
         F: FnOnce() -> T,
     {
         let ptr = Box::into_raw(Box::new(init()));
-        PoolBox { ptr, pool: self }
+        PoolBox {
+            ptr,
+            pool: Rc::new(self.clone()),
+        }
     }
 
-    pub fn new_future<F>(&self, future: F) -> Pin<PoolBox<dyn Future<Output = F::Output>>>
+    pub(crate) fn new_future<F>(&self, future: F) -> Pin<PoolBox<dyn Future<Output = F::Output>>>
     where
         F: Future + 'static,
     {
         let future = Box::new(future);
         let ptr = Box::into_raw(future) as *mut dyn Future<Output = F::Output>;
-        unsafe { Pin::new_unchecked(PoolBox { ptr, pool: self }) }
+        unsafe {
+            Pin::new_unchecked(PoolBox {
+                ptr,
+                pool: Rc::new(self.clone()),
+            })
+        }
     }
 }
 
 pub struct PoolBox<T: ?Sized> {
     ptr: *mut T,
-    pool: *const Pool,
+    pool: Rc<Pool>,
 }
 
-impl<T: ?Sized> PoolBox<T> {
-    pub fn pool(&self) -> &Pool {
-        unsafe { &*self.pool }
+impl<T> PoolBox<T> {
+    pub fn pool(&self) -> &Rc<Pool> {
+        &self.pool
     }
 }
 
@@ -79,6 +89,12 @@ impl<F: Future> Future for PoolBox<F> {
     }
 }
 
+impl<T: ?Sized + fmt::Debug> fmt::Debug for PoolBox<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,7 +107,7 @@ mod tests {
     #[test]
     fn test_pool_basic() {
         let pool = Pool::new(10);
-        let obj = pool.acquire(|| TestObj { value: 42 });
+        let obj = pool.get(|| TestObj { value: 42 });
 
         assert_eq!(obj.value, 42);
     }
@@ -99,7 +115,7 @@ mod tests {
     #[test]
     fn test_pooled_object_deref() {
         let pool = Pool::new(10);
-        let mut obj = pool.acquire(|| TestObj { value: 42 });
+        let mut obj = pool.get(|| TestObj { value: 42 });
 
         // 测试解引用
         assert_eq!(obj.value, 42);
@@ -113,8 +129,8 @@ mod tests {
     fn test_multiple_objects() {
         let pool = Pool::new(10);
 
-        let obj1 = pool.acquire(|| TestObj { value: 1 });
-        let obj2 = pool.acquire(|| TestObj { value: 2 });
+        let obj1 = pool.get(|| TestObj { value: 1 });
+        let obj2 = pool.get(|| TestObj { value: 2 });
 
         assert_eq!(obj1.value, 1);
         assert_eq!(obj2.value, 2);

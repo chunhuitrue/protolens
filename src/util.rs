@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-pub fn ntohl(value: u32) -> u32 {
+pub(crate) fn ntohl(value: u32) -> u32 {
     if cfg!(target_endian = "little") {
         value.to_be()
     } else {
@@ -8,7 +8,7 @@ pub fn ntohl(value: u32) -> u32 {
     }
 }
 
-pub fn ntohs(value: u16) -> u16 {
+pub(crate) fn ntohs(value: u16) -> u16 {
     if cfg!(target_endian = "little") {
         value.to_be()
     } else {
@@ -16,7 +16,7 @@ pub fn ntohs(value: u16) -> u16 {
     }
 }
 
-pub fn htonl(value: u32) -> u32 {
+pub(crate) fn htonl(value: u32) -> u32 {
     if cfg!(target_endian = "big") {
         value
     } else {
@@ -24,7 +24,7 @@ pub fn htonl(value: u32) -> u32 {
     }
 }
 
-pub fn htons(value: u16) -> u16 {
+pub(crate) fn htons(value: u16) -> u16 {
     if cfg!(target_endian = "big") {
         value
     } else {

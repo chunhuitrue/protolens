@@ -5,6 +5,7 @@ use crate::PktStrm;
 use crate::{Meta, Packet};
 use futures_channel::mpsc;
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -12,7 +13,7 @@ type CallbackStreamReadn = Arc<Mutex<dyn FnMut(Vec<u8>) + Send + Sync>>;
 
 pub struct StreamReadnParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
-    pool: Option<Arc<Pool>>,
+    pool: Option<Rc<Pool>>,
     callback_readn: Option<CallbackStreamReadn>,
     read_size: usize, // 每次读取的字节数
 }
@@ -48,11 +49,11 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
         Self::new(10)  // 使用默认大小 10
     }
 
-    fn pool(&self) -> &Pool {
-        self.pool.as_ref().expect("Pool not set").as_ref()
+    fn pool(&self) -> &Rc<Pool> {
+        self.pool.as_ref().expect("Pool not set")
     }
 
-    fn set_pool(&mut self, pool: Arc<Pool>) {
+    fn set_pool(&mut self, pool: Rc<Pool>) {
         self.pool = Some(pool);
     }
 
@@ -104,12 +105,12 @@ mod tests {
             vec_clone.lock().unwrap().extend(bytes);
         };
 
-        let protolens = ProtoLens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamReadnParser<CapPacket>>();
         parser.set_callback_readn(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        task.run(pkt1, dir.clone());
+        protolens.run_task(&mut task, pkt1, dir.clone());
 
         // 验证收到的数据是否正确
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -133,13 +134,13 @@ mod tests {
             vec_clone.lock().unwrap().extend(bytes);
         };
 
-        let protolens = ProtoLens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamReadnParser<CapPacket>>();
         parser.set_callback_readn(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        task.run(pkt1, dir.clone());
-        task.run(pkt2, dir.clone());
+        protolens.run_task(&mut task, pkt1, dir.clone());
+        protolens.run_task(&mut task, pkt2, dir.clone());
 
         // 验证收到的数据是否正确
         let expected: Vec<u8> = vec![
@@ -173,15 +174,15 @@ mod tests {
             vec_clone.lock().unwrap().extend(bytes);
         };
 
-        let protolens = ProtoLens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamReadnParser<CapPacket>>();
         parser.set_callback_readn(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
         // 乱序发送包
-        task.run(pkt_syn, dir.clone());
-        task.run(pkt2, dir.clone());
-        task.run(pkt1, dir.clone());
+        protolens.run_task(&mut task, pkt_syn, dir.clone());
+        protolens.run_task(&mut task, pkt2, dir.clone());
+        protolens.run_task(&mut task, pkt1, dir.clone());
 
         // 验证收到的数据是否正确
         let expected: Vec<u8> = vec![

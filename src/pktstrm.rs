@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use crate::Packet;
 use crate::PacketWrapper;
 use crate::TransProto;
@@ -37,7 +39,7 @@ where
         }
     }
 
-    pub fn push(&mut self, packet: T) {
+    pub(crate) fn push(&mut self, packet: T) {
         if self.fin {
             return;
         }
@@ -55,7 +57,7 @@ where
 
     // 无论是否严格seq连续，peek一个当前最有序的包
     // 不更新next_seq
-    pub fn peek(&self) -> Option<&T> {
+    pub(crate) fn peek(&self) -> Option<&T> {
         if self.fin {
             return None;
         }
@@ -64,7 +66,7 @@ where
 
     // 无论是否严格seq连续，都pop一个当前包。
     // 注意：next_seq由调用者负责
-    pub fn pop(&mut self) -> Option<T> {
+    pub(crate) fn pop(&mut self) -> Option<T> {
         if let Some(pkt) = self.cache.pop().map(|r| r.0 .0) {
             if pkt.fin() {
                 self.fin = true;
@@ -90,7 +92,7 @@ where
     }
 
     // 严格有序。peek一个seq严格有序的包，可能包含payload为0的。如果当前top有序，就peek，否则就none。
-    pub fn peek_ord(&mut self) -> Option<&T> {
+    pub(crate) fn peek_ord(&mut self) -> Option<&T> {
         if self.fin {
             return None;
         }
@@ -113,7 +115,7 @@ where
 
     // 严格有序。弹出一个严格有序的包，可能包含载荷为0的。否则为none
     // 并不需要关心fin标记，这不是pkt这一层关心的问题
-    pub fn pop_ord(&mut self) -> Option<T> {
+    pub(crate) fn pop_ord(&mut self) -> Option<T> {
         if self.fin {
             return None;
         }
@@ -134,7 +136,7 @@ where
     }
 
     // 严格有序。peek出一个带数据的严格有序的包。否则为none
-    pub fn peek_ord_data(&mut self) -> Option<&T> {
+    pub(crate) fn peek_ord_data(&mut self) -> Option<&T> {
         if self.fin {
             return None;
         }
@@ -151,7 +153,7 @@ where
     }
 
     // 严格有序。pop一个带数据的严格有序的包。否则为none
-    pub fn pop_ord_data(&mut self) -> Option<T> {
+    pub(crate) fn pop_ord_data(&mut self) -> Option<T> {
         if self.fin {
             return None;
         }
@@ -169,27 +171,27 @@ where
         None
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.cache.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.cache.clear();
     }
 
-    pub fn fin(&self) -> bool {
+    pub(crate) fn fin(&self) -> bool {
         self.fin
     }
 
-    pub async fn readn(&mut self, num: usize) -> Vec<u8> {
+    pub(crate) async fn readn(&mut self, num: usize) -> Vec<u8> {
         self.take(num).collect::<Vec<u8>>().await
     }
 
-    pub async fn readline(&mut self) -> Result<String, ()> {
+    pub(crate) async fn readline(&mut self) -> Result<String, ()> {
         let mut res = self
             .take_while(|x| future::ready(*x != b'\n'))
             .collect::<Vec<u8>>()
@@ -203,7 +205,7 @@ where
     }
 
     // 异步方式获取下一个严格有序的包。包含载荷为0的
-    pub fn next_ord_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
+    pub(crate) fn next_ord_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
         poll_fn(|_cx| {
             if self.fin {
                 return Poll::Ready(None);
@@ -218,7 +220,7 @@ where
     // 这个接口没必要提供
     // 异步方式获取下一个原始顺序的包。包含载荷为0的。如果cache中每到来一个包，就调用，那就是原始到来的包顺序
     #[cfg(test)]
-    pub fn next_raw_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
+    pub(crate) fn next_raw_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
         poll_fn(|_cx| {
             if let Some(_pkt) = self.peek() {
                 return Poll::Ready(self.pop());
@@ -302,9 +304,6 @@ where
         // next_seq 更改必须在peek_ord_data之后。因为next_seq以变就会影响排序。所以只能读取数据之后才能更改next_seq
         self.next_seq += 1;
         Poll::Ready(Some(byte))
-
-        // let byte = self.read_pkt_byte(index as usize);
-        // Poll::Ready(Some(byte))
     }
 
     // fn poll_next(

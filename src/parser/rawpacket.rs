@@ -7,13 +7,14 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::Mutex;
 use crate::pool::Pool;
-use crate::ProtoLens;
+use crate::Prolens;
+use std::rc::Rc;
 type CallbackRawPkt<T> = Arc<Mutex<dyn FnMut(T) + Send + Sync>>;
 
 pub struct RawPacketParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     callback_raw_pkt: Option<CallbackRawPkt<T>>,
-    pool: Option<Arc<Pool>>,
+    pool: Option<Rc<Pool>>,
 }
 
 impl<T: Packet + Ord + 'static> RawPacketParser<T> {
@@ -71,11 +72,11 @@ impl<T: Packet + Ord + 'static> Parser for RawPacketParser<T> {
         })
     }
 
-    fn pool(&self) -> &Pool {
-        self.pool.as_ref().expect("Pool not set").as_ref()
+    fn pool(&self) -> &Rc<Pool> {
+        self.pool.as_ref().expect("Pool not set")
     }
 
-    fn set_pool(&mut self, pool: Arc<Pool>) {
+    fn set_pool(&mut self, pool: Rc<Pool>) {
         self.pool = Some(pool);
     }
 }
@@ -117,17 +118,17 @@ mod tests {
             }
         };
 
-        let protolens = ProtoLens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<RawPacketParser<CapPacket>>();
         parser.set_callback_raw_pkt(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
         dbg!("1 task run");
-        task.run(pkt3, dir.clone());
+        protolens.run_task(&mut task, pkt3, dir.clone());
         dbg!("2 task run");
-        task.run(pkt2, dir.clone());
+        protolens.run_task(&mut task, pkt2, dir.clone());
         dbg!("3 task run");
-        task.run(pkt1, dir.clone());
+        protolens.run_task(&mut task, pkt1, dir.clone());
         dbg!("4 task run");
         // run了三个包，但count是1
         // pktstrm中有对fin的控制。如果fin的包已经被按序读走，说明本条流已经结束。此后就不应该在push，或者pop了

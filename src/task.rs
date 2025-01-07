@@ -4,6 +4,7 @@ use crate::Parser;
 use crate::ParserFuture;
 use crate::PktDirection;
 use crate::PktStrm;
+use crate::Pool;
 use crate::PoolBox;
 use core::{
     pin::Pin,
@@ -11,12 +12,13 @@ use core::{
 };
 use futures_channel::mpsc;
 use std::fmt;
+use std::rc::Rc;
 
 const MAX_CHANNEL_SIZE: usize = 64;
 
 pub struct Task<T: Packet + Ord + std::fmt::Debug + 'static> {
-    stream_c2s: Box<PktStrm<T>>,
-    stream_s2c: Box<PktStrm<T>>,
+    stream_c2s: PoolBox<PktStrm<T>>,
+    stream_s2c: PoolBox<PktStrm<T>>,
     c2s_parser: Option<ParserFuture>,
     s2c_parser: Option<ParserFuture>,
     bdir_parser: Option<ParserFuture>,
@@ -27,9 +29,9 @@ pub struct Task<T: Packet + Ord + std::fmt::Debug + 'static> {
 }
 
 impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
-    pub fn new() -> Self {
-        let stream_c2s = Box::new(PktStrm::new());
-        let stream_s2c = Box::new(PktStrm::new());
+    pub(crate) fn new(pool: &Rc<Pool>) -> Self {
+        let stream_c2s = pool.get(|| PktStrm::new());
+        let stream_s2c = pool.get(|| PktStrm::new());
 
         Task {
             stream_c2s,
@@ -44,15 +46,16 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
         }
     }
 
-    pub fn new_with_parser<P: Parser<PacketType = T>>(parser: PoolBox<P>) -> Self {
-        let mut task = Task::new();
+    pub(crate) fn new_with_parser<P: Parser<PacketType = T>>(parser: PoolBox<P>) -> Self {
+        let pool = Rc::clone(parser.pool());
+        let mut task = Task::new(&pool);
         task.init_parser(parser);
         task
     }
 
-    pub fn init_parser<P: Parser<PacketType = T>>(&mut self, parser: PoolBox<P>) {
-        let p_stream_c2s: *const PktStrm<T> = &*(self.stream_c2s);
-        let p_stream_s2c: *const PktStrm<T> = &*(self.stream_s2c);
+    pub(crate) fn init_parser<P: Parser<PacketType = T>>(&mut self, parser: PoolBox<P>) {
+        let p_stream_c2s: *const PktStrm<T> = &*self.stream_c2s;
+        let p_stream_s2c: *const PktStrm<T> = &*self.stream_s2c;
         let (tx, rx) = mpsc::channel(MAX_CHANNEL_SIZE);
         let c2s_parser = parser.c2s_parser(p_stream_c2s, tx.clone());
         let s2c_parser = parser.s2c_parser(p_stream_s2c, tx.clone());
@@ -64,7 +67,7 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
         self.meta_rx = Some(rx);
     }
 
-    pub fn run(&mut self, pkt: T, pkt_dir: PktDirection) {
+    pub(crate) fn run(&mut self, pkt: T, pkt_dir: PktDirection) {
         match pkt_dir {
             PktDirection::Client2Server => {
                 self.stream_c2s.push(pkt);
@@ -137,7 +140,8 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
         }
     }
 
-    pub fn parser_state(&self, dir: PktDirection) -> TaskState {
+    #[allow(dead_code)]
+    pub(crate) fn parser_state(&self, dir: PktDirection) -> TaskState {
         match dir {
             PktDirection::Client2Server => self.c2s_state,
             PktDirection::Server2Client => self.s2c_state,
@@ -146,7 +150,8 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
         }
     }
 
-    pub fn streeam_len(&self, dir: PktDirection) -> usize {
+    #[allow(dead_code)]
+    pub(crate) fn streeam_len(&self, dir: PktDirection) -> usize {
         match dir {
             PktDirection::Client2Server => self.stream_c2s.len(),
             PktDirection::Server2Client => self.stream_s2c.len(),
@@ -157,7 +162,7 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
 
 impl<T: Packet + Ord + std::fmt::Debug + 'static> Default for Task<T> {
     fn default() -> Self {
-        Self::new()
+        Self::new(&Rc::new(Pool::new(64)))
     }
 }
 
@@ -174,7 +179,7 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> fmt::Debug for Task<T> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TaskState {
+pub(crate) enum TaskState {
     Start,
     End,
     Error,
