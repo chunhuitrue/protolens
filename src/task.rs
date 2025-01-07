@@ -30,8 +30,8 @@ pub struct Task<T: Packet + Ord + std::fmt::Debug + 'static> {
 
 impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
     pub(crate) fn new(pool: &Rc<Pool>) -> Self {
-        let stream_c2s = pool.get(|| PktStrm::new());
-        let stream_s2c = pool.get(|| PktStrm::new());
+        let stream_c2s = pool.alloc(|| PktStrm::new());
+        let stream_s2c = pool.alloc(|| PktStrm::new());
 
         Task {
             stream_c2s,

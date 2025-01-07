@@ -1,5 +1,6 @@
 mod config;
 // mod ffi;
+mod binary_heap;
 mod packet;
 mod parser;
 mod pktstrm;
@@ -9,6 +10,7 @@ mod task;
 mod test_utils;
 mod util;
 
+pub(crate) use binary_heap::*;
 pub(crate) use config::*;
 pub(crate) use packet::*;
 pub(crate) use parser::*;
@@ -48,20 +50,23 @@ pub struct Prolens<P> {
 
 impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     pub fn new(config: &Config) -> Self {
+        // 使用配置中的堆容量
+        let heap_size = std::mem::size_of::<[P; 1]>() * config.heap_capacity;
+        
         Prolens {
             config: config.clone(),
-            pool: Rc::new(Pool::new(config.pool_size)),
+            pool: Rc::new(Pool::new(heap_size)),
             stats: Stats::new(),
             _phantom: PhantomData,
         }
     }
 
     pub fn new_task(&self) -> PoolBox<Task<P>> {
-        self.pool.get(|| Task::new(&self.pool))
+        self.pool.alloc(|| Task::new(&self.pool))
     }
 
     pub fn new_parser<T: Parser<PacketType = P>>(&self) -> PoolBox<T> {
-        self.pool.get(|| {
+        self.pool.alloc(|| {
             let mut parser = T::new();
             parser.set_pool(Rc::clone(&self.pool));
             parser
@@ -72,7 +77,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         &self,
         parser: PoolBox<T>,
     ) -> PoolBox<Task<P>> {
-        self.pool.get(|| Task::new_with_parser(parser))
+        self.pool.alloc(|| Task::new_with_parser(parser))
     }
 
     pub fn config(&self) -> &Config {
@@ -123,9 +128,11 @@ mod tests {
 
     #[test]
     fn test_protolens_config() {
-        let config = Config { pool_size: 20 };
+        let config = Config {
+            pool_size: 20,
+            heap_capacity: 32,
+        };
         let protolens = Prolens::<MyPacket>::new(&config);
-
         assert_eq!(protolens.config.pool_size, 20);
     }
 

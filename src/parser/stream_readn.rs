@@ -65,7 +65,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
         let callback = self.callback_readn.clone();
         let read_size = self.read_size;
 
-        self.pool().new_future(async move {
+        self.pool().alloc_future(async move {
             let stm: &mut PktStrm<Self::PacketType>;
             unsafe {
                 stm = &mut *(stream as *mut PktStrm<Self::PacketType>);

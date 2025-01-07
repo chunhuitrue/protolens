@@ -62,7 +62,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadlineParser<T> {
     ) -> ParserFuture {
         let callback = self.callback_readline.clone();
 
-        self.pool().new_future(async move {
+        self.pool().alloc_future(async move {
             let stm: &mut PktStrm<Self::PacketType>;
             unsafe {
                 stm = &mut *(stream as *mut PktStrm<Self::PacketType>);

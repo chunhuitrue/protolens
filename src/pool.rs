@@ -20,7 +20,7 @@ impl Pool {
 }
 
 impl Pool {
-    pub(crate) fn get<T, F>(&self, init: F) -> PoolBox<T>
+    pub(crate) fn alloc<T, F>(&self, init: F) -> PoolBox<T>
     where
         F: FnOnce() -> T,
     {
@@ -31,7 +31,7 @@ impl Pool {
         }
     }
 
-    pub(crate) fn new_future<F>(&self, future: F) -> Pin<PoolBox<dyn Future<Output = F::Output>>>
+    pub(crate) fn alloc_future<F>(&self, future: F) -> Pin<PoolBox<dyn Future<Output = F::Output>>>
     where
         F: Future + 'static,
     {
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn test_pool_basic() {
         let pool = Pool::new(10);
-        let obj = pool.get(|| TestObj { value: 42 });
+        let obj = pool.alloc(|| TestObj { value: 42 });
 
         assert_eq!(obj.value, 42);
     }
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn test_pooled_object_deref() {
         let pool = Pool::new(10);
-        let mut obj = pool.get(|| TestObj { value: 42 });
+        let mut obj = pool.alloc(|| TestObj { value: 42 });
 
         // 测试解引用
         assert_eq!(obj.value, 42);
@@ -129,8 +129,8 @@ mod tests {
     fn test_multiple_objects() {
         let pool = Pool::new(10);
 
-        let obj1 = pool.get(|| TestObj { value: 1 });
-        let obj2 = pool.get(|| TestObj { value: 2 });
+        let obj1 = pool.alloc(|| TestObj { value: 1 });
+        let obj2 = pool.alloc(|| TestObj { value: 2 });
 
         assert_eq!(obj1.value, 1);
         assert_eq!(obj2.value, 2);

@@ -55,7 +55,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamNextParser<T> {
     ) -> ParserFuture {
         let callback = self.callback_next_byte.clone();
 
-        self.pool().new_future(async move {
+        self.pool().alloc_future(async move {
             let stm: &mut PktStrm<Self::PacketType>;
             unsafe {
                 stm = &mut *(stream as *mut PktStrm<Self::PacketType>);

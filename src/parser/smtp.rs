@@ -88,7 +88,7 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
     ) -> ParserFuture {
         let callback_user = self.callback_user.clone();
 
-        self.pool().new_future(async move {
+        self.pool().alloc_future(async move {
             let stm: &mut PktStrm<Self::PacketType>;
             unsafe {
                 stm = &mut *(stream as *mut PktStrm<Self::PacketType>);
