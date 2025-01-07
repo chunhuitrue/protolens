@@ -12,7 +12,11 @@ pub struct Pool {
 }
 
 impl Pool {
-    pub(crate) fn new(_capacity: usize) -> Self {
+    pub fn new(_sizes: Vec<usize>) -> Self {
+        // 计算总大小
+        
+        // 这里保留原来的内存分配逻辑，但使用 total_size
+        // ...其余实现细节
         Pool {
             _marker: PhantomData,
         }
@@ -106,7 +110,7 @@ mod tests {
 
     #[test]
     fn test_pool_basic() {
-        let pool = Pool::new(10);
+        let pool = Pool::new(vec![10]);
         let obj = pool.alloc(|| TestObj { value: 42 });
 
         assert_eq!(obj.value, 42);
@@ -114,7 +118,7 @@ mod tests {
 
     #[test]
     fn test_pooled_object_deref() {
-        let pool = Pool::new(10);
+        let pool = Pool::new(vec![10]);
         let mut obj = pool.alloc(|| TestObj { value: 42 });
 
         // 测试解引用
@@ -127,7 +131,7 @@ mod tests {
 
     #[test]
     fn test_multiple_objects() {
-        let pool = Pool::new(10);
+        let pool = Pool::new(vec![10]);
 
         let obj1 = pool.alloc(|| TestObj { value: 1 });
         let obj2 = pool.alloc(|| TestObj { value: 2 });

@@ -50,12 +50,14 @@ pub struct Prolens<P> {
 
 impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     pub fn new(config: &Config) -> Self {
-        // 使用配置中的堆容量
+        // 计算不同组件所需的内存大小
         let heap_size = std::mem::size_of::<[P; 1]>() * config.heap_capacity;
-        
+        let pktstrm_size = std::mem::size_of::<PktStrm<P>>();
+        let obj_sizes = vec![heap_size, pktstrm_size];
+
         Prolens {
             config: config.clone(),
-            pool: Rc::new(Pool::new(heap_size)),
+            pool: Rc::new(Pool::new(obj_sizes)),
             stats: Stats::new(),
             _phantom: PhantomData,
         }

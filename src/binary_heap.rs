@@ -3,6 +3,7 @@
 use std::cmp::Ordering;
 use crate::pool::{Pool, PoolBox};
 use std::mem::MaybeUninit;
+use std::rc::Rc;
 
 /// 基于定长数组的二叉堆实现
 #[derive(Debug)]
@@ -17,7 +18,7 @@ impl<T: Ord, const N: usize> ArrayBinaryHeap<T, N> {
     }
 
     // 为 PacketWrapper 提供专门的初始化方法
-    pub fn new_uninit_in_pool(pool: &Pool) -> Self {
+    pub fn new_uninit_in_pool(pool: &Rc<Pool>) -> Self {
         let data = pool.alloc(|| unsafe { 
             std::mem::MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init()
         });
@@ -124,14 +125,14 @@ mod tests {
     #[test]
     fn test_memory_size() {
         let size = ArrayBinaryHeap::<PacketWrapper<MyPacket>, 32>::memory_size();
-        let pool = Pool::new(size);
+        let pool = Rc::new(Pool::new(vec![size]));
         let heap = ArrayBinaryHeap::<PacketWrapper<MyPacket>, 32>::new_uninit_in_pool(&pool);
         assert_eq!(heap.capacity(), 32);
     }
 
     #[test]
     fn test_push_pop() {
-        let pool = Pool::new(10);
+        let pool = Rc::new(Pool::new(vec![10]));
         let mut heap = ArrayBinaryHeap::<_, 5>::new_uninit_in_pool(&pool);
         
         assert!(heap.push(3));
@@ -152,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_packet_ordering() {
-        let pool = Pool::new(10);
+        let pool = Rc::new(Pool::new(vec![10]));
         let mut heap = ArrayBinaryHeap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
 
         let packet1 = MyPacket {
@@ -194,7 +195,7 @@ mod tests {
 
     #[test]
     fn test_packet_ordering_with_syn_fin() {
-        let pool = Pool::new(10);
+        let pool = Rc::new(Pool::new(vec![10]));
         let mut heap = ArrayBinaryHeap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
 
         let syn_packet = MyPacket {
@@ -244,8 +245,8 @@ mod tests {
     }
 
     #[test]
-    fn test_heap_capacity_overflow() {
-        let pool = Pool::new(10);
+    fn test_heap_capacity_overflow() { 
+        let pool = Rc::new(Pool::new(vec![10]));
         let mut heap = ArrayBinaryHeap::<_, 2>::new_uninit_in_pool(&pool);
         
         assert!(heap.push(1));     // ok, returns true
