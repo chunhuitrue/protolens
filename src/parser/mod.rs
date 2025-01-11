@@ -32,39 +32,35 @@ pub(crate) type ParserFuture = Pin<PoolBox<dyn Future<Output = Result<(), ()>>>>
 
 pub trait Parser {
     type PacketType: Packet + Ord + 'static;
-    
-
-
-    // 保持原有功能
-    fn pool(&self) -> &Rc<Pool>;
-    fn set_pool(&mut self, pool: Rc<Pool>);
 
     fn new() -> Self
     where
         Self: Sized;
 
+    fn pool(&self) -> &Rc<Pool>;
+
+    fn set_pool(&mut self, pool: Rc<Pool>);
+
+    fn c2s_parser_size(&self) -> usize;
+    fn s2c_parser_size(&self) -> usize;
+    fn bdir_parser_size(&self) -> usize;
+
     fn c2s_parser(
         &self,
         _stream: *const PktStrm<Self::PacketType>,
         _meta_tx: mpsc::Sender<Meta>,
-    ) -> ParserFuture {
-        self.pool().alloc_future(async { Ok(()) })
-    }
+    ) -> ParserFuture;
 
     fn s2c_parser(
         &self,
         _stream: *const PktStrm<Self::PacketType>,
         _meta_tx: mpsc::Sender<Meta>,
-    ) -> ParserFuture {
-        self.pool().alloc_future(async { Ok(()) })
-    }
+    ) -> ParserFuture;
 
     fn bdir_parser(
         &self,
         _c2s_stream: *const PktStrm<Self::PacketType>,
         _s2c_stream: *const PktStrm<Self::PacketType>,
         _meta_tx: mpsc::Sender<Meta>,
-    ) -> ParserFuture {
-        self.pool().alloc_future(async { Ok(()) })
-    }
+    ) -> ParserFuture;
 }

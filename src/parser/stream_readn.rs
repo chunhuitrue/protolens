@@ -4,6 +4,7 @@ use crate::ParserFuture;
 use crate::PktStrm;
 use crate::{Meta, Packet};
 use futures_channel::mpsc;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -34,41 +35,19 @@ impl<T: Packet + Ord + 'static> StreamReadnParser<T> {
     {
         self.callback_readn = Some(Arc::new(Mutex::new(callback)));
     }
-}
 
-impl<T: Packet + Ord + 'static> Default for StreamReadnParser<T> {
-    fn default() -> Self {
-        Self::new(10) // 默认读取10个字节
-    }
-}
-
-impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
-    type PacketType = T;
-
-    fn new() -> Self {
-        Self::new(10)  // 使用默认大小 10
-    }
-
-    fn pool(&self) -> &Rc<Pool> {
-        self.pool.as_ref().expect("Pool not set")
-    }
-
-    fn set_pool(&mut self, pool: Rc<Pool>) {
-        self.pool = Some(pool);
-    }
-
-    fn c2s_parser(
+    fn c2s_parser_inner(
         &self,
-        stream: *const PktStrm<Self::PacketType>,
+        stream: *const PktStrm<T>,
         _meta_tx: mpsc::Sender<Meta>,
-    ) -> ParserFuture {
+    ) -> impl Future<Output = Result<(), ()>> {
         let callback = self.callback_readn.clone();
         let read_size = self.read_size;
 
-        self.pool().alloc_future(async move {
-            let stm: &mut PktStrm<Self::PacketType>;
+        async move {
+            let stm: &mut PktStrm<T>;
             unsafe {
-                stm = &mut *(stream as *mut PktStrm<Self::PacketType>);
+                stm = &mut *(stream as *mut PktStrm<T>);
             }
 
             while !stm.fin() {
@@ -81,7 +60,94 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
                 }
             }
             Ok(())
-        })
+        }
+    }
+
+    fn s2c_parser_inner(
+        &self,
+        _stream: *const PktStrm<T>,
+        _meta_tx: mpsc::Sender<Meta>,
+    ) -> impl Future<Output = Result<(), ()>> {
+        async { Ok(()) }
+    }
+
+    fn bdir_parser_inner(
+        &self,
+        _c2s_stream: *const PktStrm<T>,
+        _s2c_stream: *const PktStrm<T>,
+        _meta_tx: mpsc::Sender<Meta>,
+    ) -> impl Future<Output = Result<(), ()>> {
+        async { Ok(()) }
+    }
+}
+
+impl<T: Packet + Ord + 'static> Default for StreamReadnParser<T> {
+    fn default() -> Self {
+        Self::new(10) // 默认读取10个字节
+    }
+}
+
+impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
+    type PacketType = T;
+
+    fn new() -> Self {
+        Self::new(10) // 使用默认大小 10
+    }
+
+    fn pool(&self) -> &Rc<Pool> {
+        self.pool.as_ref().expect("Pool not set")
+    }
+
+    fn set_pool(&mut self, pool: Rc<Pool>) {
+        self.pool = Some(pool);
+    }
+
+    fn c2s_parser_size(&self) -> usize {
+        let (tx, _rx) = mpsc::channel(1);
+        let stream_ptr = std::ptr::null();
+
+        let future = self.c2s_parser_inner(stream_ptr, tx);
+        std::mem::size_of_val(&future)
+    }
+
+    fn s2c_parser_size(&self) -> usize {
+        let (tx, _rx) = mpsc::channel(1);
+        let stream_ptr = std::ptr::null();
+
+        let future = self.s2c_parser_inner(stream_ptr, tx);
+        std::mem::size_of_val(&future)
+    }
+
+    fn bdir_parser_size(&self) -> usize {
+        let (tx, _rx) = mpsc::channel(1);
+        let stream_ptr = std::ptr::null();
+
+        let future = self.bdir_parser_inner(stream_ptr, stream_ptr, tx);
+        std::mem::size_of_val(&future)
+    }
+
+    fn c2s_parser(
+        &self,
+        stream: *const PktStrm<Self::PacketType>,
+        meta_tx: mpsc::Sender<Meta>,
+    ) -> ParserFuture {
+        self.pool()
+            .alloc_future(self.c2s_parser_inner(stream, meta_tx))
+    }
+
+    fn s2c_parser(&self, stream: *const PktStrm<T>, meta_tx: mpsc::Sender<Meta>) -> ParserFuture {
+        self.pool()
+            .alloc_future(self.s2c_parser_inner(stream, meta_tx))
+    }
+
+    fn bdir_parser(
+        &self,
+        c2s_stream: *const PktStrm<T>,
+        s2c_stream: *const PktStrm<T>,
+        meta_tx: mpsc::Sender<Meta>,
+    ) -> ParserFuture {
+        self.pool()
+            .alloc_future(self.bdir_parser_inner(c2s_stream, s2c_stream, meta_tx))
     }
 }
 
@@ -190,5 +256,37 @@ mod tests {
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第二个数据包
         ];
         assert_eq!(*vec.lock().unwrap(), expected);
+    }
+
+    #[test]
+    fn test_readn_future_sizes() {
+        let pool = Rc::new(Pool::new(vec![1024]));
+        let mut parser = StreamReadnParser::<CapPacket>::new(10);
+        parser.set_pool(pool);
+
+        println!(
+            "Size of stream pointer: {} bytes",
+            std::mem::size_of::<*const PktStrm<CapPacket>>()
+        );
+        println!(
+            "Size of mpsc::Sender: {} bytes",
+            std::mem::size_of::<mpsc::Sender<Meta>>()
+        );
+        println!(
+            "Size of callback: {} bytes",
+            std::mem::size_of::<Option<CallbackStreamReadn>>()
+        );
+
+        let size = parser.c2s_parser_size();
+        println!("Total future size: {} bytes", size);
+
+        let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
+            + std::mem::size_of::<mpsc::Sender<Meta>>()
+            + std::mem::size_of::<Option<CallbackStreamReadn>>();
+
+        assert!(
+            size >= min_size,
+            "Future size should be at least as large as its components"
+        );
     }
 }

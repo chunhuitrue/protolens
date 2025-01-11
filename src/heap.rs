@@ -7,12 +7,12 @@ use std::rc::Rc;
 
 /// 基于定长数组的二叉堆实现
 #[derive(Debug)]
-pub struct ArrayBinaryHeap<T, const N: usize> {
+pub struct Heap<T, const N: usize> {
     data: PoolBox<[MaybeUninit<T>; N]>,
     len: usize,
 }
 
-impl<T: Ord, const N: usize> ArrayBinaryHeap<T, N> {
+impl<T: Ord, const N: usize> Heap<T, N> {
     pub fn memory_size() -> usize {
         std::mem::size_of::<[MaybeUninit<T>; N]>()
     }
@@ -22,7 +22,7 @@ impl<T: Ord, const N: usize> ArrayBinaryHeap<T, N> {
         let data = pool.alloc(|| unsafe { 
             std::mem::MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init()
         });
-        ArrayBinaryHeap {
+        Heap {
             data,
             len: 0,
         }
@@ -124,16 +124,16 @@ mod tests {
 
     #[test]
     fn test_memory_size() {
-        let size = ArrayBinaryHeap::<PacketWrapper<MyPacket>, 32>::memory_size();
+        let size = Heap::<PacketWrapper<MyPacket>, 32>::memory_size();
         let pool = Rc::new(Pool::new(vec![size]));
-        let heap = ArrayBinaryHeap::<PacketWrapper<MyPacket>, 32>::new_uninit_in_pool(&pool);
+        let heap = Heap::<PacketWrapper<MyPacket>, 32>::new_uninit_in_pool(&pool);
         assert_eq!(heap.capacity(), 32);
     }
 
     #[test]
     fn test_push_pop() {
         let pool = Rc::new(Pool::new(vec![10]));
-        let mut heap = ArrayBinaryHeap::<_, 5>::new_uninit_in_pool(&pool);
+        let mut heap = Heap::<_, 5>::new_uninit_in_pool(&pool);
         
         assert!(heap.push(3));
         assert!(heap.push(1));
@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn test_packet_ordering() {
         let pool = Rc::new(Pool::new(vec![10]));
-        let mut heap = ArrayBinaryHeap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
+        let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
 
         let packet1 = MyPacket {
             sport: 12345,
@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn test_packet_ordering_with_syn_fin() {
         let pool = Rc::new(Pool::new(vec![10]));
-        let mut heap = ArrayBinaryHeap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
+        let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
 
         let syn_packet = MyPacket {
             sport: 12345,
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn test_heap_capacity_overflow() { 
         let pool = Rc::new(Pool::new(vec![10]));
-        let mut heap = ArrayBinaryHeap::<_, 2>::new_uninit_in_pool(&pool);
+        let mut heap = Heap::<_, 2>::new_uninit_in_pool(&pool);
         
         assert!(heap.push(1));     // ok, returns true
         assert!(heap.push(2));     // ok, returns true

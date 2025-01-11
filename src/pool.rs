@@ -14,7 +14,7 @@ pub struct Pool {
 impl Pool {
     pub fn new(_sizes: Vec<usize>) -> Self {
         // 计算总大小
-        
+
         // 这里保留原来的内存分配逻辑，但使用 total_size
         // ...其余实现细节
         Pool {

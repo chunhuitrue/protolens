@@ -1,7 +1,7 @@
 #![allow(unused)]
 
 use crate::pool::Pool;
-use crate::ArrayBinaryHeap;
+use crate::Heap;
 use crate::Packet;
 use crate::PacketWrapper;
 use crate::TransProto;
@@ -24,7 +24,7 @@ where
     T: Packet,
     PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
 {
-    cache: ArrayBinaryHeap<PacketWrapper<T>, { MAX_CACHE_PKTS }>,
+    cache: Heap<PacketWrapper<T>, { MAX_CACHE_PKTS }>,
     next_seq: u32,
     fin: bool,
 }
@@ -36,7 +36,7 @@ where
 {
     pub fn new(pool: &Rc<Pool>) -> Self {
         PktStrm {
-            cache: ArrayBinaryHeap::new_uninit_in_pool(pool),
+            cache: Heap::new_uninit_in_pool(pool),
             next_seq: 0,
             fin: false,
         }
