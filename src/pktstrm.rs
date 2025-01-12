@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use crate::config::*;
 use crate::pool::Pool;
 use crate::Heap;
 use crate::Packet;
@@ -15,8 +16,6 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::Context;
 use std::task::Poll;
-
-const MAX_CACHE_PKTS: usize = 32;
 
 #[derive(Debug)]
 pub struct PktStrm<T>

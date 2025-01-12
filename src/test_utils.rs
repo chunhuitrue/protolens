@@ -13,6 +13,56 @@ use std::rc::Rc;
 pub(crate) const SMTP_PORT_NET: u16 = 25;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PacketRef<T>
+where
+    T: Packet,
+{
+    inner: Rc<T>,
+}
+
+impl<T: Packet> PacketRef<T> {
+    fn new(pkt: T) -> Self {
+        Self {
+            inner: Rc::new(pkt),
+        }
+    }
+}
+
+impl<T: Packet> Packet for PacketRef<T> {
+    fn seq(&self) -> u32 {
+        self.inner.seq()
+    }
+
+    fn tu_sport(&self) -> u16 {
+        self.inner.tu_sport()
+    }
+
+    fn tu_dport(&self) -> u16 {
+        self.inner.tu_dport()
+    }
+
+    fn syn(&self) -> bool {
+        self.inner.syn()
+    }
+
+    fn fin(&self) -> bool {
+        self.inner.fin()
+    }
+
+    fn payload(&self) -> &[u8] {
+        self.inner.payload()
+    }
+
+    fn payload_len(&self) -> usize {
+        self.inner.payload_len()
+    }
+
+    fn trans_proto(&self) -> TransProto {
+        TransProto::Tcp
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct MyPacket {
     pub sport: u16,
     pub dport: u16,

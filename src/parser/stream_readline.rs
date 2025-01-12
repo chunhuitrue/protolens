@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_readline_future_sizes() {
-        let pool = Rc::new(Pool::new(vec![1024]));
+        let pool = Rc::new(Pool::new(vec![4]));
         let mut parser = StreamReadlineParser::<CapPacket>::new();
         parser.set_pool(pool);
 

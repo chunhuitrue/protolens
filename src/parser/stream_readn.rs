@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_readn_future_sizes() {
-        let pool = Rc::new(Pool::new(vec![1024]));
+        let pool = Rc::new(Pool::new(vec![4]));
         let mut parser = StreamReadnParser::<CapPacket>::new(10);
         parser.set_pool(pool);
 
@@ -277,15 +277,19 @@ mod tests {
             std::mem::size_of::<Option<CallbackStreamReadn>>()
         );
 
-        let size = parser.c2s_parser_size();
-        println!("Total future size: {} bytes", size);
+        let c2s_size = parser.c2s_parser_size();
+        let s2c_size = parser.s2c_parser_size();
+        let bdir_size = parser.bdir_parser_size();
+        println!("c2s size: {} bytes", c2s_size);
+        println!("s2c size: {} bytes", s2c_size);
+        println!("bdir size: {} bytes", bdir_size);
 
         let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
             + std::mem::size_of::<mpsc::Sender<Meta>>()
             + std::mem::size_of::<Option<CallbackStreamReadn>>();
 
         assert!(
-            size >= min_size,
+            c2s_size >= min_size,
             "Future size should be at least as large as its components"
         );
     }

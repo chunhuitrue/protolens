@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_future_sizes() {
-        let pool = Rc::new(Pool::new(vec![1024]));
+        let pool = Rc::new(Pool::new(vec![4]));
         let mut parser = RawPacketParser::<CapPacket>::new();
         parser.set_pool(pool);
 

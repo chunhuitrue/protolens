@@ -1,7 +1,7 @@
 #![allow(unused)]
 
-use std::cmp::Ordering;
 use crate::pool::{Pool, PoolBox};
+use std::cmp::Ordering;
 use std::mem::MaybeUninit;
 use std::rc::Rc;
 
@@ -13,19 +13,15 @@ pub struct Heap<T, const N: usize> {
 }
 
 impl<T: Ord, const N: usize> Heap<T, N> {
-    pub fn memory_size() -> usize {
-        std::mem::size_of::<[MaybeUninit<T>; N]>()
-    }
-
-    // 为 PacketWrapper 提供专门的初始化方法
     pub fn new_uninit_in_pool(pool: &Rc<Pool>) -> Self {
-        let data = pool.alloc(|| unsafe { 
+        let data = pool.alloc(|| unsafe {
             std::mem::MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init()
         });
-        Heap {
-            data,
-            len: 0,
-        }
+        Heap { data, len: 0 }
+    }
+
+    pub fn memory_size() -> usize {
+        std::mem::size_of::<[MaybeUninit<T>; N]>()
     }
 
     pub fn capacity(&self) -> usize {
@@ -81,7 +77,11 @@ impl<T: Ord, const N: usize> Heap<T, N> {
         while pos > 0 {
             let parent = (pos - 1) / 2;
             unsafe {
-                if self.data[pos].assume_init_ref().cmp(self.data[parent].assume_init_ref()) == Ordering::Greater {
+                if self.data[pos]
+                    .assume_init_ref()
+                    .cmp(self.data[parent].assume_init_ref())
+                    == Ordering::Greater
+                {
                     break;
                 }
             }
@@ -98,10 +98,20 @@ impl<T: Ord, const N: usize> Heap<T, N> {
             let right = 2 * pos + 2;
 
             unsafe {
-                if left < len && self.data[left].assume_init_ref().cmp(self.data[smallest].assume_init_ref()) == Ordering::Less {
+                if left < len
+                    && self.data[left]
+                        .assume_init_ref()
+                        .cmp(self.data[smallest].assume_init_ref())
+                        == Ordering::Less
+                {
                     smallest = left;
                 }
-                if right < len && self.data[right].assume_init_ref().cmp(self.data[smallest].assume_init_ref()) == Ordering::Less {
+                if right < len
+                    && self.data[right]
+                        .assume_init_ref()
+                        .cmp(self.data[smallest].assume_init_ref())
+                        == Ordering::Less
+                {
                     smallest = right;
                 }
             }
@@ -134,7 +144,7 @@ mod tests {
     fn test_push_pop() {
         let pool = Rc::new(Pool::new(vec![10]));
         let mut heap = Heap::<_, 5>::new_uninit_in_pool(&pool);
-        
+
         assert!(heap.push(3));
         assert!(heap.push(1));
         assert!(heap.push(4));
@@ -245,14 +255,14 @@ mod tests {
     }
 
     #[test]
-    fn test_heap_capacity_overflow() { 
+    fn test_heap_capacity_overflow() {
         let pool = Rc::new(Pool::new(vec![10]));
         let mut heap = Heap::<_, 2>::new_uninit_in_pool(&pool);
-        
-        assert!(heap.push(1));     // ok, returns true
-        assert!(heap.push(2));     // ok, returns true
-        assert!(!heap.push(3));    // capacity exceeded, returns false
-        
+
+        assert!(heap.push(1)); // ok, returns true
+        assert!(heap.push(2)); // ok, returns true
+        assert!(!heap.push(3)); // capacity exceeded, returns false
+
         assert_eq!(heap.len(), 2); // length should still be 2
         assert_eq!(heap.pop(), Some(1));
         assert_eq!(heap.pop(), Some(2));

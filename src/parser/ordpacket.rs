@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn test_ordpacket_future_sizes() {
-        let pool = Rc::new(Pool::new(vec![1024]));
+        let pool = Rc::new(Pool::new(vec![4]));
         let mut parser = OrdPacketParser::<CapPacket>::new();
         parser.set_pool(pool);
 

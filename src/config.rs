@@ -1,3 +1,5 @@
+pub const MAX_CACHE_PKTS: usize = 32;
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub pool_size: usize,
