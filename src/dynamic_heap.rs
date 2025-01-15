@@ -128,8 +128,8 @@ mod tests {
 
     #[test]
     fn test_dynamic_heap_basic() {
-        let pool = Rc::new(Pool::new(vec![1024]));
-        let mut heap = DynamicHeap::new_in_pool(&pool, 50); // 使用 Heap64
+        let pool = Rc::new(Pool::new(4096, vec![4]));
+        let mut heap = DynamicHeap::new_in_pool(&pool, 50);
 
         assert!(heap.push(3));
         assert!(heap.push(1));
@@ -145,8 +145,8 @@ mod tests {
 
     #[test]
     fn test_dynamic_heap_capacity() {
-        let pool = Rc::new(Pool::new(vec![1024]));
-        let mut heap = DynamicHeap::new_in_pool(&pool, 32); // 使用 Heap32
+        let pool = Rc::new(Pool::new(4096, vec![4]));
+        let mut heap = DynamicHeap::new_in_pool(&pool, 32);
 
         for i in 0..32 {
             assert!(heap.push(i));

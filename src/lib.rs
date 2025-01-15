@@ -63,7 +63,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     pub fn new(config: &Config) -> Self {
         Prolens {
             config: config.clone(),
-            pool: Rc::new(Pool::new(Self::objs_size(config))),
+            pool: Rc::new(Pool::new(config.pool_size, Self::objs_size(config))),
             stats: Stats::new(),
             _phantom: PhantomData,
         }
@@ -108,7 +108,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         res.push(heap_size);
         dbg!(task_size, pktstrm_size, heap_size);
 
-        let pool = Rc::new(Pool::new(vec![1]));
+        let pool = Rc::new(Pool::new(4096, vec![1]));
 
         get_parser_sizes::<P, OrdPacketParser<P>>(&pool, &mut res);
         #[cfg(test)]
@@ -156,9 +156,9 @@ mod tests {
     use crate::parser::ordpacket::OrdPacketParser;
     use crate::parser::smtp::SmtpParser;
     use crate::test_utils::MyPacket;
+    use crate::test_utils::{CapPacket, PacketRef};
     use crate::PktDirection;
     use std::sync::{Arc, Mutex};
-    use crate::test_utils::{PacketRef, CapPacket};
 
     #[test]
     fn test_protolens_basic() {
@@ -183,7 +183,7 @@ mod tests {
     fn test_protolens_config() {
         let config = Config {
             pool_size: 20,
-            heap_capacity: 32,
+            max_buf_packet: 32,
         };
         let protolens = Prolens::<MyPacket>::new(&config);
         assert_eq!(protolens.config.pool_size, 20);
@@ -239,7 +239,7 @@ mod tests {
     fn test_objs_size() {
         let config = Config {
             pool_size: 20,
-            heap_capacity: 64,
+            max_buf_packet: 64,
         };
 
         let sizes = Prolens::<MyPacket>::objs_size(&config);
@@ -260,7 +260,7 @@ mod tests {
     fn test_objs_size_with_packetref() {
         let config = Config {
             pool_size: 20,
-            heap_capacity: 64,
+            max_buf_packet: 64,
         };
 
         // 使用PacketRef<MyPacket>来初始化Prolens
@@ -282,14 +282,17 @@ mod tests {
         let mypacket_size = std::mem::size_of::<MyPacket>();
         println!("PacketRef<MyPacket> size: {}", packetref_size);
         println!("MyPacket size: {}", mypacket_size);
-        assert!(packetref_size < mypacket_size, "PacketRef should be smaller than MyPacket");
+        assert!(
+            packetref_size < mypacket_size,
+            "PacketRef should be smaller than MyPacket"
+        );
     }
 
     #[test]
     fn test_objs_size_with_cappacket_ref() {
         let config = Config {
             pool_size: 20,
-            heap_capacity: 64,
+            max_buf_packet: 64,
         };
 
         // 使用PacketRef<CapPacket>来初始化Prolens
@@ -311,11 +314,17 @@ mod tests {
         let cappacket_size = std::mem::size_of::<CapPacket>();
         println!("PacketRef<CapPacket> size: {}", packetref_size);
         println!("CapPacket size: {}", cappacket_size);
-        assert!(packetref_size < cappacket_size, "PacketRef should be smaller than CapPacket");
+        assert!(
+            packetref_size < cappacket_size,
+            "PacketRef should be smaller than CapPacket"
+        );
 
         // CapPacket 包含固定大小的数组和其他字段，大小应该比 MyPacket 大很多
         let mypacket_size = std::mem::size_of::<MyPacket>();
         println!("MyPacket size: {}", mypacket_size);
-        assert!(cappacket_size > mypacket_size, "CapPacket should be larger than MyPacket");
+        assert!(
+            cappacket_size > mypacket_size,
+            "CapPacket should be larger than MyPacket"
+        );
     }
 }

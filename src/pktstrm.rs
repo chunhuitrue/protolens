@@ -246,7 +246,7 @@ where
     PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
 {
     fn default() -> Self {
-        Self::new(&Rc::new(Pool::new(vec![64])))
+        Self::new(&Rc::new(Pool::new(4096, vec![4])))
     }
 }
 
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_push() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::new(&pool);
 
         let pkt1 = make_pkt_data(123);
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
 
         let packet1 = MyPacket {
@@ -393,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek2() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::new(&pool);
 
         let pkt1 = MyPacket::new(1, false);
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_pop() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
 
         let packet1 = MyPacket {
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek_ord() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
 
         let packet1 = MyPacket {
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek_ord2() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::new(&pool);
         // 1 - 10
         let seq1 = 1;
@@ -570,7 +570,7 @@ mod tests {
     // 插入的包有完整重传
     #[test]
     fn test_pktstrm_peek_ord_retrans() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::new(&pool);
         // 1 - 10
         let seq1 = 1;
@@ -619,7 +619,7 @@ mod tests {
     // 插入的包有覆盖重传
     #[test]
     fn test_pktstrm_peek_ord_cover() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::new(&pool);
         // 1 - 10
         let seq1 = 1;
@@ -667,7 +667,7 @@ mod tests {
     // 有中间丢包
     #[test]
     fn test_pktstrm_peek_drop() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::new(&pool);
         // 1 - 10
         let seq1 = 1;
@@ -698,7 +698,7 @@ mod tests {
     // 带数据，带fin。是否可以set fin标记？
     #[test]
     fn test_pkt_fin() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::new(&pool);
         // 1 - 10
         let seq1 = 1;
@@ -715,7 +715,7 @@ mod tests {
     // 用pop_ord_data，才会设置fin
     #[test]
     fn test_3pkt_fin() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::new(&pool);
         // 1 - 10
         let seq1 = 1;
@@ -745,7 +745,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_pop_ord() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
 
         let packet1 = MyPacket {
@@ -816,7 +816,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek_ord_data() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
 
         let packet1 = MyPacket {
@@ -873,7 +873,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_pop_ord_data() {
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
 
         let packet1 = MyPacket {
@@ -940,7 +940,7 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::<CapPacket>::new(&pool);
         stm.push(syn_pkt);
         stm.push(pkt1);
@@ -963,7 +963,7 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::<CapPacket>::new(&pool);
         stm.push(syn_pkt);
         stm.push(pkt1);
@@ -986,7 +986,7 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::<CapPacket>::new(&pool);
         stm.push(syn_pkt);
         stm.push(pkt1);
@@ -1011,7 +1011,7 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::<CapPacket>::new(&pool);
         stm.push(syn_pkt);
         stm.push(pkt1);
@@ -1048,7 +1048,7 @@ mod tests {
         let pkt4 = build_pkt_fin(seq4);
         let _ = pkt4.decode();
 
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::<CapPacket>::new(&pool);
         stm.push(syn_pkt);
         stm.push(pkt2);
@@ -1080,7 +1080,7 @@ mod tests {
         let pkt2 = build_pkt_fin(seq2);
         let _ = pkt2.decode();
 
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::<CapPacket>::new(&pool);
         stm.push(pkt1);
         stm.push(pkt2);
@@ -1119,7 +1119,7 @@ mod tests {
         let fin_pkt = build_pkt_fin(fin_seq);
         let _ = fin_pkt.decode();
 
-        let pool = Rc::new(Pool::new(vec![64]));
+        let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::<CapPacket>::new(&pool);
         stm.push(syn_pkt);
         stm.push(pkt1);

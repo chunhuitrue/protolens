@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn test_streamnext_future_sizes() {
-        let pool = Rc::new(Pool::new(vec![4]));
+        let pool = Rc::new(Pool::new(4096, vec![4]));
         let mut parser = StreamNextParser::<CapPacket>::new();
         parser.set_pool(pool);
 

@@ -135,14 +135,14 @@ mod tests {
     #[test]
     fn test_memory_size() {
         let size = Heap::<PacketWrapper<MyPacket>, 32>::memory_size();
-        let pool = Rc::new(Pool::new(vec![size]));
+        let pool = Rc::new(Pool::new(4096, vec![size]));
         let heap = Heap::<PacketWrapper<MyPacket>, 32>::new_uninit_in_pool(&pool);
         assert_eq!(heap.capacity(), 32);
     }
 
     #[test]
     fn test_push_pop() {
-        let pool = Rc::new(Pool::new(vec![10]));
+        let pool = Rc::new(Pool::new(4096, vec![10]));
         let mut heap = Heap::<_, 5>::new_uninit_in_pool(&pool);
 
         assert!(heap.push(3));
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn test_packet_ordering() {
-        let pool = Rc::new(Pool::new(vec![10]));
+        let pool = Rc::new(Pool::new(4096, vec![10]));
         let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
 
         let packet1 = MyPacket {
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_packet_ordering_with_syn_fin() {
-        let pool = Rc::new(Pool::new(vec![10]));
+        let pool = Rc::new(Pool::new(4096, vec![10]));
         let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
 
         let syn_packet = MyPacket {
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_heap_capacity_overflow() {
-        let pool = Rc::new(Pool::new(vec![10]));
+        let pool = Rc::new(Pool::new(4096, vec![10]));
         let mut heap = Heap::<_, 2>::new_uninit_in_pool(&pool);
 
         assert!(heap.push(1)); // ok, returns true

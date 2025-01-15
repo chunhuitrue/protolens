@@ -162,7 +162,7 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
 
 impl<T: Packet + Ord + std::fmt::Debug + 'static> Default for Task<T> {
     fn default() -> Self {
-        Self::new(&Rc::new(Pool::new(vec![64])))
+        Self::new(&Rc::new(Pool::new(1024, vec![2])))
     }
 }
 

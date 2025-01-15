@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_readn_future_sizes() {
-        let pool = Rc::new(Pool::new(vec![4]));
+        let pool = Rc::new(Pool::new(4096, vec![4]));
         let mut parser = StreamReadnParser::<CapPacket>::new(10);
         parser.set_pool(pool);
 
