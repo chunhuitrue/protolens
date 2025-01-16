@@ -41,26 +41,40 @@ pub trait Parser {
 
     fn set_pool(&mut self, pool: Rc<Pool>);
 
-    fn c2s_parser_size(&self) -> usize;
-    fn s2c_parser_size(&self) -> usize;
-    fn bdir_parser_size(&self) -> usize;
+    fn c2s_parser_size(&self) -> usize {
+        0
+    }
+
+    fn s2c_parser_size(&self) -> usize {
+        0
+    }
+
+    fn bdir_parser_size(&self) -> usize {
+        0
+    }
 
     fn c2s_parser(
         &self,
         _stream: *const PktStrm<Self::PacketType>,
         _meta_tx: mpsc::Sender<Meta>,
-    ) -> ParserFuture;
+    ) -> Option<ParserFuture> {
+        None
+    }
 
     fn s2c_parser(
         &self,
         _stream: *const PktStrm<Self::PacketType>,
         _meta_tx: mpsc::Sender<Meta>,
-    ) -> ParserFuture;
+    ) -> Option<ParserFuture> {
+        None
+    }
 
     fn bdir_parser(
         &self,
         _c2s_stream: *const PktStrm<Self::PacketType>,
         _s2c_stream: *const PktStrm<Self::PacketType>,
         _meta_tx: mpsc::Sender<Meta>,
-    ) -> ParserFuture;
+    ) -> Option<ParserFuture> {
+        None
+    }
 }

@@ -63,23 +63,6 @@ impl<T: Packet + Ord + 'static> StreamReadlineParser<T> {
             Ok(())
         }
     }
-
-    fn s2c_parser_inner(
-        &self,
-        _stream: *const PktStrm<T>,
-        _meta_tx: mpsc::Sender<Meta>,
-    ) -> impl Future<Output = Result<(), ()>> {
-        async { Ok(()) }
-    }
-
-    fn bdir_parser_inner(
-        &self,
-        _c2s_stream: *const PktStrm<T>,
-        _s2c_stream: *const PktStrm<T>,
-        _meta_tx: mpsc::Sender<Meta>,
-    ) -> impl Future<Output = Result<(), ()>> {
-        async { Ok(()) }
-    }
 }
 
 impl<T: Packet + Ord + 'static> Default for StreamReadlineParser<T> {
@@ -111,44 +94,15 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadlineParser<T> {
         std::mem::size_of_val(&future)
     }
 
-    fn s2c_parser_size(&self) -> usize {
-        let (tx, _rx) = mpsc::channel(1);
-        let stream_ptr = std::ptr::null();
-
-        let future = self.s2c_parser_inner(stream_ptr, tx);
-        std::mem::size_of_val(&future)
-    }
-
-    fn bdir_parser_size(&self) -> usize {
-        let (tx, _rx) = mpsc::channel(1);
-        let stream_ptr = std::ptr::null();
-
-        let future = self.bdir_parser_inner(stream_ptr, stream_ptr, tx);
-        std::mem::size_of_val(&future)
-    }
-
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
         meta_tx: mpsc::Sender<Meta>,
-    ) -> ParserFuture {
-        self.pool()
-            .alloc_future(self.c2s_parser_inner(stream, meta_tx))
-    }
-
-    fn s2c_parser(&self, stream: *const PktStrm<T>, meta_tx: mpsc::Sender<Meta>) -> ParserFuture {
-        self.pool()
-            .alloc_future(self.s2c_parser_inner(stream, meta_tx))
-    }
-
-    fn bdir_parser(
-        &self,
-        c2s_stream: *const PktStrm<T>,
-        s2c_stream: *const PktStrm<T>,
-        meta_tx: mpsc::Sender<Meta>,
-    ) -> ParserFuture {
-        self.pool()
-            .alloc_future(self.bdir_parser_inner(c2s_stream, s2c_stream, meta_tx))
+    ) -> Option<ParserFuture> {
+        Some(
+            self.pool()
+                .alloc_future(self.c2s_parser_inner(stream, meta_tx)),
+        )
     }
 }
 

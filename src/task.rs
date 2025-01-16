@@ -61,9 +61,9 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
         let s2c_parser = parser.s2c_parser(p_stream_s2c, tx.clone());
         let bdir_parser = parser.bdir_parser(p_stream_c2s, p_stream_s2c, tx.clone());
 
-        self.c2s_parser = Some(c2s_parser);
-        self.s2c_parser = Some(s2c_parser);
-        self.bdir_parser = Some(bdir_parser);
+        self.c2s_parser = c2s_parser;
+        self.s2c_parser = s2c_parser;
+        self.bdir_parser = bdir_parser;
         self.meta_rx = Some(rx);
     }
 
@@ -95,6 +95,8 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
                 Poll::Ready(Err(())) => self.c2s_state = TaskState::Error,
                 Poll::Pending => {}
             }
+        } else {
+            self.c2s_state = TaskState::End
         }
     }
 
@@ -111,6 +113,8 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
                 Poll::Ready(Err(())) => self.s2c_state = TaskState::Error,
                 Poll::Pending => {}
             }
+        } else {
+            self.s2c_state = TaskState::End
         }
     }
 
@@ -127,6 +131,8 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
                 Poll::Ready(Err(())) => self.bdir_state = TaskState::Error,
                 Poll::Pending => {}
             }
+        } else {
+            self.bdir_state = TaskState::End
         }
     }
 
