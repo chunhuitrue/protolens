@@ -16,11 +16,15 @@ pub mod smtp2;
 #[cfg(test)]
 pub mod stream_next;
 #[cfg(test)]
+pub mod stream_read;
+#[cfg(test)]
 pub mod stream_readline;
 #[cfg(test)]
 pub mod stream_readline2;
 #[cfg(test)]
 pub mod stream_readn;
+#[cfg(test)]
+pub mod stream_readn2;
 
 #[derive(Debug)]
 pub enum MetaHttp {}

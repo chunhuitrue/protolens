@@ -12,7 +12,7 @@ use std::sync::Mutex;
 
 type CallbackStreamReadn = Arc<Mutex<dyn FnMut(Vec<u8>) + Send + Sync>>;
 
-pub struct StreamReadnParser<T: Packet + Ord + 'static> {
+pub(crate) struct StreamReadnParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     pool: Option<Rc<Pool>>,
     callback_readn: Option<CallbackStreamReadn>,
@@ -20,7 +20,7 @@ pub struct StreamReadnParser<T: Packet + Ord + 'static> {
 }
 
 impl<T: Packet + Ord + 'static> StreamReadnParser<T> {
-    pub fn new(read_size: usize) -> Self {
+    pub(crate) fn new(read_size: usize) -> Self {
         Self {
             _phantom: PhantomData,
             pool: None,

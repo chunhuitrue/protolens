@@ -26,11 +26,15 @@ use crate::smtp::SmtpParser;
 #[cfg(test)]
 use crate::stream_next::StreamNextParser;
 #[cfg(test)]
+use crate::stream_read::StreamReadParser;
+#[cfg(test)]
 use crate::stream_readline::StreamReadlineParser;
 #[cfg(test)]
 use crate::stream_readline2::StreamReadline2Parser;
 #[cfg(test)]
 use crate::stream_readn::StreamReadnParser;
+#[cfg(test)]
+use crate::stream_readn2::StreamReadn2Parser;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -126,6 +130,10 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         get_parser_sizes::<P, StreamReadline2Parser<P>>(&pool, &mut res);
         #[cfg(test)]
         get_parser_sizes::<P, StreamReadnParser<P>>(&pool, &mut res);
+        #[cfg(test)]
+        get_parser_sizes::<P, StreamReadn2Parser<P>>(&pool, &mut res);
+        #[cfg(test)]
+        get_parser_sizes::<P, StreamReadParser<P>>(&pool, &mut res);
 
         res.sort_unstable();
         res.dedup();

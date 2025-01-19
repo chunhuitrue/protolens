@@ -37,7 +37,7 @@ where
     T: Packet,
     PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
 {
-    pub fn new(pool: &Rc<Pool>) -> Self {
+    pub(crate) fn new(pool: &Rc<Pool>) -> Self {
         let read_buff = pool.alloc(|| [0u8; MAX_READ_BUFF]);
 
         PktStrm {
@@ -197,8 +197,54 @@ where
         self.fin
     }
 
+    // 严格读到num个字节。用vec
     pub(crate) async fn readn(&mut self, num: usize) -> Vec<u8> {
         self.take(num).collect::<Vec<u8>>().await
+    }
+
+    // 严格读到num个字节,用内部buff，不需要vec
+    pub(crate) async fn readn2(&mut self, num: usize) -> Result<&[u8], ()> {
+        if num > MAX_READ_BUFF {
+            return Err(());
+        }
+
+        while self.read_buff_len < num {
+            match poll_fn(|cx| Stream::poll_next(Pin::new(self), cx)).await {
+                Some(byte) => {
+                    self.read_buff[self.read_buff_len] = byte;
+                    self.read_buff_len += 1;
+                }
+                None => {
+                    self.read_buff_len = 0;
+                    return Err(());
+                }
+            }
+        }
+
+        let result = Ok(&self.read_buff[..num]);
+        self.read_buff_len = 0; // 只在返回时重置
+        result
+    }
+
+    // 读多少算多少，写入调用着提供的buff
+    pub(crate) async fn read(&mut self, buff: &mut [u8]) -> Result<usize, ()> {
+        if buff.is_empty() {
+            return Ok(0);
+        }
+
+        let mut read_len = 0;
+        while read_len < buff.len() {
+            match poll_fn(|cx| Stream::poll_next(Pin::new(self), cx)).await {
+                Some(byte) => {
+                    buff[read_len] = byte;
+                    read_len += 1;
+                }
+                None => {
+                    return Ok(read_len);
+                }
+            }
+        }
+        Ok(read_len)
     }
 
     pub(crate) async fn readline(&mut self) -> Result<String, ()> {
