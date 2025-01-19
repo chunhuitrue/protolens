@@ -12,10 +12,13 @@ pub mod ordpacket;
 #[cfg(test)]
 pub mod rawpacket;
 pub mod smtp;
+pub mod smtp2;
 #[cfg(test)]
 pub mod stream_next;
 #[cfg(test)]
 pub mod stream_readline;
+#[cfg(test)]
+pub mod stream_readline2;
 #[cfg(test)]
 pub mod stream_readn;
 

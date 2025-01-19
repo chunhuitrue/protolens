@@ -5,6 +5,7 @@ use crate::pool::Pool;
 use crate::Heap;
 use crate::Packet;
 use crate::PacketWrapper;
+use crate::PoolBox;
 use crate::TransProto;
 use futures::future;
 use futures::future::poll_fn;
@@ -12,6 +13,7 @@ use futures::Future;
 use futures_util::stream::{Stream, StreamExt};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::Context;
@@ -23,7 +25,9 @@ where
     T: Packet,
     PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
 {
-    cache: Heap<PacketWrapper<T>, { MAX_CACHE_PKTS }>,
+    pkt_buff: Heap<PacketWrapper<T>, { MAX_PKT_BUFF }>,
+    read_buff: PoolBox<[u8; MAX_READ_BUFF]>,
+    read_buff_len: usize,
     next_seq: u32,
     fin: bool,
 }
@@ -34,8 +38,12 @@ where
     PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
 {
     pub fn new(pool: &Rc<Pool>) -> Self {
+        let read_buff = pool.alloc(|| [0u8; MAX_READ_BUFF]);
+
         PktStrm {
-            cache: Heap::new_uninit_in_pool(pool),
+            pkt_buff: Heap::new_uninit_in_pool(pool),
+            read_buff,
+            read_buff_len: 0,
             next_seq: 0,
             fin: false,
         }
@@ -49,12 +57,12 @@ where
         if packet.trans_proto() != TransProto::Tcp {
             return;
         }
-        if self.cache.len() >= MAX_CACHE_PKTS {
+        if self.pkt_buff.len() >= MAX_PKT_BUFF {
             return;
         }
 
         let pkt = PacketWrapper(packet);
-        self.cache.push(pkt);
+        self.pkt_buff.push(pkt);
     }
 
     // 无论是否严格seq连续，peek一个当前最有序的包
@@ -63,13 +71,13 @@ where
         if self.fin {
             return None;
         }
-        self.cache.peek().map(|p| &p.0)
+        self.pkt_buff.peek().map(|p| &p.0)
     }
 
     // 无论是否严格seq连续，都pop一个当前包。
     // 注意：next_seq由调用者负责
     pub(crate) fn pop(&mut self) -> Option<T> {
-        if let Some(pkt) = self.cache.pop().map(|p| p.0) {
+        if let Some(pkt) = self.pkt_buff.pop().map(|p| p.0) {
             if pkt.fin() {
                 self.fin = true;
             }
@@ -174,7 +182,7 @@ where
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.cache.len()
+        self.pkt_buff.len()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -182,7 +190,7 @@ where
     }
 
     pub(crate) fn clear(&mut self) {
-        self.cache.clear();
+        self.pkt_buff.clear();
     }
 
     pub(crate) fn fin(&self) -> bool {
@@ -204,6 +212,59 @@ where
             res.push(b'\n');
             String::from_utf8(res).map_err(|_| ())
         }
+    }
+
+    pub(crate) async fn readline2(&mut self) -> Result<&[u8], ()> {
+        while self.read_buff_len < MAX_READ_BUFF {
+            match poll_fn(|cx| Stream::poll_next(Pin::new(self), cx)).await {
+                Some(byte) => {
+                    self.read_buff[self.read_buff_len] = byte;
+                    self.read_buff_len += 1;
+
+                    if byte == b'\n' {
+                        let result = Ok(&self.read_buff[..self.read_buff_len]);
+                        self.read_buff_len = 0; // 只有在找到完整的行后才重置
+                        return result;
+                    }
+                }
+                None => {
+                    if self.read_buff_len == 0 {
+                        return Err(());
+                    } else {
+                        let result = Ok(&self.read_buff[..self.read_buff_len]);
+                        self.read_buff_len = 0; // 流结束时也重置
+                        return result;
+                    }
+                }
+            }
+        }
+
+        // Buffer is full but no newline found
+        let result = Ok(&self.read_buff[..self.read_buff_len]);
+        self.read_buff_len = 0; // 缓冲区满时也重置
+        result
+    }
+
+    pub(crate) async fn read_clean_line(&mut self) -> Result<&[u8], ()> {
+        let line = self.readline2().await?;
+        let mut len = line.len();
+
+        // 重置长度到正确的位置（去掉行尾字符）
+        if len >= 2 && line[len - 2] == 13 && line[len - 1] == 10 {
+            len -= 2;
+        } else if len >= 1 && (line[len - 1] == 10 || line[len - 1] == 13) {
+            len -= 1;
+        }
+
+        let result = Ok(&self.read_buff[..len]);
+        self.read_buff_len = 0;
+        result
+    }
+
+    pub(crate) async fn read_clean_line_str(&mut self) -> Result<&str, ()> {
+        let line = self.read_clean_line().await?;
+        std::str::from_utf8(line).map_err(|_| ())
+        // unsafe { Ok(std::str::from_utf8_unchecked(line)) }
     }
 
     // 异步方式获取下一个严格有序的包。包含载荷为0的
@@ -238,6 +299,10 @@ where
     //     self.next_seq += 1;
     //     byte
     // }
+
+    pub fn buff_size() -> usize {
+        std::mem::size_of::<[u8; MAX_READ_BUFF]>()
+    }
 }
 
 impl<T> Default for PktStrm<T>
@@ -256,7 +321,7 @@ where
     PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
 {
     fn drop(&mut self) {
-        self.cache.clear();
+        self.pkt_buff.clear();
     }
 }
 

@@ -168,13 +168,14 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
     }
 }
 
-enum ContentType {
+#[derive(Debug)]
+pub(crate) enum ContentType {
     Unknown,
     Alt,
 }
 
 // MAIL FROM: <user12345@example123.com> SIZE=10557
-fn mail_from(input: &str) -> IResult<&str, (&str, usize)> {
+pub(crate) fn mail_from(input: &str) -> IResult<&str, (&str, usize)> {
     let (input, _) = tag("MAIL FROM: <")(input)?;
     let (input, mail) = take_while(|c| c != '>')(input)?;
     let (input, _) = tag("> SIZE=")(input)?;
@@ -183,7 +184,7 @@ fn mail_from(input: &str) -> IResult<&str, (&str, usize)> {
 }
 
 // RCPT TO: <user12345@example123.com>
-fn rcpt_to(input: &str) -> IResult<&str, &str> {
+pub(crate) fn rcpt_to(input: &str) -> IResult<&str, &str> {
     let (input, _) = tag("RCPT TO: <")(input)?;
     let (input, mail) = take_while(|c| c != '>')(input)?;
     Ok((input, (mail)))
@@ -236,14 +237,14 @@ async fn mail_head<T: Packet + Ord + 'static>(
 }
 
 // Subject: biaoti
-fn subject(input: &str) -> IResult<&str, &str> {
+pub(crate) fn subject(input: &str) -> IResult<&str, &str> {
     let (input, _) = tag("Subject: ")(input)?;
     let (input, subject) = take_till(|c| c == '\r')(input)?;
     Ok((input, (subject)))
 }
 
 // Content-Type: multipart/alternative;
-fn content_type(input: &str) -> IResult<&str, ContentType> {
+pub(crate) fn content_type(input: &str) -> IResult<&str, ContentType> {
     let (input, _) = tag("Content-Type: ")(input)?;
     if input.contains("multipart/alternative;") {
         Ok((input, (ContentType::Alt)))
@@ -253,7 +254,7 @@ fn content_type(input: &str) -> IResult<&str, ContentType> {
 }
 
 // \tboundary="----=_001_NextPart572182624333_=----"
-fn content_type_ext(input: &str, cont_rady: bool) -> IResult<&str, &str> {
+pub(crate) fn content_type_ext(input: &str, cont_rady: bool) -> IResult<&str, &str> {
     if !cont_rady {
         return Ok((input, ""));
     }

@@ -20,7 +20,7 @@ impl<T: Ord, const N: usize> Heap<T, N> {
         Heap { data, len: 0 }
     }
 
-    pub fn memory_size() -> usize {
+    pub fn array_size() -> usize {
         std::mem::size_of::<[MaybeUninit<T>; N]>()
     }
 
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn test_memory_size() {
-        let size = Heap::<PacketWrapper<MyPacket>, 32>::memory_size();
+        let size = Heap::<PacketWrapper<MyPacket>, 32>::array_size();
         let pool = Rc::new(Pool::new(4096, vec![size]));
         let heap = Heap::<PacketWrapper<MyPacket>, 32>::new_uninit_in_pool(&pool);
         assert_eq!(heap.capacity(), 32);

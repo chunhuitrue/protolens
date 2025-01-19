@@ -28,6 +28,8 @@ use crate::stream_next::StreamNextParser;
 #[cfg(test)]
 use crate::stream_readline::StreamReadlineParser;
 #[cfg(test)]
+use crate::stream_readline2::StreamReadline2Parser;
+#[cfg(test)]
 use crate::stream_readn::StreamReadnParser;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -104,9 +106,11 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         res.push(task_size);
         let pktstrm_size = std::mem::size_of::<PktStrm<P>>();
         res.push(pktstrm_size);
-        let heap_size = Heap::<P, MAX_CACHE_PKTS>::memory_size();
+        let heap_size = Heap::<P, MAX_PKT_BUFF>::array_size();
         res.push(heap_size);
-        dbg!(task_size, pktstrm_size, heap_size);
+        let strm_size = PktStrm::<P>::buff_size();
+        res.push(strm_size);
+        dbg!(task_size, pktstrm_size, heap_size, strm_size);
 
         let pool = Rc::new(Pool::new(4096, vec![1]));
 
@@ -118,6 +122,8 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         get_parser_sizes::<P, StreamNextParser<P>>(&pool, &mut res);
         #[cfg(test)]
         get_parser_sizes::<P, StreamReadlineParser<P>>(&pool, &mut res);
+        #[cfg(test)]
+        get_parser_sizes::<P, StreamReadline2Parser<P>>(&pool, &mut res);
         #[cfg(test)]
         get_parser_sizes::<P, StreamReadnParser<P>>(&pool, &mut res);
 

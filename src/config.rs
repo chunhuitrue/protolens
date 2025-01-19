@@ -1,4 +1,5 @@
-pub const MAX_CACHE_PKTS: usize = 32;
+pub const MAX_PKT_BUFF: usize = 32;
+pub const MAX_READ_BUFF: usize = 512;
 
 #[derive(Clone, Debug)]
 pub struct Config {

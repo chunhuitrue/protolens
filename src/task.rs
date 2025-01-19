@@ -83,7 +83,7 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
     }
 
     fn c2s_run(&mut self) {
-        if self.c2s_state == TaskState::End {
+        if self.c2s_state == TaskState::End || self.c2s_state == TaskState::Error {
             return;
         }
 
@@ -101,7 +101,7 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
     }
 
     fn s2c_run(&mut self) {
-        if self.s2c_state == TaskState::End {
+        if self.s2c_state == TaskState::End || self.s2c_state == TaskState::Error {
             return;
         }
 
@@ -119,7 +119,7 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
     }
 
     fn bdir_run(&mut self) {
-        if self.bdir_state == TaskState::End {
+        if self.bdir_state == TaskState::End || self.bdir_state == TaskState::Error {
             return;
         }
 

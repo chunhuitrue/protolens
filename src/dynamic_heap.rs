@@ -35,12 +35,12 @@ impl<T: Ord> DynamicHeap<T> {
 
     pub fn memory_size(capacity: usize) -> usize {
         match capacity {
-            0..=32 => Heap32::<T>::memory_size(),
-            33..=64 => Heap64::<T>::memory_size(),
-            65..=128 => Heap128::<T>::memory_size(),
-            129..=256 => Heap256::<T>::memory_size(),
-            257..=512 => Heap512::<T>::memory_size(),
-            _ => Heap1024::<T>::memory_size(),
+            0..=32 => Heap32::<T>::array_size(),
+            33..=64 => Heap64::<T>::array_size(),
+            65..=128 => Heap128::<T>::array_size(),
+            129..=256 => Heap256::<T>::array_size(),
+            257..=512 => Heap512::<T>::array_size(),
+            _ => Heap1024::<T>::array_size(),
         }
     }
 
