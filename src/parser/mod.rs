@@ -1,3 +1,4 @@
+#[cfg(test)]
 use self::smtp::MetaSmtp;
 use crate::pool::Pool;
 use crate::pool::PoolBox;
@@ -11,6 +12,7 @@ use std::rc::Rc;
 pub mod ordpacket;
 #[cfg(test)]
 pub mod rawpacket;
+#[cfg(test)]
 pub mod smtp;
 pub mod smtp2;
 #[cfg(test)]
@@ -31,6 +33,7 @@ pub enum MetaHttp {}
 
 #[derive(Debug)]
 pub enum Meta {
+    #[cfg(test)]
     Smtp(MetaSmtp),
     Http(MetaHttp),
 }

@@ -11,7 +11,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-type CallbackStreamNext = Arc<Mutex<dyn FnMut(u8) + Send + Sync>>;
+pub trait CallbackFn: FnMut(u8) + Send + Sync {}
+impl<F: FnMut(u8) + Send + Sync> CallbackFn for F {}
+type CallbackStreamNext = Arc<Mutex<dyn CallbackFn>>;
 
 pub struct StreamNextParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -30,7 +32,7 @@ impl<T: Packet + Ord + 'static> StreamNextParser<T> {
 
     pub fn set_callback_next_byte<F>(&mut self, callback: F)
     where
-        F: FnMut(u8) + Send + Sync + 'static,
+        F: CallbackFn + 'static,
     {
         self.callback_next_byte = Some(Arc::new(Mutex::new(callback)));
     }

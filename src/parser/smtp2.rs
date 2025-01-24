@@ -1,26 +1,41 @@
 #![allow(unused)]
 
 use crate::pool::Pool;
-use crate::smtp::ContentType;
-use crate::smtp::MetaSmtp;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::{Meta, Packet};
 use futures_channel::mpsc;
+use nom::{
+    bytes::complete::{tag, take_till, take_while},
+    character::complete::digit1,
+    combinator::map_res,
+    error::context,
+    error::ErrorKind,
+    sequence::tuple,
+    IResult, InputIter, InputLength, InputTake, Offset, Slice,
+};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use super::smtp;
+#[derive(Debug)]
+enum ContentType {
+    Unknown,
+    Alt,
+}
 
-type UserCallback = Arc<Mutex<dyn FnMut(&[u8]) + Send + Sync>>;
+pub trait CallbackFn: FnMut(&[u8], u32) + Send + Sync {}
+impl<F: FnMut(&[u8], u32) + Send + Sync> CallbackFn for F {}
+type UserCallback = Arc<Mutex<dyn CallbackFn>>;
+type PassCallback = Arc<Mutex<dyn CallbackFn>>;
 
 pub struct SmtpParser2<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     callback_user: Option<UserCallback>,
+    callback_pass: Option<PassCallback>,
     pool: Option<Rc<Pool>>,
 }
 
@@ -29,15 +44,23 @@ impl<T: Packet + Ord + 'static> SmtpParser2<T> {
         Self {
             _phantom: PhantomData,
             callback_user: None,
+            callback_pass: None,
             pool: None,
         }
     }
 
     pub fn set_callback_user<F>(&mut self, callback: F)
     where
-        F: FnMut(&[u8]) + Send + Sync + 'static,
+        F: CallbackFn + 'static,
     {
         self.callback_user = Some(Arc::new(Mutex::new(callback)));
+    }
+
+    pub fn set_callback_pass<F>(&mut self, callback: F)
+    where
+        F: CallbackFn + 'static,
+    {
+        self.callback_pass = Some(Arc::new(Mutex::new(callback)) as PassCallback);
     }
 
     fn c2s_parser_inner(
@@ -46,6 +69,7 @@ impl<T: Packet + Ord + 'static> SmtpParser2<T> {
         _meta_tx: mpsc::Sender<Meta>,
     ) -> impl Future<Output = Result<(), ()>> {
         let callback_user = self.callback_user.clone();
+        let callback_pass = self.callback_pass.clone();
 
         async move {
             let stm: &mut PktStrm<T>;
@@ -58,38 +82,42 @@ impl<T: Packet + Ord + 'static> SmtpParser2<T> {
             let _ = stm.readline2().await?;
 
             // user
-            let user = stm.read_clean_line().await?;
+            let (user, seq) = stm.read_clean_line().await?;
             if let Some(cb) = callback_user {
-                cb.lock().unwrap()(user);
+                cb.lock().unwrap()(user, seq);
             }
+            dbg!(user, seq);
 
             // pass
-            let pass = stm.read_clean_line().await?;
-            dbg!(std::str::from_utf8(pass).expect("no"));
+            let (pass, seq) = stm.read_clean_line().await?;
+            if let Some(cb) = callback_pass.clone() {
+                cb.lock().unwrap()(pass, seq);
+            }
+            dbg!(std::str::from_utf8(pass).expect("应该是utf8"), seq);
 
             // mail from
-            let from = stm.read_clean_line_str().await?;
-            dbg!(from);
-            if let Ok((_, (email, size))) = smtp::mail_from(from) {
-                dbg!("from", email);
+            let (from, seq) = stm.read_clean_line_str().await?;
+            if let Ok((_, ((mail, offset), size))) = mail_from(from) {
+                let mail_seq = seq + offset as u32;
+                dbg!("from", mail, size, mail_seq);
             } else {
                 dbg!("from return err");
                 return Err(());
             }
 
-            dbg!("rcpt");
             // rcpt to
-            let rcpt = stm.read_clean_line_str().await?;
-            if let Ok((_, mail)) = smtp::rcpt_to(rcpt) {
-                dbg!("rcpt", mail);
+            let (rcpt, seq) = stm.read_clean_line_str().await?;
+            if let Ok((_, (mail, offset))) = rcpt_to(rcpt) {
+                let mail_seq = seq + offset as u32;
+                dbg!("rcpt", mail, mail_seq);
             } else {
                 dbg!("rcpt return err");
                 return Err(());
             }
 
             // DATA
-            let data = stm.readline2().await?;
-            dbg!(std::str::from_utf8(data).expect("no"));
+            let (data, seq) = stm.readline2().await?;
+            dbg!(std::str::from_utf8(data).expect("no"), seq);
 
             // mail head
             let (content_type, bdry) = mail_head(stm).await?;
@@ -141,6 +169,35 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser2<T> {
     }
 }
 
+// MAIL FROM: <user12345@example123.com> SIZE=10557
+fn mail_from(input: &str) -> IResult<&str, ((&str, usize), usize)> {
+    let original_input = input;
+    let (input, _) = tag("MAIL FROM: <")(input)?;
+
+    let start_pos = original_input.offset(input);
+    let (input, mail) = take_while(|c| c != '>')(input)?;
+
+    let (input, _) = tag("> SIZE=")(input)?;
+    let (input, size) = context(
+        "invalid SIZE value",
+        map_res(digit1, |s: &str| s.parse::<usize>()),
+    )(input)?;
+
+    Ok((input, ((mail, start_pos), size)))
+}
+
+// RCPT TO: <user12345@example123.com>
+fn rcpt_to(input: &str) -> IResult<&str, (&str, usize)> {
+    let original_input = input;
+    let (input, _) = tag("RCPT TO: <")(input)?;
+
+    let start_pos = original_input.offset(input);
+    let (input, mail) = take_while(|c| c != '>')(input)?;
+    let (input, _) = tag(">")(input)?;
+
+    Ok((input, (mail, start_pos)))
+}
+
 async fn mail_head<T: Packet + Ord + 'static>(
     stm: &mut PktStrm<T>,
 ) -> Result<(ContentType, String), ()> {
@@ -149,27 +206,23 @@ async fn mail_head<T: Packet + Ord + 'static>(
     let mut boundary = String::new();
 
     loop {
-        let line = match stm.readline2().await {
-            Ok(line) => line,
-            Err(_) => break,
-        };
+        let (line, seq) = stm.read_clean_line_str().await?;
+
         // 头结束
-        if line == b"\r\n" {
+        if line == "\r\n" {
             break;
         }
 
-        let line = std::str::from_utf8(line).map_err(|_| ())?;
-
         // subject
-        match smtp::subject(line) {
+        match subject(line) {
             Ok((_, subject)) => {
-                // todo
+                dbg!(subject);
             }
             Err(_err) => {}
         }
 
         // content type
-        match smtp::content_type(line) {
+        match content_type(line) {
             Ok((_, contenttype)) => {
                 cont_type_ok = true;
                 cont_type = contenttype;
@@ -178,7 +231,7 @@ async fn mail_head<T: Packet + Ord + 'static>(
         }
 
         // content type ext
-        match smtp::content_type_ext(line, cont_type_ok) {
+        match content_type_ext(line, cont_type_ok) {
             Ok((_, bdry)) => {
                 boundary = bdry.to_string();
             }
@@ -186,6 +239,38 @@ async fn mail_head<T: Packet + Ord + 'static>(
         }
     }
     Ok((cont_type, boundary))
+}
+
+// Subject: biaoti
+fn subject(input: &str) -> IResult<&str, (&str, usize)> {
+    let original_input = input;
+    let (input, _) = tag("Subject: ")(input)?;
+
+    let start_pos = original_input.offset(input);
+    let (input, subject) = take_till(|c| c == '\r')(input)?;
+
+    Ok((input, (subject, start_pos)))
+}
+
+// Content-Type: multipart/alternative;
+fn content_type(input: &str) -> IResult<&str, ContentType> {
+    let (input, _) = tag("Content-Type: ")(input)?;
+    if input.contains("multipart/alternative;") {
+        Ok((input, (ContentType::Alt)))
+    } else {
+        Ok((input, (ContentType::Unknown)))
+    }
+}
+
+// \tboundary="----=_001_NextPart572182624333_=----"
+fn content_type_ext(input: &str, cont_rady: bool) -> IResult<&str, &str> {
+    if !cont_rady {
+        return Ok((input, ""));
+    }
+
+    let (input, _) = tag("\tboundary=\"")(input)?;
+    let (input, bdry) = take_till(|c| c == '"')(input)?;
+    Ok((input, bdry))
 }
 
 #[cfg(test)]
@@ -241,16 +326,38 @@ mod tests {
         let dir = PktDirection::Client2Server;
 
         let captured_user = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let captured_user_clone = captured_user.clone();
-        let callback = move |user: &[u8]| {
-            let mut guard = captured_user_clone.lock().unwrap();
-            *guard = user.to_vec();
-            dbg!("in callback user", std::str::from_utf8(user).unwrap());
+        let captured_user_seq = Arc::new(Mutex::new(0u32));
+        let captured_pass = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let captured_pass_seq = Arc::new(Mutex::new(0u32));
+
+        let user_callback = {
+            let user_clone = captured_user.clone();
+            let seq_clone = captured_user_seq.clone();
+            move |user: &[u8], seq: u32| {
+                let mut user_guard = user_clone.lock().unwrap();
+                let mut seq_guard = seq_clone.lock().unwrap();
+                *user_guard = user.to_vec();
+                *seq_guard = seq;
+                dbg!("in callback", std::str::from_utf8(user).unwrap(), seq);
+            }
+        };
+
+        let pass_callback = {
+            let pass_clone = captured_pass.clone();
+            let seq_clone = captured_pass_seq.clone();
+            move |pass: &[u8], seq: u32| {
+                let mut pass_guard = pass_clone.lock().unwrap();
+                let mut seq_guard = seq_clone.lock().unwrap();
+                *pass_guard = pass.to_vec();
+                *seq_guard = seq;
+                dbg!("pass callback", std::str::from_utf8(pass).unwrap(), seq);
+            }
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<SmtpParser2<CapPacket>>();
-        parser.set_callback_user(callback);
+        parser.set_callback_user(user_callback);
+        parser.set_callback_pass(pass_callback);
         let mut task = protolens.new_task_with_parser(parser);
         let mut push_count = 0;
 
@@ -277,7 +384,64 @@ mod tests {
 
         assert_eq!(
             captured_user.lock().unwrap().as_slice(),
-            b"dXNlcjEyMzQ1QGV4YW1wbGUxMjMuY29t"
+            b"dXNlcjEyMzQ1QGV4YW1wbGUxMjMuY29t",
+            "User should match expected value"
         );
+        assert_eq!(
+            *captured_user_seq.lock().unwrap(),
+            1341098188,
+            "Sequence number should match packet sequence"
+        );
+
+        assert_eq!(
+            captured_pass.lock().unwrap().as_slice(),
+            b"MTIzNDU2Nzg=",
+            "Password should match expected value"
+        );
+        assert_eq!(
+            *captured_pass_seq.lock().unwrap(),
+            1341098222,
+            "Password sequence number should match packet sequence"
+        );
+    }
+
+    #[test]
+    fn test_mail_from() {
+        let input = "MAIL FROM: <user12345@example123.com> SIZE=10557";
+        let result = mail_from(input);
+
+        assert!(result.is_ok());
+        let (_, ((mail, start), size)) = result.unwrap();
+
+        assert_eq!(mail, "user12345@example123.com");
+        assert_eq!(size, 10557);
+        assert_eq!(start, 12);
+        println!("mail: '{}' (offset: {})", mail, start);
+    }
+
+    #[test]
+    fn test_rcpt_to() {
+        let input = "RCPT TO: <user12345@example123.com>";
+        let result = rcpt_to(input);
+
+        assert!(result.is_ok());
+        let (_, (mail, start)) = result.unwrap();
+
+        assert_eq!(mail, "user12345@example123.com");
+        assert_eq!(start, 10); // "RCPT TO: <" 的长度
+        println!("邮件地址: '{}' (起始位置: {})", mail, start);
+    }
+
+    #[test]
+    fn test_subject() {
+        let input = "Subject: Test email subject\r\n";
+        let result = subject(input);
+
+        assert!(result.is_ok());
+        let (_, (subject, start)) = result.unwrap();
+
+        assert_eq!(subject, "Test email subject");
+        assert_eq!(start, 9); // "Subject: " 的长度
+        println!("主题: '{}' (起始位置: {})", subject, start);
     }
 }

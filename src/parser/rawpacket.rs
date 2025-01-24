@@ -11,7 +11,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-type CallbackRawPkt<T> = Arc<Mutex<dyn FnMut(T) + Send + Sync>>;
+pub trait CallbackFn<T>: FnMut(T) + Send + Sync {}
+impl<F, T> CallbackFn<T> for F where F: FnMut(T) + Send + Sync {}
+type CallbackRawPkt<T> = Arc<Mutex<dyn CallbackFn<T>>>;
 
 pub struct RawPacketParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -30,7 +32,7 @@ impl<T: Packet + Ord + 'static> RawPacketParser<T> {
 
     pub fn set_callback_raw_pkt<F>(&mut self, callback: F)
     where
-        F: FnMut(T) + Send + Sync + 'static,
+        F: CallbackFn<T> + 'static,
     {
         self.callback_raw_pkt = Some(Arc::new(Mutex::new(callback)));
     }

@@ -10,12 +10,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-type CallbackStreamReadn = Arc<Mutex<dyn FnMut(&[u8]) + Send + Sync>>;
+pub trait CallbackFn: FnMut(&[u8]) + Send + Sync {}
+impl<F: FnMut(&[u8]) + Send + Sync> CallbackFn for F {}
+type CallbackStreamReadn2 = Arc<Mutex<dyn CallbackFn>>;
 
 pub struct StreamReadn2Parser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     pool: Option<Rc<Pool>>,
-    callback_readn: Option<CallbackStreamReadn>,
+    callback_readn: Option<CallbackStreamReadn2>,
     read_size: usize,
 }
 
@@ -31,7 +33,7 @@ impl<T: Packet + Ord + 'static> StreamReadn2Parser<T> {
 
     pub fn set_callback_readn<F>(&mut self, callback: F)
     where
-        F: FnMut(&[u8]) + Send + Sync + 'static,
+        F: CallbackFn + 'static,
     {
         self.callback_readn = Some(Arc::new(Mutex::new(callback)));
     }

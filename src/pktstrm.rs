@@ -260,7 +260,7 @@ where
         }
     }
 
-    pub(crate) async fn readline2(&mut self) -> Result<&[u8], ()> {
+    pub(crate) async fn readline2(&mut self) -> Result<(&[u8], u32), ()> {
         while self.read_buff_len < MAX_READ_BUFF {
             match poll_fn(|cx| Stream::poll_next(Pin::new(self), cx)).await {
                 Some(byte) => {
@@ -268,7 +268,10 @@ where
                     self.read_buff_len += 1;
 
                     if byte == b'\n' {
-                        let result = Ok(&self.read_buff[..self.read_buff_len]);
+                        let result = Ok((
+                            &self.read_buff[..self.read_buff_len],
+                            self.next_seq - self.read_buff_len as u32,
+                        ));
                         self.read_buff_len = 0; // 只有在找到完整的行后才重置
                         return result;
                     }
@@ -277,7 +280,10 @@ where
                     if self.read_buff_len == 0 {
                         return Err(());
                     } else {
-                        let result = Ok(&self.read_buff[..self.read_buff_len]);
+                        let result = Ok((
+                            &self.read_buff[..self.read_buff_len],
+                            self.next_seq - self.read_buff_len as u32,
+                        ));
                         self.read_buff_len = 0; // 流结束时也重置
                         return result;
                     }
@@ -286,13 +292,16 @@ where
         }
 
         // Buffer is full but no newline found
-        let result = Ok(&self.read_buff[..self.read_buff_len]);
+        let result = Ok((
+            &self.read_buff[..self.read_buff_len],
+            self.next_seq - self.read_buff_len as u32,
+        ));
         self.read_buff_len = 0; // 缓冲区满时也重置
         result
     }
 
-    pub(crate) async fn read_clean_line(&mut self) -> Result<&[u8], ()> {
-        let line = self.readline2().await?;
+    pub(crate) async fn read_clean_line(&mut self) -> Result<(&[u8], u32), ()> {
+        let (line, seq) = self.readline2().await?;
         let mut len = line.len();
 
         // 重置长度到正确的位置（去掉行尾字符）
@@ -302,15 +311,14 @@ where
             len -= 1;
         }
 
-        let result = Ok(&self.read_buff[..len]);
+        let result = Ok((&self.read_buff[..len], seq));
         self.read_buff_len = 0;
         result
     }
 
-    pub(crate) async fn read_clean_line_str(&mut self) -> Result<&str, ()> {
-        let line = self.read_clean_line().await?;
-        std::str::from_utf8(line).map_err(|_| ())
-        // unsafe { Ok(std::str::from_utf8_unchecked(line)) }
+    pub(crate) async fn read_clean_line_str(&mut self) -> Result<(&str, u32), ()> {
+        let (line, seq) = self.read_clean_line().await?;
+        std::str::from_utf8(line).map(|s| (s, seq)).map_err(|_| ())
     }
 
     // 异步方式获取下一个严格有序的包。包含载荷为0的

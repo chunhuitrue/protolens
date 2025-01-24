@@ -10,7 +10,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-type CallbackStreamReadline2 = Arc<Mutex<dyn FnMut(&[u8]) + Send + Sync>>;
+pub trait CallbackFn: FnMut(&[u8], u32) + Send + Sync {}
+impl<F: FnMut(&[u8], u32) + Send + Sync> CallbackFn for F {}
+type CallbackStreamReadline2 = Arc<Mutex<dyn CallbackFn>>;
 
 pub struct StreamReadline2Parser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -29,7 +31,7 @@ impl<T: Packet + Ord + 'static> StreamReadline2Parser<T> {
 
     pub fn set_callback_readline<F>(&mut self, callback: F)
     where
-        F: FnMut(&[u8]) + Send + Sync + 'static,
+        F: CallbackFn + 'static,
     {
         self.callback_readline = Some(Arc::new(Mutex::new(callback)));
     }
@@ -48,12 +50,12 @@ impl<T: Packet + Ord + 'static> StreamReadline2Parser<T> {
             }
 
             while !stm.fin() {
-                let line = stm.readline2().await?;
+                let (line, seq) = stm.readline2().await?;
                 if line.is_empty() {
                     break;
                 }
                 if let Some(ref callback) = callback {
-                    callback.lock().unwrap()(line);
+                    callback.lock().unwrap()(line, seq);
                 }
             }
             Ok(())
@@ -118,10 +120,14 @@ mod tests {
 
         let dir = PktDirection::Client2Server;
         let lines = Arc::new(Mutex::new(Vec::new()));
+        let seqs = Arc::new(Mutex::new(Vec::new()));
 
         let lines_clone = Arc::clone(&lines);
-        let callback = move |line: &[u8]| {
+        let seqs_clone = Arc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32| {
             lines_clone.lock().unwrap().push(line.to_vec());
+            seqs_clone.lock().unwrap().push(seq);
+            dbg!(seq);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -132,8 +138,11 @@ mod tests {
         protolens.run_task(&mut task, pkt1, dir.clone());
 
         // 验证收到的行是否正确
-        let expected = vec![b"Hello\n".to_vec()];
-        assert_eq!(*lines.lock().unwrap(), expected);
+        let line_expected = vec![b"Hello\n".to_vec()];
+        let seq_expected = vec![1];
+        dbg!(&seq_expected);
+        assert_eq!(*lines.lock().unwrap(), line_expected);
+        assert_eq!(*seqs.lock().unwrap(), seq_expected);
     }
 
     #[test]
@@ -153,10 +162,13 @@ mod tests {
 
         let dir = PktDirection::Client2Server;
         let lines = Arc::new(Mutex::new(Vec::new()));
+        let seqs = Arc::new(Mutex::new(Vec::new()));
 
         let lines_clone = Arc::clone(&lines);
-        let callback = move |line: &[u8]| {
+        let seqs_clone = Arc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32| {
             lines_clone.lock().unwrap().push(line.to_vec());
+            seqs_clone.lock().unwrap().push(seq);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -168,12 +180,14 @@ mod tests {
         protolens.run_task(&mut task, pkt2, dir.clone());
 
         // 验证收到的行是否正确
-        let expected = vec![
+        let line_expected = vec![
             b"Hello\n".to_vec(),
             b"Wor ld!\n".to_vec(),
             b"Bye\n".to_vec(),
         ];
-        assert_eq!(*lines.lock().unwrap(), expected);
+        let seq_expected = vec![1, 7, 15];
+        assert_eq!(*lines.lock().unwrap(), line_expected);
+        assert_eq!(*seqs.lock().unwrap(), seq_expected);
     }
 
     #[test]
@@ -197,10 +211,13 @@ mod tests {
 
         let dir = PktDirection::Client2Server;
         let lines = Arc::new(Mutex::new(Vec::new()));
+        let seqs = Arc::new(Mutex::new(Vec::new()));
 
         let lines_clone = Arc::clone(&lines);
-        let callback = move |line: &[u8]| {
+        let seqs_clone = Arc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32| {
             lines_clone.lock().unwrap().push(line.to_vec());
+            seqs_clone.lock().unwrap().push(seq);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -214,12 +231,10 @@ mod tests {
         protolens.run_task(&mut task, pkt1, dir.clone());
 
         // 验证收到的行是否正确
-        let expected = vec![
-            b"Hello\n".to_vec(),
-            b"World!\n".to_vec(),
-            b"Bye\n".to_vec(),
-        ];
-        assert_eq!(*lines.lock().unwrap(), expected);
+        let line_expected = vec![b"Hello\n".to_vec(), b"World!\n".to_vec(), b"Bye\n".to_vec()];
+        let seq_expected = vec![2, 8, 15];
+        assert_eq!(*lines.lock().unwrap(), line_expected);
+        assert_eq!(*seqs.lock().unwrap(), seq_expected);
     }
 
     #[test]

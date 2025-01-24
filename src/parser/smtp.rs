@@ -44,7 +44,9 @@ impl fmt::Debug for MetaSmtp {
     }
 }
 
-type UserCallback = Arc<Mutex<dyn FnMut(String) + Send + Sync>>;
+pub trait CallbackFn: FnMut(String) + Send + Sync {}
+impl<F: FnMut(String) + Send + Sync> CallbackFn for F {}
+type UserCallback = Arc<Mutex<dyn CallbackFn>>;
 
 pub struct SmtpParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -63,7 +65,7 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
 
     pub fn set_callback_user<F>(&mut self, callback: F)
     where
-        F: FnMut(String) + Send + Sync + 'static,
+        F: CallbackFn + 'static,
     {
         self.callback_user = Some(Arc::new(Mutex::new(callback)));
     }
@@ -169,13 +171,13 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
 }
 
 #[derive(Debug)]
-pub(crate) enum ContentType {
+enum ContentType {
     Unknown,
     Alt,
 }
 
 // MAIL FROM: <user12345@example123.com> SIZE=10557
-pub(crate) fn mail_from(input: &str) -> IResult<&str, (&str, usize)> {
+fn mail_from(input: &str) -> IResult<&str, (&str, usize)> {
     let (input, _) = tag("MAIL FROM: <")(input)?;
     let (input, mail) = take_while(|c| c != '>')(input)?;
     let (input, _) = tag("> SIZE=")(input)?;
@@ -184,7 +186,7 @@ pub(crate) fn mail_from(input: &str) -> IResult<&str, (&str, usize)> {
 }
 
 // RCPT TO: <user12345@example123.com>
-pub(crate) fn rcpt_to(input: &str) -> IResult<&str, &str> {
+fn rcpt_to(input: &str) -> IResult<&str, &str> {
     let (input, _) = tag("RCPT TO: <")(input)?;
     let (input, mail) = take_while(|c| c != '>')(input)?;
     Ok((input, (mail)))
@@ -237,14 +239,14 @@ async fn mail_head<T: Packet + Ord + 'static>(
 }
 
 // Subject: biaoti
-pub(crate) fn subject(input: &str) -> IResult<&str, &str> {
+fn subject(input: &str) -> IResult<&str, &str> {
     let (input, _) = tag("Subject: ")(input)?;
     let (input, subject) = take_till(|c| c == '\r')(input)?;
     Ok((input, (subject)))
 }
 
 // Content-Type: multipart/alternative;
-pub(crate) fn content_type(input: &str) -> IResult<&str, ContentType> {
+fn content_type(input: &str) -> IResult<&str, ContentType> {
     let (input, _) = tag("Content-Type: ")(input)?;
     if input.contains("multipart/alternative;") {
         Ok((input, (ContentType::Alt)))
@@ -254,7 +256,7 @@ pub(crate) fn content_type(input: &str) -> IResult<&str, ContentType> {
 }
 
 // \tboundary="----=_001_NextPart572182624333_=----"
-pub(crate) fn content_type_ext(input: &str, cont_rady: bool) -> IResult<&str, &str> {
+fn content_type_ext(input: &str, cont_rady: bool) -> IResult<&str, &str> {
     if !cont_rady {
         return Ok((input, ""));
     }
