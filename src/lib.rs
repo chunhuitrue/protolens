@@ -89,6 +89,17 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         })
     }
 
+    // 为已存在的 task 设置 parser
+    // 这个方法用于在运行了一些数据包并确定了合适的 parser 类型后调用
+    pub fn task_set_parser<T: Parser<PacketType = P>>(
+        &self,
+        task: &mut Task<P>,
+        parser: PoolBox<T>,
+    ) {
+        task.init_parser(parser);
+    }
+
+    // 如果第一个包就已经识别成功。可以确定用哪个parser。使用这个api
     pub fn new_task_with_parser<T: Parser<PacketType = P>>(
         &self,
         parser: PoolBox<T>,
@@ -344,5 +355,25 @@ mod tests {
             cappacket_size > mypacket_size,
             "CapPacket should be larger than MyPacket"
         );
+    }
+
+    #[test]
+    fn test_task_set_parser() {
+        let mut protolens = Prolens::<MyPacket>::default();
+        let mut task = protolens.new_task();
+
+        // 先运行一些数据包
+        let pkt1 = MyPacket::new(1, false);
+        let pkt2 = MyPacket::new(2, false);
+        protolens.run_task(&mut task, pkt1, PktDirection::Client2Server);
+        protolens.run_task(&mut task, pkt2, PktDirection::Client2Server);
+
+        // pkt2之后识别成功，设置 parser
+        let parser = protolens.new_parser::<SmtpParser<MyPacket>>();
+        protolens.task_set_parser(&mut task, parser);
+
+        // 继续处理数据包
+        let pkt3 = MyPacket::new(3, false);
+        protolens.run_task(&mut task, pkt3, PktDirection::Client2Server);
     }
 }

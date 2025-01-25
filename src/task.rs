@@ -95,8 +95,6 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
                 Poll::Ready(Err(())) => self.c2s_state = TaskState::Error,
                 Poll::Pending => {}
             }
-        } else {
-            self.c2s_state = TaskState::End
         }
     }
 
@@ -113,8 +111,6 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
                 Poll::Ready(Err(())) => self.s2c_state = TaskState::Error,
                 Poll::Pending => {}
             }
-        } else {
-            self.s2c_state = TaskState::End
         }
     }
 
@@ -131,8 +127,6 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
                 Poll::Ready(Err(())) => self.bdir_state = TaskState::Error,
                 Poll::Pending => {}
             }
-        } else {
-            self.bdir_state = TaskState::End
         }
     }
 
