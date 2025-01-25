@@ -10,8 +10,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub trait CallbackFn: FnMut(&[u8], usize) + Send + Sync {}
-impl<F: FnMut(&[u8], usize) + Send + Sync> CallbackFn for F {}
+pub trait CallbackFn: FnMut(&[u8], usize, u32) + Send + Sync {}
+impl<F: FnMut(&[u8], usize, u32) + Send + Sync> CallbackFn for F {}
 
 type CallbackStreamRead = Arc<Mutex<dyn CallbackFn>>;
 
@@ -55,10 +55,10 @@ impl<T: Packet + Ord + 'static> StreamReadParser<T> {
 
             while !stm.fin() {
                 match stm.read(&mut read_buff).await {
-                    Ok(read_len) => {
+                    Ok((read_len, seq)) => {
                         if read_len > 0 {
                             if let Some(ref callback) = callback {
-                                callback.lock().unwrap()(&read_buff[..read_len], read_len);
+                                callback.lock().unwrap()(&read_buff[..read_len], read_len, seq);
                             }
                         }
                         if read_len == 0 {
@@ -128,10 +128,13 @@ mod tests {
 
         let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
+        let seq_value = Arc::new(Mutex::new(0u32));
 
         let vec_clone = Arc::clone(&vec);
-        let callback = move |bytes: &[u8], len: usize| {
+        let seq_clone = Arc::clone(&seq_value);
+        let callback = move |bytes: &[u8], len: usize, seq: u32| {
             vec_clone.lock().unwrap().extend_from_slice(&bytes[..len]);
+            *seq_clone.lock().unwrap() = seq;
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -143,6 +146,7 @@ mod tests {
 
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*seq_value.lock().unwrap(), seq1);
     }
 
     #[test]
@@ -156,10 +160,13 @@ mod tests {
 
         let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
+        let seq_values = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
-        let callback = move |bytes: &[u8], len: usize| {
+        let seq_clone = Arc::clone(&seq_values);
+        let callback = move |bytes: &[u8], len: usize, seq: u32| {
             vec_clone.lock().unwrap().extend_from_slice(&bytes[..len]);
+            seq_clone.lock().unwrap().push(seq);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -171,6 +178,8 @@ mod tests {
         protolens.run_task(&mut task, pkt2, dir.clone());
 
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let expected_seqs = vec![seq1, seq2];
         assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*seq_values.lock().unwrap(), expected_seqs);
     }
 }

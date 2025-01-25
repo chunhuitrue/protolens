@@ -197,13 +197,13 @@ where
         self.fin
     }
 
-    // 严格读到num个字节。用vec
+    // 废弃。严格读到num个字节。用vec。
     pub(crate) async fn readn(&mut self, num: usize) -> Vec<u8> {
         self.take(num).collect::<Vec<u8>>().await
     }
 
-    // 严格读到num个字节,用内部buff，不需要vec
-    pub(crate) async fn readn2(&mut self, num: usize) -> Result<&[u8], ()> {
+    // 严格读到num个字节,用内部buff，不需要vec。一次最多不会超过内部buf大小
+    pub(crate) async fn readn2(&mut self, num: usize) -> Result<(&[u8], u32), ()> {
         if num > MAX_READ_BUFF {
             return Err(());
         }
@@ -221,15 +221,18 @@ where
             }
         }
 
-        let result = Ok(&self.read_buff[..num]);
-        self.read_buff_len = 0; // 只在返回时重置
+        let result = Ok((
+            &self.read_buff[..num],
+            self.next_seq - self.read_buff_len as u32,
+        ));
+        self.read_buff_len = 0;
         result
     }
 
     // 读多少算多少，写入调用着提供的buff
-    pub(crate) async fn read(&mut self, buff: &mut [u8]) -> Result<usize, ()> {
+    pub(crate) async fn read(&mut self, buff: &mut [u8]) -> Result<(usize, u32), ()> {
         if buff.is_empty() {
-            return Ok(0);
+            return Ok((0, 0));
         }
 
         let mut read_len = 0;
@@ -240,13 +243,14 @@ where
                     read_len += 1;
                 }
                 None => {
-                    return Ok(read_len);
+                    return Ok((read_len, self.next_seq - read_len as u32));
                 }
             }
         }
-        Ok(read_len)
+        Ok((read_len, self.next_seq - read_len as u32))
     }
 
+    // 废弃
     pub(crate) async fn readline(&mut self) -> Result<String, ()> {
         let mut res = self
             .take_while(|x| future::ready(*x != b'\n'))
