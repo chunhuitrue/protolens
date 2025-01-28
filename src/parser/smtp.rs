@@ -2,11 +2,10 @@
 
 use crate::pktstrm::*;
 use crate::pool::Pool;
+use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
-use crate::{Meta, Packet};
-use futures_channel::mpsc;
 use futures_util::SinkExt;
 use nom::{
     bytes::complete::{tag, take_till, take_while},
@@ -71,11 +70,7 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
         self.callback_user = Some(Arc::new(Mutex::new(callback)));
     }
 
-    fn c2s_parser_inner(
-        &self,
-        stream: *const PktStrm<T>,
-        mut meta_tx: mpsc::Sender<Meta>,
-    ) -> impl Future<Output = Result<(), ()>> {
+    fn c2s_parser_inner(&self, stream: *const PktStrm<T>) -> impl Future<Output = Result<(), ()>> {
         let callback_user = self.callback_user.clone();
 
         async move {
@@ -93,19 +88,13 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
             if let Some(cb) = callback_user {
                 cb.lock().unwrap()(user.clone());
             }
-            let meta = Meta::Smtp(MetaSmtp::User(user));
-            let _ = meta_tx.send(meta).await;
 
             // pass
             let pass = stm.readline().await?.trim_end_matches("\r\n").to_string();
-            let meta = Meta::Smtp(MetaSmtp::Pass(pass));
-            let _ = meta_tx.send(meta).await;
 
             // mail from
             let line = stm.readline().await?.trim_end_matches("\r\n").to_string();
             if let Ok((_, (email, size))) = mail_from(&line) {
-                let meta = Meta::Smtp(MetaSmtp::MailFrom(email.to_string(), size));
-                let _ = meta_tx.send(meta).await;
             } else {
                 return Err(());
             }
@@ -113,8 +102,6 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
             // rcpt to
             let line = stm.readline().await?.trim_end_matches("\r\n").to_string();
             if let Ok((_, mail)) = rcpt_to(&line) {
-                let meta = Meta::Smtp(MetaSmtp::RcptTo(mail.to_string()));
-                let _ = meta_tx.send(meta).await;
             } else {
                 return Err(());
             }
@@ -123,7 +110,7 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
             stm.readline().await?;
 
             // mail head
-            let (_content_type, _bdry) = mail_head(stm, &mut meta_tx).await;
+            let (_content_type, _bdry) = mail_head(stm).await;
 
             Ok(())
         }
@@ -152,22 +139,14 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
     }
 
     fn c2s_parser_size(&self) -> usize {
-        let (tx, _rx) = mpsc::channel(1);
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr, tx);
+        let future = self.c2s_parser_inner(stream_ptr);
         std::mem::size_of_val(&future)
     }
 
-    fn c2s_parser(
-        &self,
-        stream: *const PktStrm<T>,
-        meta_tx: mpsc::Sender<Meta>,
-    ) -> Option<ParserFuture> {
-        Some(
-            self.pool()
-                .alloc_future(self.c2s_parser_inner(stream, meta_tx)),
-        )
+    fn c2s_parser(&self, stream: *const PktStrm<T>) -> Option<ParserFuture> {
+        Some(self.pool().alloc_future(self.c2s_parser_inner(stream)))
     }
 }
 
@@ -193,10 +172,7 @@ fn rcpt_to(input: &str) -> IResult<&str, &str> {
     Ok((input, (mail)))
 }
 
-async fn mail_head<T: Packet + Ord + 'static>(
-    stm: &mut PktStrm<T>,
-    meta_tx: &mut mpsc::Sender<Meta>,
-) -> (ContentType, String) {
+async fn mail_head<T: Packet + Ord + 'static>(stm: &mut PktStrm<T>) -> (ContentType, String) {
     let mut cont_type_ok = false;
     let mut cont_type = ContentType::Unknown;
     let mut boundary = String::new();
@@ -212,10 +188,7 @@ async fn mail_head<T: Packet + Ord + 'static>(
 
         // subject
         match subject(&line) {
-            Ok((_, subject)) => {
-                let meta = Meta::Smtp(MetaSmtp::Subject(subject.to_string()));
-                let _ = meta_tx.send(meta).await;
-            }
+            Ok((_, subject)) => {}
             Err(_err) => {}
         }
 
@@ -315,7 +288,6 @@ mod tests {
                 push_count += 1;
                 dbg!(push_count, pkt.seq());
                 protolens.run_task(&mut task, pkt);
-                meta_recver(&mut task);
             }
         }
 
@@ -323,33 +295,6 @@ mod tests {
             *captured_user.lock().unwrap(),
             "dXNlcjEyMzQ1QGV4YW1wbGUxMjMuY29t"
         );
-    }
-
-    fn meta_recver<T: Packet + Ord + std::fmt::Debug + 'static>(task: &mut Task<T>) {
-        while let Some(meta) = task.get_meta() {
-            match meta {
-                Meta::Smtp(smtp) => meta_smtp_recver(smtp),
-                Meta::Http(_) => {}
-            }
-        }
-    }
-
-    fn meta_smtp_recver(smtp: MetaSmtp) {
-        println!("recv meta_smtp: {:?}", smtp);
-        match smtp {
-            MetaSmtp::User(user) => assert_eq!("dXNlcjEyMzQ1QGV4YW1wbGUxMjMuY29t", user),
-            MetaSmtp::Pass(pass) => assert_eq!("MTIzNDU2Nzg=", pass),
-            MetaSmtp::MailFrom(mail, mail_size) => {
-                assert_eq!("user12345@example123.com", mail);
-                assert_eq!(10557, mail_size);
-            }
-            MetaSmtp::RcptTo(mail) => {
-                assert_eq!("user12345@example123.com", mail);
-            }
-            MetaSmtp::Subject(subject) => {
-                assert_eq!("biaoti", subject);
-            }
-        }
     }
 
     #[test]
@@ -361,10 +306,6 @@ mod tests {
         println!(
             "Size of stream pointer: {} bytes",
             std::mem::size_of::<*const PktStrm<CapPacket>>()
-        );
-        println!(
-            "Size of mpsc::Sender: {} bytes",
-            std::mem::size_of::<mpsc::Sender<Meta>>()
         );
         println!(
             "Size of callback: {} bytes",
@@ -379,7 +320,6 @@ mod tests {
         println!("bdir size: {} bytes", bdir_size);
 
         let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
-            + std::mem::size_of::<mpsc::Sender<Meta>>()
             + std::mem::size_of::<Option<UserCallback>>();
 
         assert!(

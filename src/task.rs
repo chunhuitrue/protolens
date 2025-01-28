@@ -1,6 +1,5 @@
 #![allow(unused)]
 
-use crate::Meta;
 use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
@@ -14,7 +13,6 @@ use core::{
     pin::Pin,
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
-use futures_channel::mpsc;
 use std::fmt;
 use std::rc::Rc;
 
@@ -29,7 +27,6 @@ pub struct Task<T: Packet + Ord + std::fmt::Debug + 'static> {
     c2s_state: TaskState,
     s2c_state: TaskState,
     bdir_state: TaskState,
-    meta_rx: Option<mpsc::Receiver<Meta>>,
 }
 
 impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
@@ -46,7 +43,6 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
             c2s_state: TaskState::Start,
             s2c_state: TaskState::Start,
             bdir_state: TaskState::Start,
-            meta_rx: None,
         }
     }
 
@@ -60,15 +56,13 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
     pub(crate) fn init_parser<P: Parser<PacketType = T>>(&mut self, parser: PoolBox<P>) {
         let p_stream_c2s: *const PktStrm<T> = &*self.stream_c2s;
         let p_stream_s2c: *const PktStrm<T> = &*self.stream_s2c;
-        let (tx, rx) = mpsc::channel(MAX_CHANNEL_SIZE);
-        let c2s_parser = parser.c2s_parser(p_stream_c2s, tx.clone());
-        let s2c_parser = parser.s2c_parser(p_stream_s2c, tx.clone());
-        let bdir_parser = parser.bdir_parser(p_stream_c2s, p_stream_s2c, tx.clone());
+        let c2s_parser = parser.c2s_parser(p_stream_c2s);
+        let s2c_parser = parser.s2c_parser(p_stream_s2c);
+        let bdir_parser = parser.bdir_parser(p_stream_c2s, p_stream_s2c);
 
         self.c2s_parser = c2s_parser;
         self.s2c_parser = s2c_parser;
         self.bdir_parser = bdir_parser;
-        self.meta_rx = Some(rx);
     }
 
     pub(crate) fn set_c2s_callback<F>(&mut self, callback: F)
@@ -153,16 +147,6 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
                 Poll::Ready(Err(())) => self.bdir_state = TaskState::Error,
                 Poll::Pending => {}
             }
-        }
-    }
-
-    pub fn get_meta(&mut self) -> Option<Meta> {
-        self.meta_rx.as_ref()?;
-
-        if let Some(rx) = self.meta_rx.as_mut() {
-            rx.try_next().unwrap_or_default()
-        } else {
-            None
         }
     }
 

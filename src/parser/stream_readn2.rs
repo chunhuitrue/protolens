@@ -1,9 +1,8 @@
 use crate::pool::Pool;
+use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
-use crate::{Meta, Packet};
-use futures_channel::mpsc;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -38,11 +37,7 @@ impl<T: Packet + Ord + 'static> StreamReadn2Parser<T> {
         self.callback_readn = Some(Arc::new(Mutex::new(callback)));
     }
 
-    fn c2s_parser_inner(
-        &self,
-        stream: *const PktStrm<T>,
-        _meta_tx: mpsc::Sender<Meta>,
-    ) -> impl Future<Output = Result<(), ()>> {
+    fn c2s_parser_inner(&self, stream: *const PktStrm<T>) -> impl Future<Output = Result<(), ()>> {
         let callback = self.callback_readn.clone();
         let read_size = self.read_size;
 
@@ -89,22 +84,14 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadn2Parser<T> {
     }
 
     fn c2s_parser_size(&self) -> usize {
-        let (tx, _rx) = mpsc::channel(1);
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr, tx);
+        let future = self.c2s_parser_inner(stream_ptr);
         std::mem::size_of_val(&future)
     }
 
-    fn c2s_parser(
-        &self,
-        stream: *const PktStrm<Self::PacketType>,
-        meta_tx: mpsc::Sender<Meta>,
-    ) -> Option<ParserFuture> {
-        Some(
-            self.pool()
-                .alloc_future(self.c2s_parser_inner(stream, meta_tx)),
-        )
+    fn c2s_parser(&self, stream: *const PktStrm<Self::PacketType>) -> Option<ParserFuture> {
+        Some(self.pool().alloc_future(self.c2s_parser_inner(stream)))
     }
 }
 

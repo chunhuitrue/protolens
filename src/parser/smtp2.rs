@@ -2,11 +2,10 @@
 
 use crate::pktstrm::*;
 use crate::pool::Pool;
+use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
-use crate::{Meta, Packet};
-use futures_channel::mpsc;
 use nom::{
     bytes::complete::{tag, take_till, take_while},
     character::complete::digit1,
@@ -64,11 +63,7 @@ impl<T: Packet + Ord + 'static> SmtpParser2<T> {
         self.callback_pass = Some(Arc::new(Mutex::new(callback)) as PassCallback);
     }
 
-    fn c2s_parser_inner(
-        &self,
-        stream: *const PktStrm<T>,
-        _meta_tx: mpsc::Sender<Meta>,
-    ) -> impl Future<Output = Result<(), ()>> {
+    fn c2s_parser_inner(&self, stream: *const PktStrm<T>) -> impl Future<Output = Result<(), ()>> {
         let callback_user = self.callback_user.clone();
         let callback_pass = self.callback_pass.clone();
 
@@ -151,22 +146,14 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser2<T> {
     }
 
     fn c2s_parser_size(&self) -> usize {
-        let (tx, _rx) = mpsc::channel(1);
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr, tx);
+        let future = self.c2s_parser_inner(stream_ptr);
         std::mem::size_of_val(&future)
     }
 
-    fn c2s_parser(
-        &self,
-        stream: *const PktStrm<Self::PacketType>,
-        meta_tx: mpsc::Sender<Meta>,
-    ) -> Option<ParserFuture> {
-        Some(
-            self.pool()
-                .alloc_future(self.c2s_parser_inner(stream, meta_tx)),
-        )
+    fn c2s_parser(&self, stream: *const PktStrm<Self::PacketType>) -> Option<ParserFuture> {
+        Some(self.pool().alloc_future(self.c2s_parser_inner(stream)))
     }
 }
 
@@ -294,10 +281,6 @@ mod tests {
             std::mem::size_of::<*const PktStrm<CapPacket>>()
         );
         println!(
-            "Size of mpsc::Sender: {} bytes",
-            std::mem::size_of::<mpsc::Sender<Meta>>()
-        );
-        println!(
             "Size of callback: {} bytes",
             std::mem::size_of::<Option<UserCallback>>()
         );
@@ -310,7 +293,6 @@ mod tests {
         println!("bdir size: {} bytes", bdir_size);
 
         let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
-            + std::mem::size_of::<mpsc::Sender<Meta>>()
             + std::mem::size_of::<Option<UserCallback>>();
 
         assert!(

@@ -1,11 +1,8 @@
-#[cfg(test)]
-use self::smtp::MetaSmtp;
 use crate::pool::Pool;
 use crate::pool::PoolBox;
 use crate::Packet;
 use crate::PktStrm;
 use futures::Future;
-use futures_channel::mpsc;
 use std::pin::Pin;
 use std::rc::Rc;
 
@@ -27,16 +24,6 @@ pub mod stream_readline2;
 pub mod stream_readn;
 #[cfg(test)]
 pub mod stream_readn2;
-
-#[derive(Debug)]
-pub enum MetaHttp {}
-
-#[derive(Debug)]
-pub enum Meta {
-    #[cfg(test)]
-    Smtp(MetaSmtp),
-    Http(MetaHttp),
-}
 
 pub(crate) type ParserFuture = Pin<PoolBox<dyn Future<Output = Result<(), ()>>>>;
 
@@ -63,19 +50,11 @@ pub trait Parser {
         0
     }
 
-    fn c2s_parser(
-        &self,
-        _stream: *const PktStrm<Self::PacketType>,
-        _meta_tx: mpsc::Sender<Meta>,
-    ) -> Option<ParserFuture> {
+    fn c2s_parser(&self, _stream: *const PktStrm<Self::PacketType>) -> Option<ParserFuture> {
         None
     }
 
-    fn s2c_parser(
-        &self,
-        _stream: *const PktStrm<Self::PacketType>,
-        _meta_tx: mpsc::Sender<Meta>,
-    ) -> Option<ParserFuture> {
+    fn s2c_parser(&self, _stream: *const PktStrm<Self::PacketType>) -> Option<ParserFuture> {
         None
     }
 
@@ -83,7 +62,6 @@ pub trait Parser {
         &self,
         _c2s_stream: *const PktStrm<Self::PacketType>,
         _s2c_stream: *const PktStrm<Self::PacketType>,
-        _meta_tx: mpsc::Sender<Meta>,
     ) -> Option<ParserFuture> {
         None
     }
