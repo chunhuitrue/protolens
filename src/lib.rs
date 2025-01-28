@@ -68,6 +68,7 @@ pub struct Prolens<P> {
 }
 
 impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
+    // 每个线程一个protolens
     pub fn new(config: &Config) -> Self {
         Prolens {
             config: config.clone(),
@@ -99,6 +100,28 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         task.init_parser(parser);
     }
 
+    pub fn task_set_c2s_callback<F>(&self, task: &mut Task<P>, callback: F)
+    where
+        F: StmCallbackFn + 'static,
+    {
+        task.set_c2s_callback(callback);
+    }
+
+    pub fn task_set_s2c_callback<F>(&self, task: &mut Task<P>, callback: F)
+    where
+        F: StmCallbackFn + 'static,
+    {
+        task.set_s2c_callback(callback);
+    }
+
+    // pub fn task_set_c2s_callback(&self, task: &mut Task<P>, callback: StmCallback) {
+    //     task.set_c2s_callback(callback);
+    // }
+
+    // pub fn task_set_s2c_callback(&self, task: &mut Task<P>, callback: StmCallback) {
+    //     task.set_s2c_callback(callback);
+    // }
+
     // 如果第一个包就已经识别成功。可以确定用哪个parser。使用这个api
     pub fn new_task_with_parser<T: Parser<PacketType = P>>(
         &self,
@@ -111,8 +134,8 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         &self.config
     }
 
-    pub fn run_task(&mut self, task: &mut Task<P>, pkt: P, dir: PktDirection) {
-        task.run(pkt, dir);
+    pub fn run_task(&mut self, task: &mut Task<P>, pkt: P) {
+        task.run(pkt);
         self.stats.packet_count += 1;
     }
 
@@ -186,7 +209,6 @@ mod tests {
     use crate::parser::smtp::SmtpParser;
     use crate::test_utils::MyPacket;
     use crate::test_utils::{CapPacket, PacketRef};
-    use crate::PktDirection;
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -195,7 +217,7 @@ mod tests {
         let mut task = protolens.new_task();
 
         let pkt = MyPacket::new(1, false);
-        protolens.run_task(&mut task, pkt, PktDirection::Client2Server);
+        protolens.run_task(&mut task, pkt);
     }
 
     #[test]
@@ -205,7 +227,7 @@ mod tests {
         let mut task = protolens.new_task_with_parser(parser);
 
         let pkt = MyPacket::new(1, false);
-        protolens.run_task(&mut task, pkt, PktDirection::Client2Server);
+        protolens.run_task(&mut task, pkt);
     }
 
     #[test]
@@ -228,8 +250,8 @@ mod tests {
         let pkt1 = MyPacket::new(1, false);
         let pkt2 = MyPacket::new(2, false);
 
-        protolens.run_task(&mut task1, pkt1, PktDirection::Client2Server);
-        protolens.run_task(&mut task2, pkt2, PktDirection::Server2Client);
+        protolens.run_task(&mut task1, pkt1);
+        protolens.run_task(&mut task2, pkt2);
     }
 
     #[test]
@@ -239,7 +261,7 @@ mod tests {
         let mut task = protolens.new_task_with_parser(parser);
 
         let pkt = MyPacket::new(1, false);
-        protolens.run_task(&mut task, pkt, PktDirection::Client2Server);
+        protolens.run_task(&mut task, pkt);
     }
 
     #[test]
@@ -258,8 +280,8 @@ mod tests {
         let pkt1 = MyPacket::new(1, false);
         let pkt2 = MyPacket::new(2, true);
 
-        protolens.run_task(&mut task, pkt1, PktDirection::Client2Server);
-        protolens.run_task(&mut task, pkt2, PktDirection::Client2Server);
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
 
         assert_eq!(*vec.lock().unwrap(), vec![1, 2]);
     }
@@ -365,8 +387,8 @@ mod tests {
         // 先运行一些数据包
         let pkt1 = MyPacket::new(1, false);
         let pkt2 = MyPacket::new(2, false);
-        protolens.run_task(&mut task, pkt1, PktDirection::Client2Server);
-        protolens.run_task(&mut task, pkt2, PktDirection::Client2Server);
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
 
         // pkt2之后识别成功，设置 parser
         let parser = protolens.new_parser::<SmtpParser<MyPacket>>();
@@ -374,6 +396,6 @@ mod tests {
 
         // 继续处理数据包
         let pkt3 = MyPacket::new(3, false);
-        protolens.run_task(&mut task, pkt3, PktDirection::Client2Server);
+        protolens.run_task(&mut task, pkt3);
     }
 }

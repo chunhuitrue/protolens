@@ -10,9 +10,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub trait CallbackFn: FnMut(&[u8], u32) + Send + Sync {}
-impl<F: FnMut(&[u8], u32) + Send + Sync> CallbackFn for F {}
-type CallbackStreamReadn2 = Arc<Mutex<dyn CallbackFn>>;
+pub trait Rn2CallbackFn: FnMut(&[u8], u32) + Send + Sync {}
+impl<F: FnMut(&[u8], u32) + Send + Sync> Rn2CallbackFn for F {}
+type CallbackStreamReadn2 = Arc<Mutex<dyn Rn2CallbackFn>>;
 
 pub struct StreamReadn2Parser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -33,7 +33,7 @@ impl<T: Packet + Ord + 'static> StreamReadn2Parser<T> {
 
     pub fn set_callback_readn<F>(&mut self, callback: F)
     where
-        F: CallbackFn + 'static,
+        F: Rn2CallbackFn + 'static,
     {
         self.callback_readn = Some(Arc::new(Mutex::new(callback)));
     }
@@ -120,7 +120,6 @@ mod tests {
         let pkt1 = build_pkt(seq1, true);
         let _ = pkt1.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
         let seq_value = Arc::new(Mutex::new(0u32));
 
@@ -136,7 +135,7 @@ mod tests {
         parser.set_callback_readn(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt1, dir.clone());
+        protolens.run_task(&mut task, pkt1);
 
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         assert_eq!(*vec.lock().unwrap(), expected);
@@ -152,7 +151,6 @@ mod tests {
         let _ = pkt1.decode();
         let _ = pkt2.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
         let seq_values = Arc::new(Mutex::new(Vec::new()));
 
@@ -168,8 +166,8 @@ mod tests {
         parser.set_callback_readn(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt1, dir.clone());
-        protolens.run_task(&mut task, pkt2, dir.clone());
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
 
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let expected_seqs = vec![seq1, seq2];

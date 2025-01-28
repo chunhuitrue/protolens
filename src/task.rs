@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use crate::Meta;
 use crate::Packet;
 use crate::Parser;
@@ -6,6 +8,8 @@ use crate::PktDirection;
 use crate::PktStrm;
 use crate::Pool;
 use crate::PoolBox;
+use crate::StmCallback;
+use crate::StmCallbackFn;
 use core::{
     pin::Pin,
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
@@ -67,8 +71,30 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
         self.meta_rx = Some(rx);
     }
 
-    pub(crate) fn run(&mut self, pkt: T, pkt_dir: PktDirection) {
-        match pkt_dir {
+    pub(crate) fn set_c2s_callback<F>(&mut self, callback: F)
+    where
+        F: StmCallbackFn + 'static,
+    {
+        self.stream_c2s.set_callback(callback);
+    }
+
+    pub(crate) fn set_s2c_callback<F>(&mut self, callback: F)
+    where
+        F: StmCallbackFn + 'static,
+    {
+        self.stream_s2c.set_callback(callback);
+    }
+
+    // pub(crate) fn set_c2s_callback(&mut self, callback: StmCallback) {
+    //     self.stream_c2s.set_callback(callback);
+    // }
+
+    // pub(crate) fn set_s2c_callback(&mut self, callback: StmCallback) {
+    //     self.stream_s2c.set_callback(callback);
+    // }
+
+    pub(crate) fn run(&mut self, pkt: T) {
+        match pkt.direction() {
             PktDirection::Client2Server => {
                 self.stream_c2s.push(pkt);
                 self.c2s_run();

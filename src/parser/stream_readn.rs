@@ -119,7 +119,6 @@ mod tests {
         let pkt1 = build_pkt(seq1, true);
         let _ = pkt1.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -132,7 +131,7 @@ mod tests {
         parser.set_callback_readn(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt1, dir.clone());
+        protolens.run_task(&mut task, pkt1);
 
         // 验证收到的数据是否正确
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -148,7 +147,6 @@ mod tests {
         let _ = pkt1.decode();
         let _ = pkt2.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -161,8 +159,8 @@ mod tests {
         parser.set_callback_readn(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt1, dir.clone());
-        protolens.run_task(&mut task, pkt2, dir.clone());
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
 
         // 验证收到的数据是否正确
         let expected: Vec<u8> = vec![
@@ -188,7 +186,6 @@ mod tests {
         let _ = pkt1.decode();
         let _ = pkt2.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -202,9 +199,9 @@ mod tests {
         let mut task = protolens.new_task_with_parser(parser);
 
         // 乱序发送包
-        protolens.run_task(&mut task, pkt_syn, dir.clone());
-        protolens.run_task(&mut task, pkt2, dir.clone());
-        protolens.run_task(&mut task, pkt1, dir.clone());
+        protolens.run_task(&mut task, pkt_syn);
+        protolens.run_task(&mut task, pkt2);
+        protolens.run_task(&mut task, pkt1);
 
         // 验证收到的数据是否正确
         let expected: Vec<u8> = vec![

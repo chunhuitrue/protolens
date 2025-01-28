@@ -127,7 +127,6 @@ mod tests {
 
         let count = Arc::new(Mutex::new(0));
         let count_clone = count.clone();
-        let dir = PktDirection::Client2Server;
 
         let callback = move |pkt: CapPacket| {
             let mut count = count_clone.lock().unwrap();
@@ -147,11 +146,11 @@ mod tests {
         let mut task = protolens.new_task_with_parser(parser);
 
         dbg!("1 task run");
-        protolens.run_task(&mut task, pkt3, dir.clone());
+        protolens.run_task(&mut task, pkt3);
         dbg!("2 task run");
-        protolens.run_task(&mut task, pkt2, dir.clone());
+        protolens.run_task(&mut task, pkt2);
         dbg!("3 task run");
-        protolens.run_task(&mut task, pkt1, dir.clone());
+        protolens.run_task(&mut task, pkt1);
         dbg!("4 task run");
         // run了三个包，但count是1
         // pktstrm中有对fin的控制。如果fin的包已经被按序读走，说明本条流已经结束。此后就不应该在push，或者pop了

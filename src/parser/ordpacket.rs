@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use crate::pktstrm::*;
 use crate::pool::Pool;
 use crate::Parser;
 use crate::ParserFuture;
@@ -121,7 +122,6 @@ mod tests {
         let file_path = project_root.join("tests/res/smtp.pcap");
         println!("Opening pcap file: {:?}", file_path);
         let mut cap = Capture::init(file_path).unwrap();
-        let dir = PktDirection::Client2Server;
         let count = Arc::new(Mutex::new(0));
         let count_clone = count.clone();
 
@@ -184,7 +184,7 @@ mod tests {
             if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
                 push_count += 1;
                 println!("Processing packet {}: seq={}", push_count, pkt.seq());
-                protolens.run_task(&mut task, pkt, dir.clone());
+                protolens.run_task(&mut task, pkt);
             }
         }
 
@@ -208,7 +208,6 @@ mod tests {
         let pkt4 = build_pkt(seq4, true); // 最后一个包带 fin
         let _ = pkt4.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::<u8>::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -223,10 +222,10 @@ mod tests {
         let mut task = protolens.new_task_with_parser(parser);
 
         // 乱序发送包
-        protolens.run_task(&mut task, pkt1, dir.clone()); // seq1
-        protolens.run_task(&mut task, pkt3, dir.clone()); // seq3
-        protolens.run_task(&mut task, pkt4, dir.clone()); // seq4 with fin
-        protolens.run_task(&mut task, pkt2, dir.clone()); // seq2
+        protolens.run_task(&mut task, pkt1); // seq1
+        protolens.run_task(&mut task, pkt3); // seq3
+        protolens.run_task(&mut task, pkt4); // seq4 with fin
+        protolens.run_task(&mut task, pkt2); // seq2
 
         // 验证最终收到的数据应该是有序的
         let expected: Vec<u8> = vec![
@@ -254,7 +253,6 @@ mod tests {
         let pkt2 = build_pkt(seq2, false);
         let _ = pkt2.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::<u8>::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -269,9 +267,9 @@ mod tests {
         let mut task = protolens.new_task_with_parser(parser);
 
         // 发送包
-        protolens.run_task(&mut task, pkt_syn, dir.clone()); // SYN包
-        protolens.run_task(&mut task, pkt2, dir.clone()); // 乱序数据包
-        protolens.run_task(&mut task, pkt1, dir.clone()); // 乱序数据包
+        protolens.run_task(&mut task, pkt_syn); // SYN包
+        protolens.run_task(&mut task, pkt2); // 乱序数据包
+        protolens.run_task(&mut task, pkt1); // 乱序数据包
 
         // 验证最终收到的数据应该是有序的
         let expected: Vec<u8> = vec![

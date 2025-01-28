@@ -10,6 +10,7 @@ use std::ops::Deref;
 use std::path::Path;
 use std::rc::Rc;
 
+use crate::PktDirection;
 pub(crate) const SMTP_PORT_NET: u16 = 25;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -60,6 +61,10 @@ impl<T: Packet> Packet for PacketRef<T> {
     fn trans_proto(&self) -> TransProto {
         TransProto::Tcp
     }
+
+    fn direction(&self) -> PktDirection {
+        self.inner.direction()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -86,6 +91,10 @@ impl MyPacket {
 }
 
 impl Packet for MyPacket {
+    fn direction(&self) -> PktDirection {
+        PktDirection::Client2Server
+    }
+
     fn trans_proto(&self) -> TransProto {
         TransProto::Tcp
     }
@@ -258,6 +267,10 @@ impl CapPacket {
 }
 
 impl Packet for CapPacket {
+    fn direction(&self) -> PktDirection {
+        PktDirection::Client2Server
+    }
+
     fn trans_proto(&self) -> TransProto {
         if let Some(TransportHeader::Tcp(tcph)) = &self.header.borrow().as_ref().unwrap().transport
         {

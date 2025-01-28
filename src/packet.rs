@@ -19,6 +19,7 @@ pub enum PktDirection {
 }
 
 pub trait Packet {
+    fn direction(&self) -> PktDirection;
     fn trans_proto(&self) -> TransProto;
     // tcp或者udp的源端口。否则为0
     fn tu_sport(&self) -> u16;

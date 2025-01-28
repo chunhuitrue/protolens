@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use crate::pktstrm::*;
 use crate::pool::Pool;
 use crate::Parser;
 use crate::ParserFuture;
@@ -378,7 +379,7 @@ mod tests {
             if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
                 push_count += 1;
                 dbg!(push_count, pkt.seq());
-                protolens.run_task(&mut task, pkt, dir.clone());
+                protolens.run_task(&mut task, pkt);
             }
         }
 

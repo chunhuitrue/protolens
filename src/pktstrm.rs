@@ -13,13 +13,18 @@ use futures::Future;
 use futures_util::stream::{Stream, StreamExt};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::fmt;
 use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::task::Context;
 use std::task::Poll;
 
-#[derive(Debug)]
+pub trait StmCallbackFn: FnMut(&[u8], u32) + Send + Sync {}
+impl<F> StmCallbackFn for F where F: FnMut(&[u8], u32) + Send + Sync {}
+pub type StmCallback = Arc<Mutex<dyn StmCallbackFn>>;
+
 pub struct PktStrm<T>
 where
     T: Packet,
@@ -30,6 +35,9 @@ where
     read_buff_len: usize,
     next_seq: u32,
     fin: bool,
+    // 只有成功返回的才会被callback，比如hello\nxxx。对readline2来说，hello\n成功读取，然后调用callback。
+    // 后续的xxx不会调用callback
+    callback: Option<StmCallback>,
 }
 
 impl<T> PktStrm<T>
@@ -46,8 +54,20 @@ where
             read_buff_len: 0,
             next_seq: 0,
             fin: false,
+            callback: None,
         }
     }
+
+    pub(crate) fn set_callback<F>(&mut self, callback: F)
+    where
+        F: StmCallbackFn + 'static,
+    {
+        self.callback = Some(Arc::new(Mutex::new(callback)));
+    }
+
+    // pub(crate) fn set_callback(&mut self, callback: StmCallback) {
+    //     self.callback = Some(callback);
+    // }
 
     pub(crate) fn push(&mut self, packet: T) {
         if self.fin {
@@ -221,12 +241,7 @@ where
             }
         }
 
-        let result = Ok((
-            &self.read_buff[..num],
-            self.next_seq - self.read_buff_len as u32,
-        ));
-        self.read_buff_len = 0;
-        result
+        self.prepare_result(num)
     }
 
     // 读多少算多少，写入调用着提供的buff
@@ -243,11 +258,15 @@ where
                     read_len += 1;
                 }
                 None => {
-                    return Ok((read_len, self.next_seq - read_len as u32));
+                    let seq = self.next_seq - read_len as u32;
+                    self.call_cb(buff, seq);
+                    return Ok((read_len, seq));
                 }
             }
         }
-        Ok((read_len, self.next_seq - read_len as u32))
+        let seq = self.next_seq - read_len as u32;
+        self.call_cb(buff, seq);
+        Ok((read_len, seq))
     }
 
     // 废弃
@@ -272,36 +291,25 @@ where
                     self.read_buff_len += 1;
 
                     if byte == b'\n' {
-                        let result = Ok((
-                            &self.read_buff[..self.read_buff_len],
-                            self.next_seq - self.read_buff_len as u32,
-                        ));
-                        self.read_buff_len = 0; // 只有在找到完整的行后才重置
-                        return result;
+                        return self.prepare_result(self.read_buff_len);
                     }
                 }
                 None => {
-                    if self.read_buff_len == 0 {
-                        return Err(());
-                    } else {
-                        let result = Ok((
-                            &self.read_buff[..self.read_buff_len],
-                            self.next_seq - self.read_buff_len as u32,
-                        ));
-                        self.read_buff_len = 0; // 流结束时也重置
-                        return result;
-                    }
+                    self.read_buff_len = 0;
+                    return Err(());
+                    // if self.read_buff_len == 0 {
+                    //     return Err(());
+                    // } else {
+                    //     println!("none byte.retrun");
+                    //     return self.prepare_result(self.read_buff_len);
+                    // }
                 }
             }
         }
-
-        // Buffer is full but no newline found
-        let result = Ok((
-            &self.read_buff[..self.read_buff_len],
-            self.next_seq - self.read_buff_len as u32,
-        ));
-        self.read_buff_len = 0; // 缓冲区满时也重置
-        result
+        self.read_buff_len = 0;
+        Err(())
+        // println!("out.retrun 2");
+        // self.prepare_result(self.read_buff_len)
     }
 
     pub(crate) async fn read_clean_line(&mut self) -> Result<(&[u8], u32), ()> {
@@ -360,6 +368,23 @@ where
 
     pub fn buff_size() -> usize {
         std::mem::size_of::<[u8; MAX_READ_BUFF]>()
+    }
+
+    fn call_cb(&mut self, buff: &[u8], seq: u32) {
+        if let Some(ref mut cb) = self.callback {
+            cb.lock().unwrap()(buff, seq);
+        }
+    }
+
+    fn prepare_result(&mut self, len: usize) -> Result<(&[u8], u32), ()> {
+        let seq = self.next_seq - self.read_buff_len as u32;
+        let data = &self.read_buff[..len];
+        if let Some(ref mut cb) = self.callback {
+            cb.lock().unwrap()(data, seq);
+        }
+        let result = Ok((data, seq));
+        self.read_buff_len = 0;
+        result
     }
 }
 
@@ -450,6 +475,21 @@ where
     // }
 }
 
+impl<T> fmt::Debug for PktStrm<T>
+where
+    T: Packet,
+    PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PktStrm")
+            .field("pkt_buff_len", &self.pkt_buff.len())
+            .field("read_buff_len", &self.read_buff_len)
+            .field("next_seq", &self.next_seq)
+            .field("fin", &self.fin)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,7 +508,7 @@ mod tests {
     #[test]
     fn test_pktstrm_push() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::new(&pool);
+        let mut stm = PktStrm::<CapPacket>::new(&pool);
 
         let pkt1 = make_pkt_data(123);
         let _ = pkt1.decode();
@@ -517,7 +557,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek2() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool);
 
         let pkt1 = MyPacket::new(1, false);
         stm.push(pkt1);
@@ -666,7 +706,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek_ord2() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool);
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, false);
@@ -694,7 +734,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek_ord_retrans() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool);
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, false);
@@ -743,7 +783,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek_ord_cover() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool);
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, false);
@@ -791,7 +831,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek_drop() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool);
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, false);
@@ -822,7 +862,7 @@ mod tests {
     #[test]
     fn test_pkt_fin() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool);
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, true);
@@ -839,7 +879,7 @@ mod tests {
     #[test]
     fn test_3pkt_fin() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool);
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, false);

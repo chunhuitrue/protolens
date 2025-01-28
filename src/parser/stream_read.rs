@@ -126,7 +126,6 @@ mod tests {
         let pkt1 = build_pkt(seq1, true);
         let _ = pkt1.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
         let seq_value = Arc::new(Mutex::new(0u32));
 
@@ -142,7 +141,7 @@ mod tests {
         parser.set_callback_read(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt1, dir.clone());
+        protolens.run_task(&mut task, pkt1);
 
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         assert_eq!(*vec.lock().unwrap(), expected);
@@ -158,7 +157,6 @@ mod tests {
         let _ = pkt1.decode();
         let _ = pkt2.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
         let seq_values = Arc::new(Mutex::new(Vec::new()));
 
@@ -174,8 +172,8 @@ mod tests {
         parser.set_callback_read(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt1, dir.clone());
-        protolens.run_task(&mut task, pkt2, dir.clone());
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
 
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let expected_seqs = vec![seq1, seq2];

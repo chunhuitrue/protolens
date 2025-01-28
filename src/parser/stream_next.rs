@@ -114,7 +114,6 @@ mod tests {
         let pkt1 = build_pkt(seq1, true);
         let _ = pkt1.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -128,7 +127,7 @@ mod tests {
         parser.set_callback_next_byte(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt1, dir.clone());
+        protolens.run_task(&mut task, pkt1);
 
         assert_eq!(*vec.lock().unwrap(), (1..=10).collect::<Vec<u8>>());
     }
@@ -142,7 +141,6 @@ mod tests {
         let _ = pkt1.decode();
         let _ = pkt2.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -155,8 +153,8 @@ mod tests {
         parser.set_callback_next_byte(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt1, dir.clone());
-        protolens.run_task(&mut task, pkt2, dir.clone());
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
 
         // 验证收到了两组相同的字节序列 (1-10, 1-10)
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -168,7 +166,6 @@ mod tests {
         let pkt = build_pkt_nodata(1, true);
         let _ = pkt.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -181,7 +178,7 @@ mod tests {
         parser.set_callback_next_byte(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt, dir.clone());
+        protolens.run_task(&mut task, pkt);
 
         // 验证没有收到任何字节
         assert_eq!(vec.lock().unwrap().len(), 0);
@@ -207,7 +204,6 @@ mod tests {
         let _ = pkt3.decode();
         let _ = pkt4.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -220,10 +216,10 @@ mod tests {
         parser.set_callback_next_byte(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt1, dir.clone());
-        protolens.run_task(&mut task, pkt2, dir.clone());
-        protolens.run_task(&mut task, pkt3, dir.clone());
-        protolens.run_task(&mut task, pkt4, dir.clone());
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
+        protolens.run_task(&mut task, pkt3);
+        protolens.run_task(&mut task, pkt4);
 
         // 验证收到了三组相同的字节序列 (1-10 重复三次)
         let expected: Vec<u8> = vec![
@@ -260,7 +256,6 @@ mod tests {
         let _ = pkt3.decode();
         let _ = pkt4.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -273,11 +268,11 @@ mod tests {
         parser.set_callback_next_byte(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt1, dir.clone());
-        protolens.run_task(&mut task, pkt2, dir.clone());
-        protolens.run_task(&mut task, pkt_ack, dir.clone());
-        protolens.run_task(&mut task, pkt3, dir.clone());
-        protolens.run_task(&mut task, pkt4, dir.clone());
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
+        protolens.run_task(&mut task, pkt_ack);
+        protolens.run_task(&mut task, pkt3);
+        protolens.run_task(&mut task, pkt4);
 
         // 验证收到了三组相同的字节序列，ACK包不产生数据
         let expected: Vec<u8> = vec![
@@ -313,7 +308,6 @@ mod tests {
         let _ = pkt3.decode();
         let _ = pkt4.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -332,11 +326,11 @@ mod tests {
         // 3. 然后是第一个数据包
         // 4. 接着是第三个数据包
         // 5. 最后是FIN包
-        protolens.run_task(&mut task, pkt1, dir.clone());
-        protolens.run_task(&mut task, pkt3, dir.clone());
-        protolens.run_task(&mut task, pkt2, dir.clone());
-        protolens.run_task(&mut task, pkt_ack, dir.clone());
-        protolens.run_task(&mut task, pkt4, dir.clone());
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt3);
+        protolens.run_task(&mut task, pkt2);
+        protolens.run_task(&mut task, pkt_ack);
+        protolens.run_task(&mut task, pkt4);
 
         // 验证最终收到的数据应该是有序的，与顺序到达时相同
         let expected: Vec<u8> = vec![
@@ -378,7 +372,6 @@ mod tests {
         let _ = pkt3.decode();
         let _ = pkt4.decode();
 
-        let dir = PktDirection::Client2Server;
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
@@ -391,12 +384,12 @@ mod tests {
         parser.set_callback_next_byte(callback);
         let mut task = protolens.new_task_with_parser(parser);
 
-        protolens.run_task(&mut task, pkt_syn, dir.clone());
-        protolens.run_task(&mut task, pkt2, dir.clone());
-        protolens.run_task(&mut task, pkt_ack, dir.clone());
-        protolens.run_task(&mut task, pkt1, dir.clone());
-        protolens.run_task(&mut task, pkt3, dir.clone());
-        protolens.run_task(&mut task, pkt4, dir.clone());
+        protolens.run_task(&mut task, pkt_syn);
+        protolens.run_task(&mut task, pkt2);
+        protolens.run_task(&mut task, pkt_ack);
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt3);
+        protolens.run_task(&mut task, pkt4);
 
         // 验证最终收到的数据应该是有序的
         let expected: Vec<u8> = vec![
