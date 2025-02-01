@@ -13,7 +13,7 @@ pub trait CallbackFn: FnMut(Vec<u8>) + Send + Sync {}
 impl<F: FnMut(Vec<u8>) + Send + Sync> CallbackFn for F {}
 type CallbackStreamReadn = Arc<Mutex<dyn CallbackFn>>;
 
-pub(crate) struct StreamReadnParser<T: Packet + Ord + 'static> {
+pub struct StreamReadnParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     pool: Option<Rc<Pool>>,
     callback_readn: Option<CallbackStreamReadn>,

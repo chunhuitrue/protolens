@@ -19,24 +19,25 @@ pub(crate) use pktstrm::*;
 pub(crate) use pool::*;
 pub(crate) use task::*;
 
-use crate::ordpacket::OrdPacketParser;
+pub use crate::ordpacket::OrdPacketParser;
 #[cfg(test)]
-use crate::rawpacket::RawPacketParser;
+pub use crate::rawpacket::RawPacketParser;
 #[cfg(test)]
-use crate::smtp::SmtpParser;
-use crate::smtp2::SmtpParser2;
+pub use crate::smtp::SmtpParser;
+pub use crate::smtp2::SmtpParser2;
 #[cfg(test)]
-use crate::stream_next::StreamNextParser;
+pub use crate::stream_next::StreamNextParser;
 #[cfg(test)]
-use crate::stream_read::StreamReadParser;
+pub use crate::stream_read::StreamReadParser;
 #[cfg(test)]
-use crate::stream_readline::StreamReadlineParser;
+pub use crate::stream_readline::StreamReadlineParser;
 #[cfg(test)]
-use crate::stream_readline2::StreamReadline2Parser;
+pub use crate::stream_readline2::StreamReadline2Parser;
 #[cfg(test)]
-use crate::stream_readn::StreamReadnParser;
+pub use crate::stream_readn::StreamReadnParser;
 #[cfg(test)]
-use crate::stream_readn2::StreamReadn2Parser;
+pub use crate::stream_readn2::StreamReadn2Parser;
+
 use std::marker::PhantomData;
 use std::rc::Rc;
 
