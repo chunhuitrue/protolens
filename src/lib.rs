@@ -11,14 +11,6 @@ mod task;
 mod test_utils;
 mod util;
 
-pub(crate) use config::*;
-pub(crate) use heap::*;
-pub(crate) use packet::*;
-pub(crate) use parser::*;
-pub(crate) use pktstrm::*;
-pub(crate) use pool::*;
-pub(crate) use task::*;
-
 pub use crate::ordpacket::OrdPacketParser;
 #[cfg(test)]
 pub use crate::rawpacket::RawPacketParser;
@@ -37,6 +29,14 @@ pub use crate::stream_readline2::StreamReadline2Parser;
 pub use crate::stream_readn::StreamReadnParser;
 #[cfg(test)]
 pub use crate::stream_readn2::StreamReadn2Parser;
+
+pub(crate) use config::*;
+pub(crate) use heap::*;
+pub(crate) use packet::*;
+pub(crate) use parser::*;
+pub(crate) use pktstrm::*;
+pub(crate) use pool::*;
+pub(crate) use task::*;
 
 use std::marker::PhantomData;
 use std::rc::Rc;
