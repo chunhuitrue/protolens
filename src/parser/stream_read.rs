@@ -3,14 +3,16 @@ use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
+use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
+use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub trait CallbackFn: FnMut(&[u8], usize, u32) + Send + Sync {}
-impl<F: FnMut(&[u8], usize, u32) + Send + Sync> CallbackFn for F {}
+pub trait CallbackFn: FnMut(&[u8], usize, u32, *const c_void) + Send + Sync {}
+impl<F: FnMut(&[u8], usize, u32, *const c_void) + Send + Sync> CallbackFn for F {}
 
 type CallbackStreamRead = Arc<Mutex<dyn CallbackFn>>;
 
@@ -38,7 +40,11 @@ impl<T: Packet + Ord + 'static> StreamReadParser<T> {
         self.callback_read = Some(Arc::new(Mutex::new(callback)));
     }
 
-    fn c2s_parser_inner(&self, stream: *const PktStrm<T>) -> impl Future<Output = Result<(), ()>> {
+    fn c2s_parser_inner(
+        &self,
+        stream: *const PktStrm<T>,
+        cb_ctx: *const c_void,
+    ) -> impl Future<Output = Result<(), ()>> {
         let callback = self.callback_read.clone();
         let mut read_buff = self.read_buff.clone();
 
@@ -53,7 +59,12 @@ impl<T: Packet + Ord + 'static> StreamReadParser<T> {
                     Ok((read_len, seq)) => {
                         if read_len > 0 {
                             if let Some(ref callback) = callback {
-                                callback.lock().unwrap()(&read_buff[..read_len], read_len, seq);
+                                callback.lock().unwrap()(
+                                    &read_buff[..read_len],
+                                    read_len,
+                                    seq,
+                                    cb_ctx,
+                                );
                             }
                         }
                         if read_len == 0 {
@@ -92,12 +103,19 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadParser<T> {
     fn c2s_parser_size(&self) -> usize {
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr);
+        let future = self.c2s_parser_inner(stream_ptr, ptr::null_mut());
         std::mem::size_of_val(&future)
     }
 
-    fn c2s_parser(&self, stream: *const PktStrm<Self::PacketType>) -> Option<ParserFuture> {
-        Some(self.pool().alloc_future(self.c2s_parser_inner(stream)))
+    fn c2s_parser(
+        &self,
+        stream: *const PktStrm<Self::PacketType>,
+        cb_ctx: *const c_void,
+    ) -> Option<ParserFuture> {
+        Some(
+            self.pool()
+                .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
+        )
     }
 }
 
@@ -106,6 +124,7 @@ mod tests {
     use super::*;
     use crate::test_utils::*;
     use crate::*;
+    use std::ptr;
 
     #[test]
     fn test_stream_read_single_packet() {
@@ -118,7 +137,7 @@ mod tests {
 
         let vec_clone = Arc::clone(&vec);
         let seq_clone = Arc::clone(&seq_value);
-        let callback = move |bytes: &[u8], len: usize, seq: u32| {
+        let callback = move |bytes: &[u8], len: usize, seq: u32, _cb_ctx: *const c_void| {
             vec_clone.lock().unwrap().extend_from_slice(&bytes[..len]);
             *seq_clone.lock().unwrap() = seq;
         };
@@ -126,7 +145,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamReadParser<CapPacket>>();
         parser.set_callback_read(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         protolens.run_task(&mut task, pkt1);
 
@@ -149,7 +168,7 @@ mod tests {
 
         let vec_clone = Arc::clone(&vec);
         let seq_clone = Arc::clone(&seq_values);
-        let callback = move |bytes: &[u8], len: usize, seq: u32| {
+        let callback = move |bytes: &[u8], len: usize, seq: u32, _cb_ctx: *const c_void| {
             vec_clone.lock().unwrap().extend_from_slice(&bytes[..len]);
             seq_clone.lock().unwrap().push(seq);
         };
@@ -157,7 +176,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamReadParser<CapPacket>>();
         parser.set_callback_read(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);

@@ -3,14 +3,16 @@ use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
+use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
+use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub trait CallbackFn: FnMut(&[u8], u32) + Send + Sync {}
-impl<F: FnMut(&[u8], u32) + Send + Sync> CallbackFn for F {}
+pub trait CallbackFn: FnMut(&[u8], u32, *const c_void) + Send + Sync {}
+impl<F: FnMut(&[u8], u32, *const c_void) + Send + Sync> CallbackFn for F {}
 type CallbackStreamReadline2 = Arc<Mutex<dyn CallbackFn>>;
 
 pub struct StreamReadline2Parser<T: Packet + Ord + 'static> {
@@ -35,7 +37,11 @@ impl<T: Packet + Ord + 'static> StreamReadline2Parser<T> {
         self.callback_readline = Some(Arc::new(Mutex::new(callback)));
     }
 
-    fn c2s_parser_inner(&self, stream: *const PktStrm<T>) -> impl Future<Output = Result<(), ()>> {
+    fn c2s_parser_inner(
+        &self,
+        stream: *const PktStrm<T>,
+        cb_ctx: *const c_void,
+    ) -> impl Future<Output = Result<(), ()>> {
         let callback = self.callback_readline.clone();
 
         async move {
@@ -50,7 +56,7 @@ impl<T: Packet + Ord + 'static> StreamReadline2Parser<T> {
                     break;
                 }
                 if let Some(ref callback) = callback {
-                    callback.lock().unwrap()(line, seq);
+                    callback.lock().unwrap()(line, seq, cb_ctx);
                 }
             }
             Ok(())
@@ -82,12 +88,19 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadline2Parser<T> {
     fn c2s_parser_size(&self) -> usize {
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr);
+        let future = self.c2s_parser_inner(stream_ptr, ptr::null_mut());
         std::mem::size_of_val(&future)
     }
 
-    fn c2s_parser(&self, stream: *const PktStrm<Self::PacketType>) -> Option<ParserFuture> {
-        Some(self.pool().alloc_future(self.c2s_parser_inner(stream)))
+    fn c2s_parser(
+        &self,
+        stream: *const PktStrm<Self::PacketType>,
+        cb_ctx: *const c_void,
+    ) -> Option<ParserFuture> {
+        Some(
+            self.pool()
+                .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
+        )
     }
 }
 
@@ -96,6 +109,7 @@ mod tests {
     use super::*;
     use crate::test_utils::*;
     use crate::*;
+    use std::ptr;
 
     #[test]
     fn test_stream_readline2_single_line() {
@@ -110,7 +124,7 @@ mod tests {
 
         let lines_clone = Arc::clone(&lines);
         let seqs_clone = Arc::clone(&seqs);
-        let callback = move |line: &[u8], seq: u32| {
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *const c_void| {
             lines_clone.lock().unwrap().push(line.to_vec());
             seqs_clone.lock().unwrap().push(seq);
             dbg!(seq);
@@ -123,7 +137,7 @@ mod tests {
         // 添加原始TCP流的callback
         let raw_data_clone = Arc::clone(&raw_data);
         let raw_seqs_clone = Arc::clone(&raw_seqs);
-        let stm_callback = move |data: &[u8], seq: u32| {
+        let stm_callback = move |data: &[u8], seq: u32, _cb_ctx: *const c_void| {
             raw_data_clone.lock().unwrap().push(data.to_vec());
             raw_seqs_clone.lock().unwrap().push(seq);
         };
@@ -131,7 +145,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamReadline2Parser<CapPacket>>();
         parser.set_callback_readline(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         // 设置原始TCP流callback
         protolens.task_set_c2s_callback(&mut task, stm_callback);
@@ -172,7 +186,7 @@ mod tests {
 
         let lines_clone = Arc::clone(&lines);
         let seqs_clone = Arc::clone(&seqs);
-        let callback = move |line: &[u8], seq: u32| {
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *const c_void| {
             lines_clone.lock().unwrap().push(line.to_vec());
             seqs_clone.lock().unwrap().push(seq);
         };
@@ -180,7 +194,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamReadline2Parser<CapPacket>>();
         parser.set_callback_readline(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -220,7 +234,7 @@ mod tests {
 
         let lines_clone = Arc::clone(&lines);
         let seqs_clone = Arc::clone(&seqs);
-        let callback = move |line: &[u8], seq: u32| {
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *const c_void| {
             lines_clone.lock().unwrap().push(line.to_vec());
             seqs_clone.lock().unwrap().push(seq);
         };
@@ -228,7 +242,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamReadline2Parser<CapPacket>>();
         parser.set_callback_readline(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         // 乱序发送包
         protolens.run_task(&mut task, pkt_syn);

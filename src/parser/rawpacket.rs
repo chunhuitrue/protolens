@@ -4,14 +4,16 @@ use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
+use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
+use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub trait CallbackFn<T>: FnMut(T) + Send + Sync {}
-impl<F, T> CallbackFn<T> for F where F: FnMut(T) + Send + Sync {}
+pub trait CallbackFn<T>: FnMut(T, *const c_void) + Send + Sync {}
+impl<F, T> CallbackFn<T> for F where F: FnMut(T, *const c_void) + Send + Sync {}
 type CallbackRawPkt<T> = Arc<Mutex<dyn CallbackFn<T>>>;
 
 pub struct RawPacketParser<T: Packet + Ord + 'static> {
@@ -36,7 +38,11 @@ impl<T: Packet + Ord + 'static> RawPacketParser<T> {
         self.callback_raw_pkt = Some(Arc::new(Mutex::new(callback)));
     }
 
-    fn c2s_parser_inner(&self, stream: *const PktStrm<T>) -> impl Future<Output = Result<(), ()>> {
+    fn c2s_parser_inner(
+        &self,
+        stream: *const PktStrm<T>,
+        cb_ctx: *const c_void,
+    ) -> impl Future<Output = Result<(), ()>> {
         let callback = self.callback_raw_pkt.clone();
 
         async move {
@@ -49,7 +55,7 @@ impl<T: Packet + Ord + 'static> RawPacketParser<T> {
                 let pkt = stm.next_raw_pkt().await;
                 if let Some(ref callback) = callback {
                     if let Some(pkt) = pkt {
-                        callback.lock().unwrap()(pkt);
+                        callback.lock().unwrap()(pkt, cb_ctx);
                     }
                 }
             }
@@ -82,12 +88,15 @@ impl<T: Packet + Ord + 'static> Parser for RawPacketParser<T> {
     fn c2s_parser_size(&self) -> usize {
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr);
+        let future = self.c2s_parser_inner(stream_ptr, ptr::null_mut());
         std::mem::size_of_val(&future)
     }
 
-    fn c2s_parser(&self, stream: *const PktStrm<T>) -> Option<ParserFuture> {
-        Some(self.pool().alloc_future(self.c2s_parser_inner(stream)))
+    fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *const c_void) -> Option<ParserFuture> {
+        Some(
+            self.pool()
+                .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
+        )
     }
 }
 
@@ -96,6 +105,7 @@ mod tests {
     use super::*;
     use crate::test_utils::*;
     use crate::*;
+    use std::ptr;
 
     #[test]
     fn test_rawpacket_parser() {
@@ -115,7 +125,7 @@ mod tests {
         let count = Arc::new(Mutex::new(0));
         let count_clone = count.clone();
 
-        let callback = move |pkt: CapPacket| {
+        let callback = move |pkt: CapPacket, _cb_ctx: *const c_void| {
             let mut count = count_clone.lock().unwrap();
             *count += 1;
             dbg!(pkt.seq(), *count);
@@ -130,7 +140,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<RawPacketParser<CapPacket>>();
         parser.set_callback_raw_pkt(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         dbg!("1 task run");
         protolens.run_task(&mut task, pkt3);

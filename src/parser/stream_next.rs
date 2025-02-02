@@ -4,14 +4,16 @@ use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
 use futures::StreamExt;
+use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
+use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub trait CallbackFn: FnMut(u8) + Send + Sync {}
-impl<F: FnMut(u8) + Send + Sync> CallbackFn for F {}
+pub trait CallbackFn: FnMut(u8, *const c_void) + Send + Sync {}
+impl<F: FnMut(u8, *const c_void) + Send + Sync> CallbackFn for F {}
 type CallbackStreamNext = Arc<Mutex<dyn CallbackFn>>;
 
 pub struct StreamNextParser<T: Packet + Ord + 'static> {
@@ -36,7 +38,11 @@ impl<T: Packet + Ord + 'static> StreamNextParser<T> {
         self.callback_next_byte = Some(Arc::new(Mutex::new(callback)));
     }
 
-    fn c2s_parser_inner(&self, stream: *const PktStrm<T>) -> impl Future<Output = Result<(), ()>> {
+    fn c2s_parser_inner(
+        &self,
+        stream: *const PktStrm<T>,
+        cb_ctx: *const c_void,
+    ) -> impl Future<Output = Result<(), ()>> {
         let callback = self.callback_next_byte.clone();
 
         async move {
@@ -47,7 +53,7 @@ impl<T: Packet + Ord + 'static> StreamNextParser<T> {
 
             while let Some(byte) = stm.next().await {
                 if let Some(ref callback) = callback {
-                    callback.lock().unwrap()(byte);
+                    callback.lock().unwrap()(byte, cb_ctx);
                 }
             }
             Ok(())
@@ -79,12 +85,19 @@ impl<T: Packet + Ord + 'static> Parser for StreamNextParser<T> {
     fn c2s_parser_size(&self) -> usize {
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr);
+        let future = self.c2s_parser_inner(stream_ptr, ptr::null_mut());
         std::mem::size_of_val(&future)
     }
 
-    fn c2s_parser(&self, stream: *const PktStrm<Self::PacketType>) -> Option<ParserFuture> {
-        Some(self.pool().alloc_future(self.c2s_parser_inner(stream)))
+    fn c2s_parser(
+        &self,
+        stream: *const PktStrm<Self::PacketType>,
+        cb_ctx: *const c_void,
+    ) -> Option<ParserFuture> {
+        Some(
+            self.pool()
+                .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
+        )
     }
 }
 
@@ -93,6 +106,7 @@ mod tests {
     use super::*;
     use crate::test_utils::*;
     use crate::*;
+    use std::ptr;
 
     #[test]
     fn test_stream_next_single_packet() {
@@ -104,7 +118,7 @@ mod tests {
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8| {
+        let callback = move |byte: u8, _cb_ctx: *const c_void| {
             dbg!("in callback. push one byte");
             vec_clone.lock().unwrap().push(byte);
         };
@@ -112,7 +126,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamNextParser<CapPacket>>();
         parser.set_callback_next_byte(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         protolens.run_task(&mut task, pkt1);
 
@@ -131,14 +145,14 @@ mod tests {
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8| {
+        let callback = move |byte: u8, _cb_ctx: *const c_void| {
             vec_clone.lock().unwrap().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamNextParser<CapPacket>>();
         parser.set_callback_next_byte(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -156,14 +170,14 @@ mod tests {
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8| {
+        let callback = move |byte: u8, _cb_ctx: *const c_void| {
             vec_clone.lock().unwrap().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamNextParser<CapPacket>>();
         parser.set_callback_next_byte(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         protolens.run_task(&mut task, pkt);
 
@@ -194,14 +208,14 @@ mod tests {
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8| {
+        let callback = move |byte: u8, _cb_ctx: *const c_void| {
             vec_clone.lock().unwrap().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamNextParser<CapPacket>>();
         parser.set_callback_next_byte(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -246,14 +260,14 @@ mod tests {
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8| {
+        let callback = move |byte: u8, _cb_ctx: *const c_void| {
             vec_clone.lock().unwrap().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamNextParser<CapPacket>>();
         parser.set_callback_next_byte(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -298,14 +312,14 @@ mod tests {
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8| {
+        let callback = move |byte: u8, _cb_ctx: *const c_void| {
             vec_clone.lock().unwrap().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamNextParser<CapPacket>>();
         parser.set_callback_next_byte(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         // 乱序发送包：
         // 1. 先发第二个数据包
@@ -362,14 +376,14 @@ mod tests {
         let vec = Arc::new(Mutex::new(Vec::new()));
 
         let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8| {
+        let callback = move |byte: u8, _cb_ctx: *const c_void| {
             vec_clone.lock().unwrap().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamNextParser<CapPacket>>();
         parser.set_callback_next_byte(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
 
         protolens.run_task(&mut task, pkt_syn);
         protolens.run_task(&mut task, pkt2);

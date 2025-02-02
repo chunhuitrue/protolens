@@ -22,6 +22,7 @@ use crate::pool::PoolBox;
 use crate::Packet;
 use crate::PktStrm;
 use futures::Future;
+use std::ffi::c_void;
 use std::pin::Pin;
 use std::rc::Rc;
 
@@ -50,11 +51,19 @@ pub trait Parser {
         0
     }
 
-    fn c2s_parser(&self, _stream: *const PktStrm<Self::PacketType>) -> Option<ParserFuture> {
+    fn c2s_parser(
+        &self,
+        _stream: *const PktStrm<Self::PacketType>,
+        _cb_ctx: *const c_void,
+    ) -> Option<ParserFuture> {
         None
     }
 
-    fn s2c_parser(&self, _stream: *const PktStrm<Self::PacketType>) -> Option<ParserFuture> {
+    fn s2c_parser(
+        &self,
+        _stream: *const PktStrm<Self::PacketType>,
+        _cb_ctx: *const c_void,
+    ) -> Option<ParserFuture> {
         None
     }
 
@@ -62,6 +71,7 @@ pub trait Parser {
         &self,
         _c2s_stream: *const PktStrm<Self::PacketType>,
         _s2c_stream: *const PktStrm<Self::PacketType>,
+        _cb_ctx: *const c_void,
     ) -> Option<ParserFuture> {
         None
     }

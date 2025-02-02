@@ -13,9 +13,11 @@ use nom::{
     combinator::map_res,
     IResult,
 };
+use std::ffi::c_void;
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
+use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -44,8 +46,8 @@ impl fmt::Debug for MetaSmtp {
     }
 }
 
-pub trait CallbackFn: FnMut(String) + Send + Sync {}
-impl<F: FnMut(String) + Send + Sync> CallbackFn for F {}
+pub trait CallbackFn: FnMut(String, *const c_void) + Send + Sync {}
+impl<F: FnMut(String, *const c_void) + Send + Sync> CallbackFn for F {}
 type UserCallback = Arc<Mutex<dyn CallbackFn>>;
 
 pub struct SmtpParser<T: Packet + Ord + 'static> {
@@ -70,7 +72,11 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
         self.callback_user = Some(Arc::new(Mutex::new(callback)));
     }
 
-    fn c2s_parser_inner(&self, stream: *const PktStrm<T>) -> impl Future<Output = Result<(), ()>> {
+    fn c2s_parser_inner(
+        &self,
+        stream: *const PktStrm<T>,
+        cb_ctx: *const c_void,
+    ) -> impl Future<Output = Result<(), ()>> {
         let callback_user = self.callback_user.clone();
 
         async move {
@@ -86,7 +92,7 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
             // user
             let user = stm.readline().await?.trim_end_matches("\r\n").to_string();
             if let Some(cb) = callback_user {
-                cb.lock().unwrap()(user.clone());
+                cb.lock().unwrap()(user.clone(), cb_ctx);
             }
 
             // pass
@@ -141,12 +147,15 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
     fn c2s_parser_size(&self) -> usize {
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr);
+        let future = self.c2s_parser_inner(stream_ptr, ptr::null_mut());
         std::mem::size_of_val(&future)
     }
 
-    fn c2s_parser(&self, stream: *const PktStrm<T>) -> Option<ParserFuture> {
-        Some(self.pool().alloc_future(self.c2s_parser_inner(stream)))
+    fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *const c_void) -> Option<ParserFuture> {
+        Some(
+            self.pool()
+                .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
+        )
     }
 }
 
@@ -246,6 +255,7 @@ mod tests {
     use crate::test_utils::*;
     use crate::*;
     use std::env;
+    use std::ptr;
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -258,7 +268,7 @@ mod tests {
 
         let captured_user = Arc::new(Mutex::new(String::new()));
         let captured_user_clone = captured_user.clone();
-        let callback = move |user: String| {
+        let callback = move |user: String, _cb_ctx: *const c_void| {
             let mut guard = captured_user_clone.lock().unwrap();
             *guard = user;
             dbg!("in callback user", &guard);
@@ -267,7 +277,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<SmtpParser<CapPacket>>();
         parser.set_callback_user(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
         let mut push_count = 0;
 
         loop {

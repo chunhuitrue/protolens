@@ -13,6 +13,7 @@ use core::{
     pin::Pin,
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
+use std::ffi::c_void;
 use std::fmt;
 use std::rc::Rc;
 
@@ -27,12 +28,13 @@ pub struct Task<T: Packet + Ord + std::fmt::Debug + 'static> {
     c2s_state: TaskState,
     s2c_state: TaskState,
     bdir_state: TaskState,
+    cb_ctx: *const c_void, // 只在c语言api中使用
 }
 
 impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
-    pub(crate) fn new(pool: &Rc<Pool>) -> Self {
-        let stream_c2s = pool.alloc(|| PktStrm::new(pool));
-        let stream_s2c = pool.alloc(|| PktStrm::new(pool));
+    pub(crate) fn new(pool: &Rc<Pool>, cb_ctx: *const c_void) -> Self {
+        let stream_c2s = pool.alloc(|| PktStrm::new(pool, cb_ctx));
+        let stream_s2c = pool.alloc(|| PktStrm::new(pool, cb_ctx));
 
         Task {
             stream_c2s,
@@ -43,12 +45,16 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
             c2s_state: TaskState::Start,
             s2c_state: TaskState::Start,
             bdir_state: TaskState::Start,
+            cb_ctx,
         }
     }
 
-    pub(crate) fn new_with_parser<P: Parser<PacketType = T>>(parser: PoolBox<P>) -> Self {
+    pub(crate) fn new_with_parser<P: Parser<PacketType = T>>(
+        parser: PoolBox<P>,
+        cb_ctx: *mut c_void,
+    ) -> Self {
         let pool = Rc::clone(parser.pool());
-        let mut task = Task::new(&pool);
+        let mut task = Task::new(&pool, cb_ctx);
         task.init_parser(parser);
         task
     }
@@ -56,13 +62,10 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
     pub(crate) fn init_parser<P: Parser<PacketType = T>>(&mut self, parser: PoolBox<P>) {
         let p_stream_c2s: *const PktStrm<T> = &*self.stream_c2s;
         let p_stream_s2c: *const PktStrm<T> = &*self.stream_s2c;
-        let c2s_parser = parser.c2s_parser(p_stream_c2s);
-        let s2c_parser = parser.s2c_parser(p_stream_s2c);
-        let bdir_parser = parser.bdir_parser(p_stream_c2s, p_stream_s2c);
 
-        self.c2s_parser = c2s_parser;
-        self.s2c_parser = s2c_parser;
-        self.bdir_parser = bdir_parser;
+        self.c2s_parser = parser.c2s_parser(p_stream_c2s, self.cb_ctx);
+        self.s2c_parser = parser.s2c_parser(p_stream_s2c, self.cb_ctx);
+        self.bdir_parser = parser.bdir_parser(p_stream_c2s, p_stream_s2c, self.cb_ctx);
     }
 
     pub(crate) fn set_c2s_callback<F>(&mut self, callback: F)
@@ -78,14 +81,6 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
     {
         self.stream_s2c.set_callback(callback);
     }
-
-    // pub(crate) fn set_c2s_callback(&mut self, callback: StmCallback) {
-    //     self.stream_c2s.set_callback(callback);
-    // }
-
-    // pub(crate) fn set_s2c_callback(&mut self, callback: StmCallback) {
-    //     self.stream_s2c.set_callback(callback);
-    // }
 
     pub(crate) fn run(&mut self, pkt: T) {
         match pkt.direction() {
@@ -167,12 +162,6 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
             PktDirection::Server2Client => self.stream_s2c.len(),
             _ => 0,
         }
-    }
-}
-
-impl<T: Packet + Ord + std::fmt::Debug + 'static> Default for Task<T> {
-    fn default() -> Self {
-        Self::new(&Rc::new(Pool::new(1024, vec![2])))
     }
 }
 

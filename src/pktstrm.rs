@@ -13,16 +13,18 @@ use futures::Future;
 use futures_util::stream::{Stream, StreamExt};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::ffi::c_void;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::pin::Pin;
+use std::ptr;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::task::Context;
 use std::task::Poll;
 
-pub trait StmCallbackFn: FnMut(&[u8], u32) + Send + Sync {}
-impl<F> StmCallbackFn for F where F: FnMut(&[u8], u32) + Send + Sync {}
+pub trait StmCallbackFn: FnMut(&[u8], u32, *const c_void) + Send + Sync {}
+impl<F> StmCallbackFn for F where F: FnMut(&[u8], u32, *const c_void) + Send + Sync {}
 pub type StmCallback = Arc<Mutex<dyn StmCallbackFn>>;
 
 pub struct PktStrm<T>
@@ -38,6 +40,7 @@ where
     // 只有成功返回的才会被callback，比如hello\nxxx。对readline2来说，hello\n成功读取，然后调用callback。
     // 后续的xxx不会调用callback
     callback: Option<StmCallback>,
+    cb_ctx: *const c_void, // 只在c语言api中使用
 }
 
 impl<T> PktStrm<T>
@@ -45,7 +48,7 @@ where
     T: Packet,
     PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
 {
-    pub(crate) fn new(pool: &Rc<Pool>) -> Self {
+    pub(crate) fn new(pool: &Rc<Pool>, cb_ctx: *const c_void) -> Self {
         let read_buff = pool.alloc(|| [0u8; MAX_READ_BUFF]);
 
         PktStrm {
@@ -55,6 +58,7 @@ where
             next_seq: 0,
             fin: false,
             callback: None,
+            cb_ctx,
         }
     }
 
@@ -64,10 +68,6 @@ where
     {
         self.callback = Some(Arc::new(Mutex::new(callback)));
     }
-
-    // pub(crate) fn set_callback(&mut self, callback: StmCallback) {
-    //     self.callback = Some(callback);
-    // }
 
     pub(crate) fn push(&mut self, packet: T) {
         if self.fin {
@@ -372,7 +372,7 @@ where
 
     fn call_cb(&mut self, buff: &[u8], seq: u32) {
         if let Some(ref mut cb) = self.callback {
-            cb.lock().unwrap()(buff, seq);
+            cb.lock().unwrap()(buff, seq, self.cb_ctx);
         }
     }
 
@@ -380,7 +380,7 @@ where
         let seq = self.next_seq - self.read_buff_len as u32;
         let data = &self.read_buff[..len];
         if let Some(ref mut cb) = self.callback {
-            cb.lock().unwrap()(data, seq);
+            cb.lock().unwrap()(data, seq, self.cb_ctx);
         }
         let result = Ok((data, seq));
         self.read_buff_len = 0;
@@ -388,15 +388,15 @@ where
     }
 }
 
-impl<T> Default for PktStrm<T>
-where
-    T: Packet,
-    PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
-{
-    fn default() -> Self {
-        Self::new(&Rc::new(Pool::new(4096, vec![4])))
-    }
-}
+// impl<T> Default for PktStrm<T>
+// where
+//     T: Packet,
+//     PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
+// {
+//     fn default() -> Self {
+//         Self::new(&Rc::new(Pool::new(4096, vec![4])))
+//     }
+// }
 
 impl<T> Drop for PktStrm<T>
 where
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn test_pktstrm_push() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<CapPacket>::new(&pool);
+        let mut stm = PktStrm::<CapPacket>::new(&pool, ptr::null_mut());
 
         let pkt1 = make_pkt_data(123);
         let _ = pkt1.decode();
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
+        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
             sport: 12345,
@@ -557,7 +557,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek2() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<MyPacket>::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let pkt1 = MyPacket::new(1, false);
         stm.push(pkt1);
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn test_pktstrm_pop() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
+        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
             sport: 12345,
@@ -639,7 +639,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek_ord() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
+        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
             sport: 12345,
@@ -706,7 +706,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek_ord2() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<MyPacket>::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, false);
@@ -734,7 +734,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek_ord_retrans() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<MyPacket>::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, false);
@@ -783,7 +783,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek_ord_cover() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<MyPacket>::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, false);
@@ -831,7 +831,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek_drop() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<MyPacket>::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, false);
@@ -862,7 +862,7 @@ mod tests {
     #[test]
     fn test_pkt_fin() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<MyPacket>::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, true);
@@ -879,7 +879,7 @@ mod tests {
     #[test]
     fn test_3pkt_fin() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<MyPacket>::new(&pool);
+        let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(seq1, false);
@@ -909,7 +909,7 @@ mod tests {
     #[test]
     fn test_pktstrm_pop_ord() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
+        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
             sport: 12345,
@@ -980,7 +980,7 @@ mod tests {
     #[test]
     fn test_pktstrm_peek_ord_data() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
+        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
             sport: 12345,
@@ -1037,7 +1037,7 @@ mod tests {
     #[test]
     fn test_pktstrm_pop_ord_data() {
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool);
+        let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
             sport: 12345,
@@ -1104,7 +1104,7 @@ mod tests {
         let _ = pkt1.decode();
 
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<CapPacket>::new(&pool);
+        let mut stm = PktStrm::<CapPacket>::new(&pool, ptr::null_mut());
         stm.push(syn_pkt);
         stm.push(pkt1);
 
@@ -1127,7 +1127,7 @@ mod tests {
         let _ = pkt1.decode();
 
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<CapPacket>::new(&pool);
+        let mut stm = PktStrm::<CapPacket>::new(&pool, ptr::null_mut());
         stm.push(syn_pkt);
         stm.push(pkt1);
 
@@ -1150,7 +1150,7 @@ mod tests {
         let _ = pkt1.decode();
 
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<CapPacket>::new(&pool);
+        let mut stm = PktStrm::<CapPacket>::new(&pool, ptr::null_mut());
         stm.push(syn_pkt);
         stm.push(pkt1);
 
@@ -1175,7 +1175,7 @@ mod tests {
         let _ = pkt1.decode();
 
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<CapPacket>::new(&pool);
+        let mut stm = PktStrm::<CapPacket>::new(&pool, ptr::null_mut());
         stm.push(syn_pkt);
         stm.push(pkt1);
 
@@ -1212,7 +1212,7 @@ mod tests {
         let _ = pkt4.decode();
 
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<CapPacket>::new(&pool);
+        let mut stm = PktStrm::<CapPacket>::new(&pool, ptr::null_mut());
         stm.push(syn_pkt);
         stm.push(pkt2);
         stm.push(pkt3);
@@ -1244,7 +1244,7 @@ mod tests {
         let _ = pkt2.decode();
 
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<CapPacket>::new(&pool);
+        let mut stm = PktStrm::<CapPacket>::new(&pool, ptr::null_mut());
         stm.push(pkt1);
         stm.push(pkt2);
 
@@ -1283,7 +1283,7 @@ mod tests {
         let _ = fin_pkt.decode();
 
         let pool = Rc::new(Pool::new(4096, vec![64]));
-        let mut stm = PktStrm::<CapPacket>::new(&pool);
+        let mut stm = PktStrm::<CapPacket>::new(&pool, ptr::null_mut());
         stm.push(syn_pkt);
         stm.push(pkt1);
         stm.push(pkt4);
