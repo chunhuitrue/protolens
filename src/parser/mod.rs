@@ -1,11 +1,3 @@
-use crate::pool::Pool;
-use crate::pool::PoolBox;
-use crate::Packet;
-use crate::PktStrm;
-use futures::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-
 pub mod ordpacket;
 #[cfg(test)]
 pub mod rawpacket;
@@ -24,6 +16,14 @@ pub mod stream_readline2;
 pub mod stream_readn;
 #[cfg(test)]
 pub mod stream_readn2;
+
+use crate::pool::Pool;
+use crate::pool::PoolBox;
+use crate::Packet;
+use crate::PktStrm;
+use futures::Future;
+use std::pin::Pin;
+use std::rc::Rc;
 
 pub(crate) type ParserFuture = Pin<PoolBox<dyn Future<Output = Result<(), ()>>>>;
 

@@ -11,6 +11,9 @@ mod task;
 mod test_utils;
 mod util;
 
+use std::marker::PhantomData;
+use std::rc::Rc;
+
 pub use crate::ordpacket::OrdPacketParser;
 #[cfg(test)]
 pub use crate::rawpacket::RawPacketParser;
@@ -37,9 +40,6 @@ pub(crate) use parser::*;
 pub(crate) use pktstrm::*;
 pub(crate) use pool::*;
 pub(crate) use task::*;
-
-use std::marker::PhantomData;
-use std::rc::Rc;
 
 pub(crate) struct Stats {
     pub(crate) packet_count: usize,

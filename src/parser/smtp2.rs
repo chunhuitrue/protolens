@@ -302,6 +302,46 @@ mod tests {
     }
 
     #[test]
+    fn test_mail_from() {
+        let input = "MAIL FROM: <user12345@example123.com> SIZE=10557";
+        let result = mail_from(input);
+
+        assert!(result.is_ok());
+        let (_, ((mail, start), size)) = result.unwrap();
+
+        assert_eq!(mail, "user12345@example123.com");
+        assert_eq!(size, 10557);
+        assert_eq!(start, 12);
+        println!("mail: '{}' (offset: {})", mail, start);
+    }
+
+    #[test]
+    fn test_rcpt_to() {
+        let input = "RCPT TO: <user12345@example123.com>";
+        let result = rcpt_to(input);
+
+        assert!(result.is_ok());
+        let (_, (mail, start)) = result.unwrap();
+
+        assert_eq!(mail, "user12345@example123.com");
+        assert_eq!(start, 10); // "RCPT TO: <" 的长度
+        println!("邮件地址: '{}' (起始位置: {})", mail, start);
+    }
+
+    #[test]
+    fn test_subject() {
+        let input = "Subject: Test email subject\r\n";
+        let result = subject(input);
+
+        assert!(result.is_ok());
+        let (_, (subject, start)) = result.unwrap();
+
+        assert_eq!(subject, "Test email subject");
+        assert_eq!(start, 9); // "Subject: " 的长度
+        println!("主题: '{}' (起始位置: {})", subject, start);
+    }
+
+    #[test]
     fn test_smtp2_parser() {
         let project_root = env::current_dir().unwrap();
         let file_path = project_root.join("tests/res/smtp.pcap");
@@ -386,45 +426,5 @@ mod tests {
             1341098222,
             "Password sequence number should match packet sequence"
         );
-    }
-
-    #[test]
-    fn test_mail_from() {
-        let input = "MAIL FROM: <user12345@example123.com> SIZE=10557";
-        let result = mail_from(input);
-
-        assert!(result.is_ok());
-        let (_, ((mail, start), size)) = result.unwrap();
-
-        assert_eq!(mail, "user12345@example123.com");
-        assert_eq!(size, 10557);
-        assert_eq!(start, 12);
-        println!("mail: '{}' (offset: {})", mail, start);
-    }
-
-    #[test]
-    fn test_rcpt_to() {
-        let input = "RCPT TO: <user12345@example123.com>";
-        let result = rcpt_to(input);
-
-        assert!(result.is_ok());
-        let (_, (mail, start)) = result.unwrap();
-
-        assert_eq!(mail, "user12345@example123.com");
-        assert_eq!(start, 10); // "RCPT TO: <" 的长度
-        println!("邮件地址: '{}' (起始位置: {})", mail, start);
-    }
-
-    #[test]
-    fn test_subject() {
-        let input = "Subject: Test email subject\r\n";
-        let result = subject(input);
-
-        assert!(result.is_ok());
-        let (_, (subject, start)) = result.unwrap();
-
-        assert_eq!(subject, "Test email subject");
-        assert_eq!(start, 9); // "Subject: " 的长度
-        println!("主题: '{}' (起始位置: {})", subject, start);
     }
 }
