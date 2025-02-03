@@ -11,9 +11,10 @@ mod task;
 mod test_utils;
 mod util;
 
-use std::ffi::c_void;
-use std::marker::PhantomData;
-use std::rc::Rc;
+pub use crate::packet::Packet;
+pub use crate::packet::PktDirection;
+pub use crate::packet::TransProto;
+pub use crate::task::Task;
 
 pub use crate::ordpacket::OrdPacketParser;
 #[cfg(test)]
@@ -34,25 +35,24 @@ pub use crate::stream_readn::StreamReadnParser;
 #[cfg(test)]
 pub use crate::stream_readn2::StreamReadn2Parser;
 
-pub(crate) use config::*;
-pub(crate) use heap::*;
-pub(crate) use packet::*;
-pub(crate) use parser::*;
-pub(crate) use pktstrm::*;
-pub(crate) use pool::*;
-pub(crate) use task::*;
+use std::ffi::c_void;
+use std::marker::PhantomData;
+use std::rc::Rc;
+
+use config::*;
+use heap::*;
+use packet::*;
+use parser::*;
+use pktstrm::*;
+use pool::*;
 
 pub(crate) struct Stats {
     pub(crate) packet_count: usize,
-    // 其他统计信息
 }
 
 impl Stats {
     pub(crate) fn new() -> Self {
-        Stats {
-            packet_count: 0,
-            // 初始化其他统计信息
-        }
+        Stats { packet_count: 0 }
     }
 }
 
