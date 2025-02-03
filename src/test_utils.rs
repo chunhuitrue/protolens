@@ -1,6 +1,5 @@
 #![allow(unused)]
 
-use crate::{Packet, TransProto};
 use etherparse::*;
 use pcap::Capture as PcapCap;
 use pcap::Offline;
@@ -11,6 +10,8 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crate::PktDirection;
+use crate::{Packet, TransProto};
+
 pub(crate) const SMTP_PORT_NET: u16 = 25;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
