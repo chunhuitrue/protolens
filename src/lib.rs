@@ -39,6 +39,7 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use crate::task::TaskInner;
 use config::*;
 use heap::*;
 use packet::*;
@@ -84,16 +85,16 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     //     包到来，但暂时未识别：先new task
     //     然后task run（push 包）
     //     几个包过后已经识别，可以确认parser，这时：new_parser, task_set_parser，task_set_c2s_callback
-    pub fn new_task(&self, cb_ctx: *mut c_void) -> PoolBox<Task<P>> {
-        self.pool.alloc(|| Task::new(&self.pool, cb_ctx))
+    pub fn new_task(&self, cb_ctx: *mut c_void) -> Task<P> {
+        Task::new(self.pool.alloc(|| TaskInner::new(&self.pool, cb_ctx)))
     }
 
-    pub fn new_parser<T: Parser<PacketType = P>>(&self) -> PoolBox<T> {
-        self.pool.alloc(|| {
+    pub fn new_parser<T: Parser<PacketType = P>>(&self) -> ParserHandle<P, T> {
+        ParserHandle::new(self.pool.alloc(|| {
             let mut parser = T::new();
             parser.set_pool(Rc::clone(&self.pool));
             parser
-        })
+        }))
     }
 
     // 为已存在的 task 设置 parser
@@ -101,47 +102,50 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     pub fn task_set_parser<T: Parser<PacketType = P>>(
         &self,
         task: &mut Task<P>,
-        parser: PoolBox<T>,
+        parser: ParserHandle<P, T>,
     ) {
-        task.init_parser(parser);
+        task.as_inner_mut().init_parser(parser.into_inner());
     }
 
     pub fn task_set_c2s_callback<F>(&self, task: &mut Task<P>, callback: F)
     where
         F: StmCallbackFn + 'static,
     {
-        task.set_c2s_callback(callback);
+        task.as_inner_mut().set_c2s_callback(callback);
     }
 
     pub fn task_set_s2c_callback<F>(&self, task: &mut Task<P>, callback: F)
     where
         F: StmCallbackFn + 'static,
     {
-        task.set_s2c_callback(callback);
+        task.as_inner_mut().set_s2c_callback(callback);
     }
 
     // 如果第一个包就已经识别成功。可以确定用哪个parser。使用这个api
     pub fn new_task_with_parser<T: Parser<PacketType = P>>(
         &self,
-        parser: PoolBox<T>,
+        parser: ParserHandle<P, T>,
         cb_ctx: *mut c_void,
-    ) -> PoolBox<Task<P>> {
-        self.pool.alloc(|| Task::new_with_parser(parser, cb_ctx))
+    ) -> Task<P> {
+        Task::new(
+            self.pool
+                .alloc(|| TaskInner::new_with_parser(parser.into_inner(), cb_ctx)),
+        )
+    }
+
+    pub fn run_task(&mut self, task: &mut Task<P>, pkt: P) {
+        task.as_inner_mut().run(pkt);
+        self.stats.packet_count += 1;
     }
 
     pub fn config(&self) -> &Config {
         &self.config
     }
 
-    pub fn run_task(&mut self, task: &mut Task<P>, pkt: P) {
-        task.run(pkt);
-        self.stats.packet_count += 1;
-    }
-
     fn objs_size(_config: &Config) -> Vec<usize> {
         let mut res = Vec::new();
 
-        let task_size = std::mem::size_of::<Task<P>>();
+        let task_size = std::mem::size_of::<TaskInner<P>>();
         res.push(task_size);
         let pktstrm_size = std::mem::size_of::<PktStrm<P>>();
         res.push(pktstrm_size);

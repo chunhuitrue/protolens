@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
@@ -7,7 +5,6 @@ use crate::PktDirection;
 use crate::PktStrm;
 use crate::Pool;
 use crate::PoolBox;
-use crate::StmCallback;
 use crate::StmCallbackFn;
 use core::{
     pin::Pin,
@@ -15,11 +12,95 @@ use core::{
 };
 use std::ffi::c_void;
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
-const MAX_CHANNEL_SIZE: usize = 64;
+pub trait PacketBind: Packet + Ord + std::fmt::Debug + 'static {}
+impl<T: Packet + Ord + std::fmt::Debug + 'static> PacketBind for T {}
 
-pub struct Task<T: Packet + Ord + std::fmt::Debug + 'static> {
+// 为了不对用户暴露Poolbox<Task>,屏蔽poolbox
+#[repr(transparent)]
+pub struct Task<P: PacketBind>(PoolBox<TaskInner<P>>);
+
+impl<P: PacketBind> Task<P> {
+    pub(crate) fn new(inner: PoolBox<TaskInner<P>>) -> Self {
+        Self(inner)
+    }
+
+    pub(crate) fn as_inner_mut(&mut self) -> &mut PoolBox<TaskInner<P>> {
+        &mut self.0
+    }
+
+    // /// 从原始指针创建 TaskHandle（unsafe，仅用于 FFI）
+    // ///
+    // /// # Safety
+    // /// 指针必须是有效的 Task 指针，且由内存池分配
+    // pub(crate) unsafe fn from_raw(ptr: *mut Task<P>) -> Self {
+    //     Self(PoolBox::from_raw(ptr))
+    // }
+
+    // /// 转换为原始指针（unsafe，仅用于 FFI）
+    // ///
+    // /// # Safety
+    // /// 返回的指针仍由 TaskHandle 拥有，调用者不能释放它
+    // pub(crate) fn as_ptr(&self) -> *const Task<P> {
+    //     self.0.as_ref() as *const _
+    // }
+
+    // /// 转换为可变原始指针（unsafe，仅用于 FFI）
+    // ///
+    // /// # Safety
+    // /// 返回的指针仍由 TaskHandle 拥有，调用者不能释放它
+    // pub(crate) fn as_mut_ptr(&mut self) -> *mut Task<P> {
+    //     self.0.as_mut() as *mut _
+    // }
+}
+
+impl<P: PacketBind> fmt::Debug for Task<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaskHandle")
+            .field("inner", &self.0)
+            .finish()
+    }
+}
+
+impl<P: PacketBind> Deref for Task<P> {
+    type Target = TaskInner<P>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<P: PacketBind> DerefMut for Task<P> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+// // 为了支持在 HashMap 中使用，实现必要的 trait
+// impl<P: PacketBind> PartialEq for TaskHandle<P>
+// where
+//     Task<P>: PartialEq,
+// {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.0 == other.0
+//     }
+// }
+
+// impl<P: Eq> Eq for TaskHandle<P: PacketBind> where Task<P>: Eq {}
+
+// // 如果需要在 HashMap 中作为 key 使用，还需要实现 Hash
+// impl<P: std::hash::Hash> std::hash::Hash for TaskHandle<P>
+// where
+//     Task<P>: std::hash::Hash,
+// {
+//     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+//         self.0.hash(state)
+//     }
+// }
+
+pub struct TaskInner<T: PacketBind> {
     stream_c2s: PoolBox<PktStrm<T>>,
     stream_s2c: PoolBox<PktStrm<T>>,
     c2s_parser: Option<ParserFuture>,
@@ -31,12 +112,12 @@ pub struct Task<T: Packet + Ord + std::fmt::Debug + 'static> {
     cb_ctx: *const c_void, // 只在c语言api中使用
 }
 
-impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
+impl<T: PacketBind> TaskInner<T> {
     pub(crate) fn new(pool: &Rc<Pool>, cb_ctx: *const c_void) -> Self {
         let stream_c2s = pool.alloc(|| PktStrm::new(pool, cb_ctx));
         let stream_s2c = pool.alloc(|| PktStrm::new(pool, cb_ctx));
 
-        Task {
+        TaskInner {
             stream_c2s,
             stream_s2c,
             c2s_parser: None,
@@ -54,7 +135,7 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
         cb_ctx: *mut c_void,
     ) -> Self {
         let pool = Rc::clone(parser.pool());
-        let mut task = Task::new(&pool, cb_ctx);
+        let mut task = TaskInner::new(&pool, cb_ctx);
         task.init_parser(parser);
         task
     }
@@ -165,7 +246,7 @@ impl<T: Packet + Ord + std::fmt::Debug + 'static> Task<T> {
     }
 }
 
-impl<T: Packet + Ord + std::fmt::Debug + 'static> fmt::Debug for Task<T> {
+impl<T: Packet + Ord + std::fmt::Debug + 'static> fmt::Debug for TaskInner<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Task")
             .field("c2s_stream", &self.stream_c2s)
