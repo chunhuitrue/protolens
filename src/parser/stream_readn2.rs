@@ -1,7 +1,7 @@
 use crate::pool::Pool;
 use crate::Packet;
-use crate::ParserInner;
 use crate::ParserFuture;
+use crate::ParserInner;
 use crate::PktStrm;
 use std::ffi::c_void;
 use std::future::Future;
@@ -113,7 +113,6 @@ mod tests {
     use super::*;
     use crate::test_utils::*;
     use crate::*;
-    use std::ptr;
 
     #[test]
     fn test_stream_readn2_single_packet() {
@@ -134,7 +133,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamReadn2Parser<CapPacket>>();
         parser.set_callback_readn(callback);
-        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
+        let mut task = protolens.new_task_with_parser(parser);
 
         protolens.run_task(&mut task, pkt1);
 
@@ -165,7 +164,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<StreamReadn2Parser<CapPacket>>();
         parser.set_callback_readn(callback);
-        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
+        let mut task = protolens.new_task_with_parser(parser);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);

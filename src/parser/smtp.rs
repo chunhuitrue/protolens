@@ -3,8 +3,8 @@
 use crate::pktstrm::*;
 use crate::pool::Pool;
 use crate::Packet;
-use crate::ParserInner;
 use crate::ParserFuture;
+use crate::ParserInner;
 use crate::PktStrm;
 use futures_util::SinkExt;
 use nom::{
@@ -277,7 +277,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<SmtpParser<CapPacket>>();
         parser.set_callback_user(callback);
-        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
+        let mut task = protolens.new_task_with_parser(parser);
         let mut push_count = 0;
 
         loop {

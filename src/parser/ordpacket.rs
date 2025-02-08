@@ -3,8 +3,8 @@
 // use crate::pktstrm::*;
 use crate::pool::Pool;
 use crate::Packet;
-use crate::ParserInner;
 use crate::ParserFuture;
+use crate::ParserInner;
 use crate::PktStrm;
 use std::ffi::c_void;
 use std::future::Future;
@@ -109,7 +109,6 @@ mod tests {
     use crate::test_utils::*;
     use crate::*;
     use std::env;
-    use std::ptr;
     use std::rc::Rc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -158,7 +157,7 @@ mod tests {
         println!("Setting callback");
         parser.set_callback_ord_pkt(callback);
         println!("Creating task");
-        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
+        let mut task = protolens.new_task_with_parser(parser);
         println!("Task created");
         let mut push_count = 0;
 
@@ -217,7 +216,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<OrdPacketParser<CapPacket>>();
         parser.set_callback_ord_pkt(callback);
-        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
+        let mut task = protolens.new_task_with_parser(parser);
 
         // 乱序发送包
         protolens.run_task(&mut task, pkt1); // seq1
@@ -262,7 +261,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<OrdPacketParser<CapPacket>>();
         parser.set_callback_ord_pkt(callback);
-        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
+        let mut task = protolens.new_task_with_parser(parser);
 
         // 发送包
         protolens.run_task(&mut task, pkt_syn); // SYN包

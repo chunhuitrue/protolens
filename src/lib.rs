@@ -37,6 +37,7 @@ pub use crate::stream_readn2::StreamReadn2Parser;
 
 use std::ffi::c_void;
 use std::marker::PhantomData;
+use std::ptr;
 use std::rc::Rc;
 
 use crate::task::TaskInner;
@@ -85,7 +86,11 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     //     包到来，但暂时未识别：先new task
     //     然后task run（push 包）
     //     几个包过后已经识别，可以确认parser，这时：new_parser, task_set_parser，task_set_c2s_callback
-    pub fn new_task(&self, cb_ctx: *mut c_void) -> Task<P> {
+    pub fn new_task(&self) -> Task<P> {
+        self.new_task_inner(ptr::null_mut())
+    }
+
+    fn new_task_inner(&self, cb_ctx: *mut c_void) -> Task<P> {
         Task::new(self.pool.alloc(|| TaskInner::new(&self.pool, cb_ctx)))
     }
 
@@ -123,6 +128,13 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
 
     // 如果第一个包就已经识别成功。可以确定用哪个parser。使用这个api
     pub fn new_task_with_parser<T: ParserInner<PacketType = P>>(
+        &self,
+        parser: Parser<P, T>,
+    ) -> Task<P> {
+        self.new_task_with_parser_inner(parser, ptr::null_mut())
+    }
+
+    fn new_task_with_parser_inner<T: ParserInner<PacketType = P>>(
         &self,
         parser: Parser<P, T>,
         cb_ctx: *mut c_void,
@@ -212,13 +224,12 @@ mod tests {
     use crate::parser::smtp::SmtpParser;
     use crate::test_utils::MyPacket;
     use crate::test_utils::{CapPacket, PacketRef};
-    use std::ptr;
     use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_protolens_basic() {
         let mut protolens = Prolens::<MyPacket>::default();
-        let mut task = protolens.new_task(ptr::null_mut());
+        let mut task = protolens.new_task();
 
         let pkt = MyPacket::new(1, false);
         protolens.run_task(&mut task, pkt);
@@ -228,7 +239,7 @@ mod tests {
     fn test_protolens_with_parser() {
         let mut protolens = Prolens::<MyPacket>::default();
         let parser = protolens.new_parser::<SmtpParser<MyPacket>>();
-        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
+        let mut task = protolens.new_task_with_parser(parser);
 
         let pkt = MyPacket::new(1, false);
         protolens.run_task(&mut task, pkt);
@@ -248,8 +259,8 @@ mod tests {
     fn test_protolens_multiple_tasks() {
         let mut protolens = Prolens::<MyPacket>::default();
 
-        let mut task1 = protolens.new_task(ptr::null_mut());
-        let mut task2 = protolens.new_task(ptr::null_mut());
+        let mut task1 = protolens.new_task();
+        let mut task2 = protolens.new_task();
 
         let pkt1 = MyPacket::new(1, false);
         let pkt2 = MyPacket::new(2, false);
@@ -262,7 +273,7 @@ mod tests {
     fn test_protolens_parser() {
         let mut protolens = Prolens::<MyPacket>::default();
         let parser = protolens.new_parser::<SmtpParser<MyPacket>>();
-        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
+        let mut task = protolens.new_task_with_parser(parser);
 
         let pkt = MyPacket::new(1, false);
         protolens.run_task(&mut task, pkt);
@@ -279,7 +290,7 @@ mod tests {
             vec_clone.lock().unwrap().push(pkt.seq());
         });
 
-        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
+        let mut task = protolens.new_task_with_parser(parser);
 
         let pkt1 = MyPacket::new(1, false);
         let pkt2 = MyPacket::new(2, true);
@@ -386,7 +397,7 @@ mod tests {
     #[test]
     fn test_task_set_parser() {
         let mut protolens = Prolens::<MyPacket>::default();
-        let mut task = protolens.new_task(ptr::null_mut());
+        let mut task = protolens.new_task();
 
         // 先运行一些数据包
         let pkt1 = MyPacket::new(1, false);

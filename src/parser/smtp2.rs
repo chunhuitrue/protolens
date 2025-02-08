@@ -1,7 +1,7 @@
 use crate::pool::Pool;
 use crate::Packet;
-use crate::ParserInner;
 use crate::ParserFuture;
+use crate::ParserInner;
 use crate::PktStrm;
 use nom::{
     bytes::complete::{tag, take_till, take_while},
@@ -275,7 +275,6 @@ mod tests {
     use crate::test_utils::*;
     use crate::*;
     use std::env;
-    use std::ptr;
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -389,7 +388,7 @@ mod tests {
         let mut parser = protolens.new_parser::<SmtpParser2<CapPacket>>();
         parser.set_callback_user(user_callback);
         parser.set_callback_pass(pass_callback);
-        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
+        let mut task = protolens.new_task_with_parser(parser);
         let mut push_count = 0;
 
         loop {

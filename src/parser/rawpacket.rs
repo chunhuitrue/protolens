@@ -1,7 +1,7 @@
 use crate::pool::Pool;
 use crate::Packet;
-use crate::ParserInner;
 use crate::ParserFuture;
+use crate::ParserInner;
 use crate::PktStrm;
 use crate::Prolens;
 use std::ffi::c_void;
@@ -105,7 +105,6 @@ mod tests {
     use super::*;
     use crate::test_utils::*;
     use crate::*;
-    use std::ptr;
 
     #[test]
     fn test_rawpacket_parser() {
@@ -140,7 +139,7 @@ mod tests {
         let mut protolens = Prolens::<CapPacket>::default();
         let mut parser = protolens.new_parser::<RawPacketParser<CapPacket>>();
         parser.set_callback_raw_pkt(callback);
-        let mut task = protolens.new_task_with_parser(parser, ptr::null_mut());
+        let mut task = protolens.new_task_with_parser(parser);
 
         dbg!("1 task run");
         protolens.run_task(&mut task, pkt3);
