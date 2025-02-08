@@ -90,7 +90,7 @@ impl<T: Packet + Ord + 'static> SmtpParser2<T> {
             if let Some(cb) = callback_pass.clone() {
                 cb.lock().unwrap()(pass, seq, cb_ctx);
             }
-            dbg!(std::str::from_utf8(pass).expect("应该是utf8"), seq);
+            dbg!(std::str::from_utf8(pass).expect("need utf8"), seq);
 
             // mail from
             let (from, seq) = stm.read_clean_line_str().await?;
