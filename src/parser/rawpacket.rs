@@ -1,6 +1,6 @@
 use crate::pool::Pool;
 use crate::Packet;
-use crate::Parser;
+use crate::ParserInner;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
@@ -70,7 +70,7 @@ impl<T: Packet + Ord + 'static> Default for RawPacketParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> Parser for RawPacketParser<T> {
+impl<T: Packet + Ord + 'static> ParserInner for RawPacketParser<T> {
     type PacketType = T;
 
     fn new() -> Self {

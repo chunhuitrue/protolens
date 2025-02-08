@@ -31,9 +31,9 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 #[repr(transparent)]
-pub struct ParserHandle<P: PacketBind, T: Parser<PacketType = P>>(PoolBox<T>);
+pub struct Parser<P: PacketBind, T: ParserInner<PacketType = P>>(PoolBox<T>);
 
-impl<P: PacketBind, T: Parser<PacketType = P>> ParserHandle<P, T> {
+impl<P: PacketBind, T: ParserInner<PacketType = P>> Parser<P, T> {
     pub(crate) fn new(inner: PoolBox<T>) -> Self {
         Self(inner)
     }
@@ -43,7 +43,7 @@ impl<P: PacketBind, T: Parser<PacketType = P>> ParserHandle<P, T> {
     }
 }
 
-impl<P: PacketBind, T: Parser<PacketType = P>> Deref for ParserHandle<P, T> {
+impl<P: PacketBind, T: ParserInner<PacketType = P>> Deref for Parser<P, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -51,7 +51,7 @@ impl<P: PacketBind, T: Parser<PacketType = P>> Deref for ParserHandle<P, T> {
     }
 }
 
-impl<P: PacketBind, T: Parser<PacketType = P>> DerefMut for ParserHandle<P, T> {
+impl<P: PacketBind, T: ParserInner<PacketType = P>> DerefMut for Parser<P, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -59,7 +59,7 @@ impl<P: PacketBind, T: Parser<PacketType = P>> DerefMut for ParserHandle<P, T> {
 
 pub(crate) type ParserFuture = Pin<PoolBox<dyn Future<Output = Result<(), ()>>>>;
 
-pub trait Parser {
+pub trait ParserInner {
     type PacketType: Packet + Ord + 'static;
 
     fn new() -> Self

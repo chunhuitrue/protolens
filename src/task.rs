@@ -1,5 +1,5 @@
 use crate::Packet;
-use crate::Parser;
+use crate::ParserInner;
 use crate::ParserFuture;
 use crate::PktDirection;
 use crate::PktStrm;
@@ -130,7 +130,7 @@ impl<T: PacketBind> TaskInner<T> {
         }
     }
 
-    pub(crate) fn new_with_parser<P: Parser<PacketType = T>>(
+    pub(crate) fn new_with_parser<P: ParserInner<PacketType = T>>(
         parser: PoolBox<P>,
         cb_ctx: *mut c_void,
     ) -> Self {
@@ -140,7 +140,7 @@ impl<T: PacketBind> TaskInner<T> {
         task
     }
 
-    pub(crate) fn init_parser<P: Parser<PacketType = T>>(&mut self, parser: PoolBox<P>) {
+    pub(crate) fn init_parser<P: ParserInner<PacketType = T>>(&mut self, parser: PoolBox<P>) {
         let p_stream_c2s: *const PktStrm<T> = &*self.stream_c2s;
         let p_stream_s2c: *const PktStrm<T> = &*self.stream_s2c;
 

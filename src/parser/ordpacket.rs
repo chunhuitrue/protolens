@@ -3,7 +3,7 @@
 // use crate::pktstrm::*;
 use crate::pool::Pool;
 use crate::Packet;
-use crate::Parser;
+use crate::ParserInner;
 use crate::ParserFuture;
 use crate::PktStrm;
 use std::ffi::c_void;
@@ -73,7 +73,7 @@ impl<T: Packet + Ord + 'static> Default for OrdPacketParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> Parser for OrdPacketParser<T> {
+impl<T: Packet + Ord + 'static> ParserInner for OrdPacketParser<T> {
     type PacketType = T;
 
     fn new() -> Self {

@@ -89,8 +89,8 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         Task::new(self.pool.alloc(|| TaskInner::new(&self.pool, cb_ctx)))
     }
 
-    pub fn new_parser<T: Parser<PacketType = P>>(&self) -> ParserHandle<P, T> {
-        ParserHandle::new(self.pool.alloc(|| {
+    pub fn new_parser<T: ParserInner<PacketType = P>>(&self) -> Parser<P, T> {
+        Parser::new(self.pool.alloc(|| {
             let mut parser = T::new();
             parser.set_pool(Rc::clone(&self.pool));
             parser
@@ -99,10 +99,10 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
 
     // 为已存在的 task 设置 parser
     // 这个方法用于在运行了一些数据包并确定了合适的 parser 类型后调用
-    pub fn task_set_parser<T: Parser<PacketType = P>>(
+    pub fn task_set_parser<T: ParserInner<PacketType = P>>(
         &self,
         task: &mut Task<P>,
-        parser: ParserHandle<P, T>,
+        parser: Parser<P, T>,
     ) {
         task.as_inner_mut().init_parser(parser.into_inner());
     }
@@ -122,9 +122,9 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     }
 
     // 如果第一个包就已经识别成功。可以确定用哪个parser。使用这个api
-    pub fn new_task_with_parser<T: Parser<PacketType = P>>(
+    pub fn new_task_with_parser<T: ParserInner<PacketType = P>>(
         &self,
-        parser: ParserHandle<P, T>,
+        parser: Parser<P, T>,
         cb_ctx: *mut c_void,
     ) -> Task<P> {
         Task::new(
@@ -192,7 +192,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Default for Prolens<P> {
 fn get_parser_sizes<P, T>(pool: &Rc<Pool>, res: &mut Vec<usize>)
 where
     P: Packet + Ord + 'static,
-    T: Parser<PacketType = P>,
+    T: ParserInner<PacketType = P>,
 {
     let mut parser = T::new();
     parser.set_pool(pool.clone());

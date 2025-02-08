@@ -1,6 +1,6 @@
 use crate::pool::Pool;
 use crate::Packet;
-use crate::Parser;
+use crate::ParserInner;
 use crate::ParserFuture;
 use crate::PktStrm;
 use futures::StreamExt;
@@ -67,7 +67,7 @@ impl<T: Packet + Ord + 'static> Default for StreamNextParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> Parser for StreamNextParser<T> {
+impl<T: Packet + Ord + 'static> ParserInner for StreamNextParser<T> {
     type PacketType = T;
 
     fn new() -> Self {

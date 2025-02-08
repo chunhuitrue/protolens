@@ -1,6 +1,6 @@
 use crate::pool::Pool;
 use crate::Packet;
-use crate::Parser;
+use crate::ParserInner;
 use crate::ParserFuture;
 use crate::PktStrm;
 use nom::{
@@ -131,7 +131,7 @@ impl<T: Packet + Ord + 'static> Default for SmtpParser2<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> Parser for SmtpParser2<T> {
+impl<T: Packet + Ord + 'static> ParserInner for SmtpParser2<T> {
     type PacketType = T;
 
     fn new() -> Self {

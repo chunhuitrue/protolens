@@ -1,6 +1,6 @@
 use crate::pool::Pool;
 use crate::Packet;
-use crate::Parser;
+use crate::ParserInner;
 use crate::ParserFuture;
 use crate::PktStrm;
 use std::ffi::c_void;
@@ -70,7 +70,7 @@ impl<T: Packet + Ord + 'static> Default for StreamReadline2Parser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> Parser for StreamReadline2Parser<T> {
+impl<T: Packet + Ord + 'static> ParserInner for StreamReadline2Parser<T> {
     type PacketType = T;
 
     fn new() -> Self {
