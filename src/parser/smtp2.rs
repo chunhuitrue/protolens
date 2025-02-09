@@ -74,9 +74,19 @@ impl<T: Packet + Ord + 'static> SmtpParser2<T> {
                 stm = &mut *(stream as *mut PktStrm<T>);
             }
 
-            // 忽略前面不需要的命令
-            let _ = stm.readline2().await?;
-            let _ = stm.readline2().await?;
+            // 验证EHLO命令,如果EHLO命令不正确，则返回错误，无法继续解析
+            let (ehlo_line, _) = stm.readline2().await?;
+            if !starts_with_ehlo(ehlo_line) {
+                dbg!("First line is not EHLO command");
+                return Err(());
+            }
+
+            // 读取AUTH LOGIN命令
+            let (auth_line, _) = stm.readline2().await?;
+            if !starts_with_auth_login(auth_line) {
+                dbg!("Second line is not AUTH LOGIN command");
+                return Err(());
+            }
 
             // user
             let (user, seq) = stm.read_clean_line().await?;
@@ -269,6 +279,22 @@ fn content_type_ext(input: &str, cont_rady: bool) -> IResult<&str, &str> {
     Ok((input, bdry))
 }
 
+fn starts_with_ehlo(input: &[u8]) -> bool {
+    if input.len() < 4 {
+        return false;
+    }
+    let upper = input[..4].to_ascii_uppercase();
+    upper == b"EHLO"
+}
+
+fn starts_with_auth_login(input: &[u8]) -> bool {
+    if input.len() < 10 {
+        return false;
+    }
+    let upper = input[..10].to_ascii_uppercase();
+    upper == b"AUTH LOGIN"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,6 +373,65 @@ mod tests {
         assert_eq!(subject, "Test email subject");
         assert_eq!(start, 9); // "Subject: " 的长度
         println!("主题: '{}' (起始位置: {})", subject, start);
+    }
+
+    #[test]
+    fn test_starts_with_ehlo() {
+        // 正确的情况
+        assert!(starts_with_ehlo(b"EHLO example.com"));
+        assert!(starts_with_ehlo(b"ehlo example.com"));
+        assert!(starts_with_ehlo(b"EhLo example.com"));
+
+        // 错误的情况
+        assert!(!starts_with_ehlo(b"HELO example.com")); // 错误的命令
+        assert!(!starts_with_ehlo(b"EHL")); // 太短
+        assert!(!starts_with_ehlo(b"")); // 空输入
+        assert!(!starts_with_ehlo(b"MAIL FROM:")); // 完全不同的命令
+    }
+
+    #[test]
+    fn test_starts_with_auth_login() {
+        // 正确的情况
+        assert!(starts_with_auth_login(b"AUTH LOGIN"));
+        assert!(starts_with_auth_login(b"auth login"));
+        assert!(starts_with_auth_login(b"Auth Login credentials"));
+
+        // 错误的情况
+        assert!(!starts_with_auth_login(b"AUTH PLAIN")); // 错误的认证方式
+        assert!(!starts_with_auth_login(b"AUTH")); // 不完整
+        assert!(!starts_with_auth_login(b"")); // 空输入
+        assert!(!starts_with_auth_login(b"LOGIN")); // 缺少AUTH前缀
+    }
+
+    #[test]
+    fn test_smtp_command_sequence() {
+        // 构造错误的SMTP命令序列包
+        let seq1 = 1;
+        let wrong_command = *b"HELO tes\r\n"; // 使用数组而不是Vec
+        let pkt1 = build_pkt_line(seq1, wrong_command);
+        let _ = pkt1.decode();
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        let parser = protolens.new_parser::<SmtpParser2<CapPacket>>();
+        let mut task = protolens.new_task_with_parser(parser);
+
+        // 运行解析器，应该会因为不是EHLO命令而失败
+        let result = protolens.run_task(&mut task, pkt1);
+        assert_eq!(result, Some(Err(())), "应该返回错误,因为命令不是EHLO");
+
+        // 构造正确的SMTP命令序列包作为对比
+        let seq2 = 1;
+        let correct_commands = *b"EHLO tes\r\n";
+        let pkt2 = build_pkt_line(seq2, correct_commands);
+        let _ = pkt2.decode();
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        let parser = protolens.new_parser::<SmtpParser2<CapPacket>>();
+        let mut task = protolens.new_task_with_parser(parser);
+
+        // 运行解析器，应该成功处理正确的命令序列
+        let result = protolens.run_task(&mut task, pkt2);
+        assert_eq!(result, None, "应该返回None,因为解析器还在等待更多数据");
     }
 
     #[test]

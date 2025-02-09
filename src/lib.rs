@@ -145,9 +145,12 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         )
     }
 
-    pub fn run_task(&mut self, task: &mut Task<P>, pkt: P) {
-        task.as_inner_mut().run(pkt);
+    // None - 表示解析器还在pending状态或没有parser
+    // Some(Ok(())) - 表示解析成功完成
+    // Some(Err(())) - 表示解析遇到错误
+    pub fn run_task(&mut self, task: &mut Task<P>, pkt: P) -> Option<Result<(), ()>> {
         self.stats.packet_count += 1;
+        task.as_inner_mut().run(pkt)
     }
 
     pub fn config(&self) -> &Config {

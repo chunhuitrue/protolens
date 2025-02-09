@@ -1,6 +1,6 @@
 use crate::Packet;
-use crate::ParserInner;
 use crate::ParserFuture;
+use crate::ParserInner;
 use crate::PktDirection;
 use crate::PktStrm;
 use crate::Pool;
@@ -163,66 +163,94 @@ impl<T: PacketBind> TaskInner<T> {
         self.stream_s2c.set_callback(callback);
     }
 
-    pub(crate) fn run(&mut self, pkt: T) {
+    // None - 表示解析器还在pending状态或没有parser
+    // Some(Ok(())) - 表示解析成功完成
+    // Some(Err(())) - 表示解析遇到错误
+    pub(crate) fn run(&mut self, pkt: T) -> Option<Result<(), ()>> {
         match pkt.direction() {
             PktDirection::Client2Server => {
                 self.stream_c2s.push(pkt);
-                self.c2s_run();
+                return self.c2s_run();
             }
             PktDirection::Server2Client => {
                 self.stream_s2c.push(pkt);
-                self.s2c_run();
+                return self.s2c_run();
             }
-            _ => return,
-        }
-        self.bdir_run();
+            PktDirection::BiDirection => None,
+            _ => Some(Err::<T, ()>(())),
+        };
+        self.bdir_run()
     }
 
-    fn c2s_run(&mut self) {
+    fn c2s_run(&mut self) -> Option<Result<(), ()>> {
         if self.c2s_state == TaskState::End || self.c2s_state == TaskState::Error {
-            return;
+            return None;
         }
 
         if let Some(parser) = &mut self.c2s_parser {
             let waker = dummy_waker();
             let mut context = Context::from_waker(&waker);
             match Pin::as_mut(parser).poll(&mut context) {
-                Poll::Ready(Ok(())) => self.c2s_state = TaskState::End,
-                Poll::Ready(Err(())) => self.c2s_state = TaskState::Error,
-                Poll::Pending => {}
+                Poll::Ready(Ok(())) => {
+                    self.c2s_state = TaskState::End;
+                    Some(Ok(()))
+                }
+                Poll::Ready(Err(())) => {
+                    self.c2s_state = TaskState::Error;
+                    Some(Err(()))
+                }
+                Poll::Pending => None,
             }
+        } else {
+            None
         }
     }
 
-    fn s2c_run(&mut self) {
+    fn s2c_run(&mut self) -> Option<Result<(), ()>> {
         if self.s2c_state == TaskState::End || self.s2c_state == TaskState::Error {
-            return;
+            return None;
         }
 
         if let Some(parser) = &mut self.s2c_parser {
             let waker = dummy_waker();
             let mut context = Context::from_waker(&waker);
             match Pin::as_mut(parser).poll(&mut context) {
-                Poll::Ready(Ok(())) => self.s2c_state = TaskState::End,
-                Poll::Ready(Err(())) => self.s2c_state = TaskState::Error,
-                Poll::Pending => {}
+                Poll::Ready(Ok(())) => {
+                    self.s2c_state = TaskState::End;
+                    Some(Ok(()))
+                }
+                Poll::Ready(Err(())) => {
+                    self.s2c_state = TaskState::Error;
+                    Some(Err(()))
+                }
+                Poll::Pending => None,
             }
+        } else {
+            None
         }
     }
 
-    fn bdir_run(&mut self) {
+    fn bdir_run(&mut self) -> Option<Result<(), ()>> {
         if self.bdir_state == TaskState::End || self.bdir_state == TaskState::Error {
-            return;
+            return None;
         }
 
         if let Some(parser) = &mut self.bdir_parser {
             let waker = dummy_waker();
             let mut context = Context::from_waker(&waker);
             match Pin::as_mut(parser).poll(&mut context) {
-                Poll::Ready(Ok(())) => self.bdir_state = TaskState::End,
-                Poll::Ready(Err(())) => self.bdir_state = TaskState::Error,
-                Poll::Pending => {}
+                Poll::Ready(Ok(())) => {
+                    self.bdir_state = TaskState::End;
+                    Some(Ok(()))
+                }
+                Poll::Ready(Err(())) => {
+                    self.bdir_state = TaskState::Error;
+                    Some(Err(()))
+                }
+                Poll::Pending => None,
             }
+        } else {
+            None
         }
     }
 
