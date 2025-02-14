@@ -1,6 +1,6 @@
 mod config;
-// mod ffi;
 mod dynamic_heap;
+// mod ffi;
 mod heap;
 mod packet;
 mod parser;
@@ -19,9 +19,7 @@ pub use crate::task::Task;
 pub use crate::ordpacket::OrdPacketParser;
 #[cfg(test)]
 pub use crate::rawpacket::RawPacketParser;
-#[cfg(test)]
 pub use crate::smtp::SmtpParser;
-pub use crate::smtp2::SmtpParser2;
 #[cfg(test)]
 pub use crate::stream_next::StreamNextParser;
 #[cfg(test)]
@@ -175,9 +173,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         get_parser_sizes::<P, OrdPacketParser<P>>(&pool, &mut res);
         #[cfg(test)]
         get_parser_sizes::<P, RawPacketParser<P>>(&pool, &mut res);
-        #[cfg(test)]
         get_parser_sizes::<P, SmtpParser<P>>(&pool, &mut res);
-        get_parser_sizes::<P, SmtpParser2<P>>(&pool, &mut res);
         #[cfg(test)]
         get_parser_sizes::<P, StreamNextParser<P>>(&pool, &mut res);
         #[cfg(test)]

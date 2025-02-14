@@ -3,9 +3,7 @@
 pub mod ordpacket;
 #[cfg(test)]
 pub mod rawpacket;
-#[cfg(test)]
 pub mod smtp;
-pub mod smtp2;
 #[cfg(test)]
 pub mod stream_next;
 #[cfg(test)]
