@@ -11,14 +11,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub trait CallbackFn: FnMut(String, *const c_void) + Send + Sync {}
-impl<F: FnMut(String, *const c_void) + Send + Sync> CallbackFn for F {}
-type CallbackStreamReadline = Arc<Mutex<dyn CallbackFn>>;
+pub trait ReadLineCbFn: FnMut(String, *const c_void) + Send + Sync {}
+impl<F: FnMut(String, *const c_void) + Send + Sync> ReadLineCbFn for F {}
+pub(crate) type CbReadline = Arc<Mutex<dyn ReadLineCbFn>>;
 
 pub struct StreamReadlineParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     pool: Option<Rc<Pool>>,
-    callback_readline: Option<CallbackStreamReadline>,
+    pub(crate) cb_readline: Option<CbReadline>,
 }
 
 impl<T: Packet + Ord + 'static> StreamReadlineParser<T> {
@@ -26,15 +26,8 @@ impl<T: Packet + Ord + 'static> StreamReadlineParser<T> {
         Self {
             _phantom: PhantomData,
             pool: None,
-            callback_readline: None,
+            cb_readline: None,
         }
-    }
-
-    pub fn set_callback_readline<F>(&mut self, callback: F)
-    where
-        F: CallbackFn + 'static,
-    {
-        self.callback_readline = Some(Arc::new(Mutex::new(callback)));
     }
 
     fn c2s_parser_inner(
@@ -42,7 +35,7 @@ impl<T: Packet + Ord + 'static> StreamReadlineParser<T> {
         stream: *const PktStrm<T>,
         cb_ctx: *const c_void,
     ) -> impl Future<Output = Result<(), ()>> {
-        let callback = self.callback_readline.clone();
+        let callback = self.cb_readline.clone();
 
         async move {
             let stm: &mut PktStrm<T>;
@@ -121,6 +114,7 @@ mod tests {
         let payload = [b'H', b'e', b'l', b'l', b'o', b'\n', b'W', b'o', b'r', b'l'];
         let pkt1 = build_pkt_line(seq1, payload);
         let _ = pkt1.decode();
+        pkt1.set_l7_proto(L7Proto::StreamReadline);
 
         let lines = Arc::new(Mutex::new(Vec::new()));
 
@@ -130,9 +124,8 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<StreamReadlineParser<CapPacket>>();
-        parser.set_callback_readline(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_readline(callback);
+        let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
 
@@ -155,6 +148,7 @@ mod tests {
 
         let _ = pkt1.decode();
         let _ = pkt2.decode();
+        pkt1.set_l7_proto(L7Proto::StreamReadline);
 
         let lines = Arc::new(Mutex::new(Vec::new()));
 
@@ -164,9 +158,8 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<StreamReadlineParser<CapPacket>>();
-        parser.set_callback_readline(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_readline(callback);
+        let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -198,6 +191,7 @@ mod tests {
         let _ = pkt_syn.decode();
         let _ = pkt1.decode();
         let _ = pkt2.decode();
+        pkt_syn.set_l7_proto(L7Proto::StreamReadline);
 
         let lines = Arc::new(Mutex::new(Vec::new()));
 
@@ -207,9 +201,8 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<StreamReadlineParser<CapPacket>>();
-        parser.set_callback_readline(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_readline(callback);
+        let mut task = protolens.new_task();
 
         // 乱序发送包
         protolens.run_task(&mut task, pkt_syn);
@@ -237,7 +230,7 @@ mod tests {
         );
         println!(
             "Size of callback: {} bytes",
-            std::mem::size_of::<Option<CallbackStreamReadline>>()
+            std::mem::size_of::<Option<CbReadline>>()
         );
 
         let c2s_size = parser.c2s_parser_size();
@@ -248,7 +241,7 @@ mod tests {
         println!("bdir size: {} bytes", bdir_size);
 
         let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
-            + std::mem::size_of::<Option<CallbackStreamReadline>>();
+            + std::mem::size_of::<Option<CbReadline>>();
 
         assert!(
             c2s_size >= min_size,

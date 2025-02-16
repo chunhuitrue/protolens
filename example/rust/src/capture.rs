@@ -1,7 +1,7 @@
 use etherparse::*;
 use pcap::Capture as PcapCap;
 use pcap::Offline;
-use protolens::{Packet, PktDirection, TransProto};
+use protolens::{L7Proto, Packet, PktDirection, TransProto};
 use std::cell::RefCell;
 use std::fmt;
 use std::ops::Deref;
@@ -23,6 +23,7 @@ pub struct PktHeader {
     pub transport: Option<TransportHeader>,
     pub payload_offset: usize,
     pub payload_len: usize,
+    pub l7_proto: L7Proto,
 }
 
 impl PktHeader {
@@ -102,10 +103,17 @@ impl CapPacket {
                     payload_offset: headers.payload.as_ptr() as usize - self.data.as_ptr() as usize,
                     payload_len: self.data_len
                         - (headers.payload.as_ptr() as usize - self.data.as_ptr() as usize),
+                    l7_proto: L7Proto::Unknown,
                 }));
                 Ok(())
             }
             Err(_) => Err(PacketError::DecodeErr),
+        }
+    }
+
+    pub fn set_l7_proto(&self, l7_proto: L7Proto) {
+        if let Some(header) = self.header.borrow_mut().as_mut() {
+            header.l7_proto = l7_proto;
         }
     }
 
@@ -154,6 +162,10 @@ impl Packet for CapPacket {
         } else {
             PktDirection::Server2Client
         }
+    }
+
+    fn l7_proto(&self) -> L7Proto {
+        self.header.borrow().as_ref().unwrap().l7_proto
     }
 
     fn trans_proto(&self) -> TransProto {

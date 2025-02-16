@@ -11,15 +11,15 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub trait CallbackFn: FnMut(Vec<u8>, *const c_void) + Send + Sync {}
-impl<F: FnMut(Vec<u8>, *const c_void) + Send + Sync> CallbackFn for F {}
-type CallbackStreamReadn = Arc<Mutex<dyn CallbackFn>>;
+pub trait ReadnCbFn: FnMut(Vec<u8>, *const c_void) + Send + Sync {}
+impl<F: FnMut(Vec<u8>, *const c_void) + Send + Sync> ReadnCbFn for F {}
+pub(crate) type CbReadn = Arc<Mutex<dyn ReadnCbFn>>;
 
 pub struct StreamReadnParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     pool: Option<Rc<Pool>>,
-    callback_readn: Option<CallbackStreamReadn>,
     read_size: usize, // 每次读取的字节数
+    pub(crate) cb_readn: Option<CbReadn>,
 }
 
 impl<T: Packet + Ord + 'static> StreamReadnParser<T> {
@@ -27,16 +27,9 @@ impl<T: Packet + Ord + 'static> StreamReadnParser<T> {
         Self {
             _phantom: PhantomData,
             pool: None,
-            callback_readn: None,
+            cb_readn: None,
             read_size,
         }
-    }
-
-    pub fn set_callback_readn<F>(&mut self, callback: F)
-    where
-        F: CallbackFn + 'static,
-    {
-        self.callback_readn = Some(Arc::new(Mutex::new(callback)));
     }
 
     fn c2s_parser_inner(
@@ -44,7 +37,7 @@ impl<T: Packet + Ord + 'static> StreamReadnParser<T> {
         stream: *const PktStrm<T>,
         cb_ctx: *const c_void,
     ) -> impl Future<Output = Result<(), ()>> {
-        let callback = self.callback_readn.clone();
+        let callback = self.cb_readn.clone();
         let read_size = self.read_size;
 
         async move {
@@ -118,6 +111,7 @@ mod tests {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, true);
         let _ = pkt1.decode();
+        pkt1.set_l7_proto(L7Proto::StreamReadn);
 
         let vec = Arc::new(Mutex::new(Vec::new()));
 
@@ -127,9 +121,8 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<StreamReadnParser<CapPacket>>();
-        parser.set_callback_readn(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_readn(callback);
+        let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
 
@@ -146,6 +139,7 @@ mod tests {
         let pkt2 = build_pkt(seq2, true);
         let _ = pkt1.decode();
         let _ = pkt2.decode();
+        pkt1.set_l7_proto(L7Proto::StreamReadn);
 
         let vec = Arc::new(Mutex::new(Vec::new()));
 
@@ -155,9 +149,8 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<StreamReadnParser<CapPacket>>();
-        parser.set_callback_readn(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_readn(callback);
+        let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -185,6 +178,7 @@ mod tests {
         let _ = pkt_syn.decode();
         let _ = pkt1.decode();
         let _ = pkt2.decode();
+        pkt_syn.set_l7_proto(L7Proto::StreamReadn);
 
         let vec = Arc::new(Mutex::new(Vec::new()));
 
@@ -194,9 +188,8 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<StreamReadnParser<CapPacket>>();
-        parser.set_callback_readn(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_readn(callback);
+        let mut task = protolens.new_task();
 
         // 乱序发送包
         protolens.run_task(&mut task, pkt_syn);
@@ -223,7 +216,7 @@ mod tests {
         );
         println!(
             "Size of callback: {} bytes",
-            std::mem::size_of::<Option<CallbackStreamReadn>>()
+            std::mem::size_of::<Option<CbReadn>>()
         );
 
         let c2s_size = parser.c2s_parser_size();
@@ -234,7 +227,7 @@ mod tests {
         println!("bdir size: {} bytes", bdir_size);
 
         let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
-            + std::mem::size_of::<Option<CallbackStreamReadn>>();
+            + std::mem::size_of::<Option<CbReadn>>();
 
         assert!(
             c2s_size >= min_size,

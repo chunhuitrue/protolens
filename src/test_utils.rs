@@ -10,7 +10,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crate::PktDirection;
-use crate::{Packet, TransProto};
+use crate::{L7Proto, Packet, TransProto};
 
 pub(crate) const SMTP_PORT_NET: u16 = 25;
 
@@ -63,6 +63,10 @@ impl<T: Packet> Packet for PacketRef<T> {
         TransProto::Tcp
     }
 
+    fn l7_proto(&self) -> L7Proto {
+        self.inner.l7_proto()
+    }
+
     fn direction(&self) -> PktDirection {
         self.inner.direction()
     }
@@ -70,6 +74,7 @@ impl<T: Packet> Packet for PacketRef<T> {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct MyPacket {
+    pub l7_proto: L7Proto,
     pub sport: u16,
     pub dport: u16,
     pub sequence: u32,
@@ -79,8 +84,9 @@ pub(crate) struct MyPacket {
 }
 
 impl MyPacket {
-    pub(crate) fn new(seq: u32, fin: bool) -> Self {
+    pub(crate) fn new(l7_proto: L7Proto, seq: u32, fin: bool) -> Self {
         MyPacket {
+            l7_proto,
             sport: 54321,
             dport: 8080,
             sequence: seq,
@@ -94,6 +100,10 @@ impl MyPacket {
 impl Packet for MyPacket {
     fn direction(&self) -> PktDirection {
         PktDirection::Client2Server
+    }
+
+    fn l7_proto(&self) -> L7Proto {
+        self.l7_proto
     }
 
     fn trans_proto(&self) -> TransProto {
@@ -143,6 +153,7 @@ pub(crate) struct PktHeader {
     pub(crate) transport: Option<TransportHeader>,
     pub(crate) payload_offset: usize,
     pub(crate) payload_len: usize,
+    pub(crate) l7_proto: L7Proto,
 }
 
 impl PktHeader {
@@ -222,10 +233,17 @@ impl CapPacket {
                     payload_offset: headers.payload.as_ptr() as usize - self.data.as_ptr() as usize,
                     payload_len: self.data_len
                         - (headers.payload.as_ptr() as usize - self.data.as_ptr() as usize),
+                    l7_proto: L7Proto::Unknown,
                 }));
                 Ok(())
             }
             Err(_) => Err(PacketError::DecodeErr),
+        }
+    }
+
+    pub(crate) fn set_l7_proto(&self, l7_proto: L7Proto) {
+        if let Some(header) = self.header.borrow_mut().as_mut() {
+            header.l7_proto = l7_proto;
         }
     }
 
@@ -270,6 +288,10 @@ impl CapPacket {
 impl Packet for CapPacket {
     fn direction(&self) -> PktDirection {
         PktDirection::Client2Server
+    }
+
+    fn l7_proto(&self) -> L7Proto {
+        self.header.borrow().as_ref().unwrap().l7_proto
     }
 
     fn trans_proto(&self) -> TransProto {

@@ -1,4 +1,5 @@
 use etherparse::{IpHeader, TransportHeader};
+use protolens::L7Proto;
 use protolens::PktDirection;
 use std::net::IpAddr;
 
@@ -34,6 +35,9 @@ impl From<Direction> for PktDirection {
 
 pub fn recognize_pkt(pkt: &CapPacket, node: &mut FlowNode) {
     reg_smtp(pkt.header.borrow().as_ref().unwrap(), node);
+    if node.proto_id == ProtoID::Smtp {
+        pkt.set_l7_proto(L7Proto::Smtp);
+    }
 }
 
 fn reg_smtp(header: &PktHeader, node: &mut FlowNode) {

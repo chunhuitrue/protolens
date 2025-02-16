@@ -106,6 +106,7 @@ pub struct TaskInner<T: PacketBind> {
     c2s_parser: Option<ParserFuture>,
     s2c_parser: Option<ParserFuture>,
     bdir_parser: Option<ParserFuture>,
+    pub(crate) parser_inited: bool,
     c2s_state: TaskState,
     s2c_state: TaskState,
     bdir_state: TaskState,
@@ -123,6 +124,7 @@ impl<T: PacketBind> TaskInner<T> {
             c2s_parser: None,
             s2c_parser: None,
             bdir_parser: None,
+            parser_inited: false,
             c2s_state: TaskState::Start,
             s2c_state: TaskState::Start,
             bdir_state: TaskState::Start,
@@ -130,15 +132,15 @@ impl<T: PacketBind> TaskInner<T> {
         }
     }
 
-    pub(crate) fn new_with_parser<P: ParserInner<PacketType = T>>(
-        parser: PoolBox<P>,
-        cb_ctx: *mut c_void,
-    ) -> Self {
-        let pool = Rc::clone(parser.pool());
-        let mut task = TaskInner::new(&pool, cb_ctx);
-        task.init_parser(parser);
-        task
-    }
+    // pub(crate) fn new_with_parser<P: ParserInner<PacketType = T>>(
+    //     parser: PoolBox<P>,
+    //     cb_ctx: *mut c_void,
+    // ) -> Self {
+    //     let pool = Rc::clone(parser.pool());
+    //     let mut task = TaskInner::new(&pool, cb_ctx);
+    //     task.init_parser(parser);
+    //     task
+    // }
 
     pub(crate) fn init_parser<P: ParserInner<PacketType = T>>(&mut self, parser: PoolBox<P>) {
         let p_stream_c2s: *const PktStrm<T> = &*self.stream_c2s;
@@ -147,6 +149,7 @@ impl<T: PacketBind> TaskInner<T> {
         self.c2s_parser = parser.c2s_parser(p_stream_c2s, self.cb_ctx);
         self.s2c_parser = parser.s2c_parser(p_stream_s2c, self.cb_ctx);
         self.bdir_parser = parser.bdir_parser(p_stream_c2s, p_stream_s2c, self.cb_ctx);
+        self.parser_inited = true;
     }
 
     pub(crate) fn set_c2s_callback<F>(&mut self, callback: F)

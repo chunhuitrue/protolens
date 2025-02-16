@@ -72,15 +72,16 @@ impl Pool {
     // }
 }
 
-pub struct PoolBox<T: ?Sized> {
+pub(crate) struct PoolBox<T: ?Sized> {
     ptr: *mut T,
+    #[allow(dead_code)]
     pool: Rc<Pool>,
 }
 
 impl<T> PoolBox<T> {
-    pub fn pool(&self) -> &Rc<Pool> {
-        &self.pool
-    }
+    // fn pool(&self) -> &Rc<Pool> {
+    //     &self.pool
+    // }
 }
 
 impl<T: ?Sized> Deref for PoolBox<T> {

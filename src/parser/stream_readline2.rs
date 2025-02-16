@@ -11,14 +11,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub trait CallbackFn: FnMut(&[u8], u32, *const c_void) + Send + Sync {}
-impl<F: FnMut(&[u8], u32, *const c_void) + Send + Sync> CallbackFn for F {}
-type CallbackStreamReadline2 = Arc<Mutex<dyn CallbackFn>>;
+pub trait ReadLine2CbFn: FnMut(&[u8], u32, *const c_void) + Send + Sync {}
+impl<F: FnMut(&[u8], u32, *const c_void) + Send + Sync> ReadLine2CbFn for F {}
+pub(crate) type CbReadline2 = Arc<Mutex<dyn ReadLine2CbFn>>;
 
 pub struct StreamReadline2Parser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     pool: Option<Rc<Pool>>,
-    callback_readline: Option<CallbackStreamReadline2>,
+    pub(crate) cb_readline: Option<CbReadline2>,
 }
 
 impl<T: Packet + Ord + 'static> StreamReadline2Parser<T> {
@@ -26,15 +26,8 @@ impl<T: Packet + Ord + 'static> StreamReadline2Parser<T> {
         Self {
             _phantom: PhantomData,
             pool: None,
-            callback_readline: None,
+            cb_readline: None,
         }
-    }
-
-    pub fn set_callback_readline<F>(&mut self, callback: F)
-    where
-        F: CallbackFn + 'static,
-    {
-        self.callback_readline = Some(Arc::new(Mutex::new(callback)));
     }
 
     fn c2s_parser_inner(
@@ -42,7 +35,7 @@ impl<T: Packet + Ord + 'static> StreamReadline2Parser<T> {
         stream: *const PktStrm<T>,
         cb_ctx: *const c_void,
     ) -> impl Future<Output = Result<(), ()>> {
-        let callback = self.callback_readline.clone();
+        let callback = self.cb_readline.clone();
 
         async move {
             let stm: &mut PktStrm<T>;
@@ -117,6 +110,7 @@ mod tests {
         let payload = [b'H', b'e', b'l', b'l', b'o', b'\n', b'W', b'o', b'r', b'l'];
         let pkt1 = build_pkt_line(seq1, payload);
         let _ = pkt1.decode();
+        pkt1.set_l7_proto(L7Proto::StreamReadline2);
 
         let lines = Arc::new(Mutex::new(Vec::new()));
         let seqs = Arc::new(Mutex::new(Vec::new()));
@@ -142,12 +136,11 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<StreamReadline2Parser<CapPacket>>();
-        parser.set_callback_readline(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_readline2(callback);
+        let mut task = protolens.new_task();
 
         // 设置原始TCP流callback
-        protolens.task_set_c2s_callback(&mut task, stm_callback);
+        protolens.set_cb_task_c2s(&mut task, stm_callback);
 
         protolens.run_task(&mut task, pkt1);
 
@@ -179,6 +172,7 @@ mod tests {
 
         let _ = pkt1.decode();
         let _ = pkt2.decode();
+        pkt1.set_l7_proto(L7Proto::StreamReadline2);
 
         let lines = Arc::new(Mutex::new(Vec::new()));
         let seqs = Arc::new(Mutex::new(Vec::new()));
@@ -191,9 +185,8 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<StreamReadline2Parser<CapPacket>>();
-        parser.set_callback_readline(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_readline2(callback);
+        let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -227,6 +220,7 @@ mod tests {
         let _ = pkt_syn.decode();
         let _ = pkt1.decode();
         let _ = pkt2.decode();
+        pkt_syn.set_l7_proto(L7Proto::StreamReadline2);
 
         let lines = Arc::new(Mutex::new(Vec::new()));
         let seqs = Arc::new(Mutex::new(Vec::new()));
@@ -239,9 +233,8 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<StreamReadline2Parser<CapPacket>>();
-        parser.set_callback_readline(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_readline2(callback);
+        let mut task = protolens.new_task();
 
         // 乱序发送包
         protolens.run_task(&mut task, pkt_syn);
@@ -267,7 +260,7 @@ mod tests {
         );
         println!(
             "Size of callback: {} bytes",
-            std::mem::size_of::<Option<CallbackStreamReadline2>>()
+            std::mem::size_of::<Option<CbReadline2>>()
         );
 
         let c2s_size = parser.c2s_parser_size();
@@ -278,7 +271,7 @@ mod tests {
         println!("bdir size: {} bytes", bdir_size);
 
         let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
-            + std::mem::size_of::<Option<CallbackStreamReadline2>>();
+            + std::mem::size_of::<Option<CbReadline2>>();
 
         assert!(
             c2s_size >= min_size,

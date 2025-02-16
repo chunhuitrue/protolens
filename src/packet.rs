@@ -2,7 +2,29 @@ use std::cmp::{Ord, Ordering, PartialOrd};
 use std::fmt::Debug;
 
 #[repr(C)]
-#[derive(Debug, Eq, PartialEq, Clone, PartialOrd, Ord)]
+#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Copy)]
+pub enum L7Proto {
+    OrdPacket,
+    #[cfg(test)]
+    RawPacket,
+    #[cfg(test)]
+    StreamNext,
+    #[cfg(test)]
+    StreamRead,
+    #[cfg(test)]
+    StreamReadline,
+    #[cfg(test)]
+    StreamReadline2,
+    #[cfg(test)]
+    StreamReadn,
+    #[cfg(test)]
+    StreamReadn2,
+    Smtp,
+    Unknown,
+}
+
+#[repr(C)]
+#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Copy)]
 pub enum TransProto {
     Tcp,
     Udp,
@@ -10,7 +32,7 @@ pub enum TransProto {
 }
 
 #[repr(C)]
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Copy)]
 pub enum PktDirection {
     Client2Server,
     Server2Client,
@@ -20,6 +42,7 @@ pub enum PktDirection {
 
 pub trait Packet {
     fn direction(&self) -> PktDirection;
+    fn l7_proto(&self) -> L7Proto;
     fn trans_proto(&self) -> TransProto;
     // tcp或者udp的源端口。否则为0
     fn tu_sport(&self) -> u16;
@@ -66,6 +89,7 @@ mod tests {
     #[test]
     fn test_same_seq() {
         let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -75,6 +99,7 @@ mod tests {
         };
 
         let packet2 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 1000,
@@ -89,6 +114,7 @@ mod tests {
     #[test]
     fn test_different_seq() {
         let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -98,6 +124,7 @@ mod tests {
         };
 
         let packet2 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 2000,
@@ -112,6 +139,7 @@ mod tests {
     #[test]
     fn test_greater_than() {
         let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 2000,
@@ -121,6 +149,7 @@ mod tests {
         };
 
         let packet2 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 1000,
@@ -135,6 +164,7 @@ mod tests {
     #[test]
     fn test_less_than() {
         let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -144,6 +174,7 @@ mod tests {
         };
 
         let packet2 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 2000,

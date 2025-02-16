@@ -12,30 +12,23 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub trait CallbackFn<T>: FnMut(T, *const c_void) + Send + Sync {}
-impl<F, T> CallbackFn<T> for F where F: FnMut(T, *const c_void) + Send + Sync {}
-type CallbackRawPkt<T> = Arc<Mutex<dyn CallbackFn<T>>>;
+pub trait RawPktCbFn<T>: FnMut(T, *const c_void) + Send + Sync {}
+impl<F, T> RawPktCbFn<T> for F where F: FnMut(T, *const c_void) + Send + Sync {}
+pub(crate) type CbRawPkt<T> = Arc<Mutex<dyn RawPktCbFn<T>>>;
 
 pub struct RawPacketParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
-    callback_raw_pkt: Option<CallbackRawPkt<T>>,
     pool: Option<Rc<Pool>>,
+    pub(crate) cb_raw_pkt: Option<CbRawPkt<T>>,
 }
 
 impl<T: Packet + Ord + 'static> RawPacketParser<T> {
     pub fn new() -> Self {
         Self {
             _phantom: PhantomData,
-            callback_raw_pkt: None,
             pool: None,
+            cb_raw_pkt: None,
         }
-    }
-
-    pub fn set_callback_raw_pkt<F>(&mut self, callback: F)
-    where
-        F: CallbackFn<T> + 'static,
-    {
-        self.callback_raw_pkt = Some(Arc::new(Mutex::new(callback)));
     }
 
     fn c2s_parser_inner(
@@ -43,7 +36,7 @@ impl<T: Packet + Ord + 'static> RawPacketParser<T> {
         stream: *const PktStrm<T>,
         cb_ctx: *const c_void,
     ) -> impl Future<Output = Result<(), ()>> {
-        let callback = self.callback_raw_pkt.clone();
+        let callback = self.cb_raw_pkt.clone();
 
         async move {
             let stm: &mut PktStrm<T>;
@@ -112,14 +105,17 @@ mod tests {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
+        pkt1.set_l7_proto(L7Proto::RawPacket);
         // 11 - 20
         let seq2 = seq1 + pkt1.payload_len();
         let pkt2 = build_pkt(seq2, false);
         let _ = pkt2.decode();
+        pkt2.set_l7_proto(L7Proto::RawPacket);
         // 21 - 30
         let seq3 = seq2 + pkt2.payload_len();
         let pkt3 = build_pkt(seq3, true);
         let _ = pkt3.decode();
+        pkt3.set_l7_proto(L7Proto::RawPacket);
 
         let count = Arc::new(Mutex::new(0));
         let count_clone = count.clone();
@@ -137,9 +133,8 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<RawPacketParser<CapPacket>>();
-        parser.set_callback_raw_pkt(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_raw_pkt(callback);
+        let mut task = protolens.new_task();
 
         dbg!("1 task run");
         protolens.run_task(&mut task, pkt3);
@@ -168,7 +163,7 @@ mod tests {
         );
         println!(
             "Size of callback: {} bytes",
-            std::mem::size_of::<Option<CallbackRawPkt<CapPacket>>>()
+            std::mem::size_of::<Option<CbRawPkt<CapPacket>>>()
         );
 
         let c2s_size = parser.c2s_parser_size();
@@ -179,7 +174,7 @@ mod tests {
         println!("bdir size: {} bytes", bdir_size);
 
         let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
-            + std::mem::size_of::<Option<CallbackRawPkt<CapPacket>>>();
+            + std::mem::size_of::<Option<CbRawPkt<CapPacket>>>();
 
         assert!(
             c2s_size >= min_size,

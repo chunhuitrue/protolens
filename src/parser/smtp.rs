@@ -24,40 +24,26 @@ enum ContentType {
     Alt,
 }
 
-pub trait CallbackFn: FnMut(&[u8], u32, *const c_void) + Send + Sync {}
-impl<F: FnMut(&[u8], u32, *const c_void) + Send + Sync> CallbackFn for F {}
-type UserCallback = Arc<Mutex<dyn CallbackFn>>;
-type PassCallback = Arc<Mutex<dyn CallbackFn>>;
+pub trait SmtpCbFn: FnMut(&[u8], u32, *const c_void) + Send + Sync {}
+impl<F: FnMut(&[u8], u32, *const c_void) + Send + Sync> SmtpCbFn for F {}
+pub type CbUser = Arc<Mutex<dyn SmtpCbFn>>;
+pub(crate) type CbPass = Arc<Mutex<dyn SmtpCbFn>>;
 
 pub struct SmtpParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
-    callback_user: Option<UserCallback>,
-    callback_pass: Option<PassCallback>,
     pool: Option<Rc<Pool>>,
+    pub(crate) cb_user: Option<CbUser>,
+    pub(crate) cb_pass: Option<CbPass>,
 }
 
 impl<T: Packet + Ord + 'static> SmtpParser<T> {
     pub(crate) fn new() -> Self {
         Self {
             _phantom: PhantomData,
-            callback_user: None,
-            callback_pass: None,
+            cb_user: None,
+            cb_pass: None,
             pool: None,
         }
-    }
-
-    pub fn set_callback_user<F>(&mut self, callback: F)
-    where
-        F: CallbackFn + 'static,
-    {
-        self.callback_user = Some(Arc::new(Mutex::new(callback)));
-    }
-
-    pub fn set_callback_pass<F>(&mut self, callback: F)
-    where
-        F: CallbackFn + 'static,
-    {
-        self.callback_pass = Some(Arc::new(Mutex::new(callback)) as PassCallback);
     }
 
     fn c2s_parser_inner(
@@ -65,8 +51,8 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
         stream: *const PktStrm<T>,
         cb_ctx: *const c_void,
     ) -> impl Future<Output = Result<(), ()>> {
-        let callback_user = self.callback_user.clone();
-        let callback_pass = self.callback_pass.clone();
+        let callback_user = self.cb_user.clone();
+        let callback_pass = self.cb_pass.clone();
 
         async move {
             let stm: &mut PktStrm<T>;
@@ -316,7 +302,7 @@ mod tests {
         );
         println!(
             "Size of callback: {} bytes",
-            std::mem::size_of::<Option<UserCallback>>()
+            std::mem::size_of::<Option<CbUser>>()
         );
 
         let c2s_size = parser.c2s_parser_size();
@@ -327,7 +313,7 @@ mod tests {
         println!("bdir size: {} bytes", bdir_size);
 
         let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
-            + std::mem::size_of::<Option<UserCallback>>();
+            + std::mem::size_of::<Option<CbUser>>();
 
         assert!(
             c2s_size >= min_size,
@@ -410,10 +396,10 @@ mod tests {
         let wrong_command = *b"HELO tes\r\n"; // 使用数组而不是Vec
         let pkt1 = build_pkt_line(seq1, wrong_command);
         let _ = pkt1.decode();
+        pkt1.set_l7_proto(L7Proto::Smtp);
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let parser = protolens.new_parser::<SmtpParser<CapPacket>>();
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task();
 
         // 运行解析器，应该会因为不是EHLO命令而失败
         let result = protolens.run_task(&mut task, pkt1);
@@ -426,8 +412,7 @@ mod tests {
         let _ = pkt2.decode();
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let parser = protolens.new_parser::<SmtpParser<CapPacket>>();
-        let mut task = protolens.new_task_with_parser(parser);
+        let mut task = protolens.new_task();
 
         // 运行解析器，应该成功处理正确的命令序列
         let result = protolens.run_task(&mut task, pkt2);
@@ -470,10 +455,9 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<SmtpParser<CapPacket>>();
-        parser.set_callback_user(user_callback);
-        parser.set_callback_pass(pass_callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_smtp_user(user_callback);
+        protolens.set_cb_smtp_pass(pass_callback);
+        let mut task = protolens.new_task();
         let mut push_count = 0;
 
         loop {
@@ -489,6 +473,7 @@ mod tests {
             if pkt.decode().is_err() {
                 continue;
             }
+            pkt.set_l7_proto(L7Proto::Smtp);
 
             if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
                 push_count += 1;

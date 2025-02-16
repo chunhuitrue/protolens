@@ -130,7 +130,7 @@ impl<T: Ord, const N: usize> Heap<T, N> {
 mod tests {
     use super::*;
     use crate::test_utils::MyPacket;
-    use crate::PacketWrapper;
+    use crate::{L7Proto, PacketWrapper};
 
     #[test]
     fn test_memory_size() {
@@ -167,6 +167,7 @@ mod tests {
         let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
 
         let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -176,6 +177,7 @@ mod tests {
         };
 
         let packet2 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 990,
@@ -185,6 +187,7 @@ mod tests {
         };
 
         let packet3 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 995,
@@ -209,6 +212,7 @@ mod tests {
         let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
 
         let syn_packet = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 100,
@@ -218,6 +222,7 @@ mod tests {
         };
 
         let data_packet = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 101,
@@ -227,6 +232,7 @@ mod tests {
         };
 
         let fin_packet = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 104,

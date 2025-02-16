@@ -332,7 +332,7 @@ impl FlowNode {
             return;
         }
 
-        let mut parser = prolens.new_parser::<SmtpParser<CapPacket>>();
+        // let mut parser = prolens.new_parser::<SmtpParser<CapPacket>>();
 
         // 设置用户名回调
         let user_data = self.user.clone();
@@ -346,7 +346,7 @@ impl FlowNode {
                 );
             }
         };
-        parser.set_callback_user(user_callback);
+        // parser.set_callback_user(user_callback);
 
         // 设置密码回调
         let pass_data = self.pass.clone();
@@ -360,9 +360,13 @@ impl FlowNode {
                 );
             }
         };
-        parser.set_callback_pass(pass_callback);
+        // parser.set_callback_pass(pass_callback);
 
-        let task = prolens.new_task_with_parser(parser);
+        prolens.set_cb_smtp_user(user_callback);
+        prolens.set_cb_smtp_pass(pass_callback);
+
+        let mut task = prolens.new_task();
+        // let task = prolens.new_task_with_parser(parser);
         self.parser_task = Some(task);
     }
 }

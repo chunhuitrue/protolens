@@ -493,6 +493,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packet::*;
     use crate::test_utils::*;
 
     #[test]
@@ -527,6 +528,7 @@ mod tests {
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -536,6 +538,7 @@ mod tests {
         };
 
         let packet2 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 999,
@@ -559,13 +562,13 @@ mod tests {
         let pool = Rc::new(Pool::new(4096, vec![64]));
         let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
-        let pkt1 = MyPacket::new(1, false);
+        let pkt1 = MyPacket::new(L7Proto::Unknown, 1, false);
         stm.push(pkt1);
 
-        let pkt2 = MyPacket::new(30, false);
+        let pkt2 = MyPacket::new(L7Proto::Unknown, 30, false);
         stm.push(pkt2);
 
-        let pkt3 = MyPacket::new(80, false);
+        let pkt3 = MyPacket::new(L7Proto::Unknown, 80, false);
         stm.push(pkt3);
 
         assert_eq!(1, stm.peek().unwrap().seq());
@@ -583,6 +586,7 @@ mod tests {
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -592,6 +596,7 @@ mod tests {
         };
 
         let packet2 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 999,
@@ -601,6 +606,7 @@ mod tests {
         };
 
         let packet3 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1001,
@@ -642,6 +648,7 @@ mod tests {
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 300,
@@ -651,6 +658,7 @@ mod tests {
         };
 
         let packet2 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 200,
@@ -660,6 +668,7 @@ mod tests {
         };
 
         let packet3 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1004,
@@ -669,6 +678,7 @@ mod tests {
         };
 
         let packet4 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -709,13 +719,13 @@ mod tests {
         let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
-        let pkt1 = MyPacket::new(seq1, false);
+        let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
         // 11 - 20
         let seq2 = seq1 + pkt1.payload_len() as u32;
-        let pkt2 = MyPacket::new(seq2, false);
+        let pkt2 = MyPacket::new(L7Proto::Unknown, seq2, false);
         // 21 - 30
         let seq3 = seq2 + pkt2.payload_len() as u32;
-        let pkt3 = MyPacket::new(seq3, false);
+        let pkt3 = MyPacket::new(L7Proto::Unknown, seq3, false);
 
         stm.push(pkt2.clone());
         stm.push(pkt3);
@@ -737,13 +747,13 @@ mod tests {
         let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
-        let pkt1 = MyPacket::new(seq1, false);
+        let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
         // 11- 20
         let seq2 = seq1 + pkt1.payload_len() as u32;
-        let pkt2 = MyPacket::new(seq2, false);
+        let pkt2 = MyPacket::new(L7Proto::Unknown, seq2, false);
         // 21 - 30
         let seq3 = seq2 + pkt2.payload_len() as u32;
-        let pkt3 = MyPacket::new(seq3, false);
+        let pkt3 = MyPacket::new(L7Proto::Unknown, seq3, false);
 
         stm.push(pkt1.clone());
         stm.push(pkt2.clone());
@@ -786,16 +796,16 @@ mod tests {
         let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
-        let pkt1 = MyPacket::new(seq1, false);
+        let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
         // 11 - 20
         let seq2 = seq1 + pkt1.payload_len() as u32;
-        let pkt2 = MyPacket::new(seq2, false);
+        let pkt2 = MyPacket::new(L7Proto::Unknown, seq2, false);
         // 15 - 24
         let seq3 = 15;
-        let pkt3 = MyPacket::new(seq3, false);
+        let pkt3 = MyPacket::new(L7Proto::Unknown, seq3, false);
         // 25 - 34
         let seq4 = 25;
-        let pkt4 = MyPacket::new(seq4, false);
+        let pkt4 = MyPacket::new(L7Proto::Unknown, seq4, false);
 
         stm.push(pkt1.clone());
         stm.push(pkt2.clone());
@@ -834,13 +844,13 @@ mod tests {
         let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
-        let pkt1 = MyPacket::new(seq1, false);
+        let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
         // 11- 20
         let seq2 = seq1 + pkt1.payload_len() as u32;
-        let pkt2 = MyPacket::new(seq2, false);
+        let pkt2 = MyPacket::new(L7Proto::Unknown, seq2, false);
         // 21 - 30
         let seq3 = seq2 + pkt2.payload_len() as u32;
-        let pkt3 = MyPacket::new(seq3, false);
+        let pkt3 = MyPacket::new(L7Proto::Unknown, seq3, false);
 
         stm.push(pkt1.clone());
         stm.push(pkt3.clone());
@@ -865,7 +875,7 @@ mod tests {
         let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
-        let pkt1 = MyPacket::new(seq1, true);
+        let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, true);
 
         stm.push(pkt1);
 
@@ -882,15 +892,15 @@ mod tests {
         let mut stm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
-        let pkt1 = MyPacket::new(seq1, false);
+        let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
         println!("pkt1. seq1: {}, pkt1 seq: {}", seq1, pkt1.seq());
         // 11 - 20
         let seq2 = seq1 + pkt1.payload_len() as u32;
-        let pkt2 = MyPacket::new(seq2, false);
+        let pkt2 = MyPacket::new(L7Proto::Unknown, seq2, false);
         println!("pkt2. seq2: {}, pkt2 seq: {}", seq2, pkt2.seq());
         // 21 - 30
         let seq3 = seq2 + pkt2.payload_len() as u32;
-        let pkt3 = MyPacket::new(seq3, true);
+        let pkt3 = MyPacket::new(L7Proto::Unknown, seq3, true);
         println!("pkt3. seq3: {}, pkt3 seq: {}", seq3, pkt3.seq());
 
         stm.push(pkt2.clone());
@@ -912,6 +922,7 @@ mod tests {
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 100,
@@ -921,6 +932,7 @@ mod tests {
         };
 
         let packet2 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 103,
@@ -930,6 +942,7 @@ mod tests {
         };
 
         let packet3 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 106,
@@ -939,6 +952,7 @@ mod tests {
         };
 
         let packet4 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 102,
@@ -983,6 +997,7 @@ mod tests {
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 300,
@@ -992,6 +1007,7 @@ mod tests {
         };
 
         let packet2 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 200,
@@ -1001,6 +1017,7 @@ mod tests {
         };
 
         let packet3 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1004,
@@ -1010,6 +1027,7 @@ mod tests {
         };
 
         let packet4 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -1040,6 +1058,7 @@ mod tests {
         let mut pkt_strm = PktStrm::<MyPacket>::new(&pool, ptr::null_mut());
 
         let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 300,
@@ -1049,6 +1068,7 @@ mod tests {
         };
 
         let packet2 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 200,
@@ -1058,6 +1078,7 @@ mod tests {
         };
 
         let packet3 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1004,
@@ -1067,6 +1088,7 @@ mod tests {
         };
 
         let packet4 = MyPacket {
+            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,

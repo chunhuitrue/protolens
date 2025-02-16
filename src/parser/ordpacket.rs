@@ -1,6 +1,3 @@
-// #![allow(unused)]
-
-// use crate::pktstrm::*;
 use crate::pool::Pool;
 use crate::Packet;
 use crate::ParserFuture;
@@ -14,31 +11,23 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-pub trait CallbackFn<T>: FnMut(T, *const c_void) + Send + Sync {}
-impl<F, T> CallbackFn<T> for F where F: FnMut(T, *const c_void) + Send + Sync {}
-type CallbackOrdPkt<T> = Arc<Mutex<dyn CallbackFn<T>>>;
+pub trait OrdPktCbFn<T>: FnMut(T, *const c_void) + Send + Sync {}
+impl<F, T> OrdPktCbFn<T> for F where F: FnMut(T, *const c_void) + Send + Sync {}
+pub(crate) type CbOrdPkt<T> = Arc<Mutex<dyn OrdPktCbFn<T>>>;
 
 pub struct OrdPacketParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
-    callback_ord_pkt: Option<CallbackOrdPkt<T>>,
     pool: Option<Rc<Pool>>,
+    pub(crate) cb_ord_pkt: Option<CbOrdPkt<T>>,
 }
 
 impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
     pub fn new() -> Self {
         Self {
             _phantom: PhantomData,
-            callback_ord_pkt: None,
+            cb_ord_pkt: None,
             pool: None,
         }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn set_callback_ord_pkt<F>(&mut self, callback: F)
-    where
-        F: CallbackFn<T> + 'static,
-    {
-        self.callback_ord_pkt = Some(Arc::new(Mutex::new(callback)));
     }
 
     fn c2s_parser_inner(
@@ -46,7 +35,7 @@ impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
         stream: *const PktStrm<T>,
         cb_ctx: *const c_void,
     ) -> impl Future<Output = Result<(), ()>> {
-        let callback = self.callback_ord_pkt.clone();
+        let callback = self.cb_ord_pkt.clone();
 
         async move {
             let stm: &mut PktStrm<T>;
@@ -151,17 +140,11 @@ mod tests {
             }
         };
 
-        println!("Creating ProtoLens and parser");
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<OrdPacketParser<CapPacket>>();
-        println!("Setting callback");
-        parser.set_callback_ord_pkt(callback);
-        println!("Creating task");
-        let mut task = protolens.new_task_with_parser(parser);
-        println!("Task created");
+        protolens.set_cb_ord_pkt(callback);
+        let mut task = protolens.new_task();
         let mut push_count = 0;
 
-        println!("Starting packet processing loop");
         loop {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -177,6 +160,7 @@ mod tests {
                 println!("Packet decode error");
                 continue;
             }
+            pkt.set_l7_proto(L7Proto::OrdPacket);
 
             if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
                 push_count += 1;
@@ -195,6 +179,7 @@ mod tests {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
+        pkt1.set_l7_proto(L7Proto::OrdPacket);
         let seq2 = seq1 + pkt1.payload_len() as u32;
         let pkt2 = build_pkt(seq2, false);
         let _ = pkt2.decode();
@@ -214,9 +199,8 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<OrdPacketParser<CapPacket>>();
-        parser.set_callback_ord_pkt(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_ord_pkt(callback);
+        let mut task = protolens.new_task();
 
         // 乱序发送包
         protolens.run_task(&mut task, pkt1); // seq1
@@ -240,6 +224,7 @@ mod tests {
         let syn_seq = 1;
         let pkt_syn = build_pkt_syn(syn_seq);
         let _ = pkt_syn.decode();
+        pkt_syn.set_l7_proto(L7Proto::OrdPacket);
 
         // 创建两个数据包，序列号连续
         let seq1 = syn_seq + 1; // SYN占用一个序列号
@@ -259,9 +244,8 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        let mut parser = protolens.new_parser::<OrdPacketParser<CapPacket>>();
-        parser.set_callback_ord_pkt(callback);
-        let mut task = protolens.new_task_with_parser(parser);
+        protolens.set_cb_ord_pkt(callback);
+        let mut task = protolens.new_task();
 
         // 发送包
         protolens.run_task(&mut task, pkt_syn); // SYN包
@@ -289,7 +273,7 @@ mod tests {
         );
         println!(
             "Size of callback: {} bytes",
-            std::mem::size_of::<Option<CallbackOrdPkt<CapPacket>>>()
+            std::mem::size_of::<Option<CbOrdPkt<CapPacket>>>()
         );
 
         let c2s_size = parser.c2s_parser_size();
@@ -300,7 +284,7 @@ mod tests {
         println!("bdir size: {} bytes", bdir_size);
 
         let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
-            + std::mem::size_of::<Option<CallbackOrdPkt<CapPacket>>>();
+            + std::mem::size_of::<Option<CbOrdPkt<CapPacket>>>();
 
         assert!(
             c2s_size >= min_size,
