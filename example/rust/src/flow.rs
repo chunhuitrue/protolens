@@ -320,7 +320,6 @@ impl FlowNode {
 
         if let Some(ref mut task) = self.parser_task {
             prolens.run_task(task, pkt);
-            // println!("run task");
         }
     }
 
@@ -328,11 +327,6 @@ impl FlowNode {
         if self.parser_task.is_some() {
             return;
         }
-        if self.proto_id != ProtoID::Smtp {
-            return;
-        }
-
-        // let mut parser = prolens.new_parser::<SmtpParser<CapPacket>>();
 
         // 设置用户名回调
         let user_data = self.user.clone();
@@ -346,8 +340,6 @@ impl FlowNode {
                 );
             }
         };
-        // parser.set_callback_user(user_callback);
-
         // 设置密码回调
         let pass_data = self.pass.clone();
         let pass_callback = move |pass: &[u8], seq: u32, _cb_ctx: *const c_void| {
@@ -360,13 +352,10 @@ impl FlowNode {
                 );
             }
         };
-        // parser.set_callback_pass(pass_callback);
-
         prolens.set_cb_smtp_user(user_callback);
         prolens.set_cb_smtp_pass(pass_callback);
 
         let mut task = prolens.new_task();
-        // let task = prolens.new_task_with_parser(parser);
         self.parser_task = Some(task);
     }
 }
