@@ -143,6 +143,78 @@ pub extern "C" fn prolens_free(prolens: *mut FfiProlens) {
     }
 }
 
+// c 头文件：Task* protolens_new_task(FfiProlens* prolens, void* cb_ctx);
+// // 示例用法：
+// void* my_ctx = ...; // 用户的回调上下文
+// Task* task = protolens_new_task(prolens, my_ctx);
+#[no_mangle]
+pub extern "C" fn protolens_task_new(
+    prolens: *mut FfiProlens,
+    cb_ctx: *mut c_void,
+) -> *mut Task<FfiPacket> {
+    if prolens.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let prolens = unsafe { &*prolens };
+    // 创建新的 task，传入回调上下文
+    let task = prolens.0.new_task_inner(cb_ctx);
+    // 将 task 转换为原始指针
+    task.into_raw()
+}
+
+// void protolens_free_task(Task* task, FfiProlens* prolens);
+#[no_mangle]
+pub extern "C" fn protolens_task_free(task: *mut Task<FfiPacket>, prolens: *mut FfiProlens) {
+    if task.is_null() || prolens.is_null() {
+        return;
+    }
+
+    unsafe {
+        let prolens = &*prolens;
+        Task::from_raw(task, prolens.0.pool.clone());
+    }
+}
+
+// c 头文件：
+// typedef enum {
+//     TASK_PENDING = 0,  // None
+//     TASK_DONE = 1,     // Some(Ok(()))
+//     TASK_ERROR = 2     // Some(Err(()))
+// } TaskResult;
+// TaskResult protolens_run_task(FfiProlens* prolens, Task* task, void* pkt_ptr);
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum TaskResult {
+    Pending = 0,
+    Done = 1,
+    Error = 2,
+}
+
+#[no_mangle]
+pub extern "C" fn protolens_task_run(
+    prolens: *mut FfiProlens,
+    task: *mut Task<FfiPacket>,
+    pkt_ptr: *mut c_void,
+) -> TaskResult {
+    if prolens.is_null() || task.is_null() || pkt_ptr.is_null() {
+        return TaskResult::Error;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let task = unsafe { &mut *task };
+    let pkt = FfiPacket {
+        packet_ptr: pkt_ptr,
+    };
+
+    // 调用 run_task 并转换返回值
+    match prolens.0.run_task(task, pkt) {
+        None => TaskResult::Pending,
+        Some(Ok(())) => TaskResult::Done,
+        Some(Err(())) => TaskResult::Error,
+    }
+}
+
 pub type CbStm = extern "C" fn(data: *const u8, data_len: usize, seq: u32, *const c_void);
 
 #[no_mangle]
@@ -217,76 +289,4 @@ pub extern "C" fn prolens_set_cb_smtp_pass(prolens: *mut FfiProlens, callback: C
         callback(data.as_ptr(), data.len(), seq, ctx);
     };
     prolens.0.set_cb_smtp_pass(wrapper);
-}
-
-// c 头文件：Task* protolens_new_task(FfiProlens* prolens, void* cb_ctx);
-// // 示例用法：
-// void* my_ctx = ...; // 用户的回调上下文
-// Task* task = protolens_new_task(prolens, my_ctx);
-#[no_mangle]
-pub extern "C" fn protolens_new_task(
-    prolens: *mut FfiProlens,
-    cb_ctx: *mut c_void,
-) -> *mut Task<FfiPacket> {
-    if prolens.is_null() {
-        return std::ptr::null_mut();
-    }
-
-    let prolens = unsafe { &*prolens };
-    // 创建新的 task，传入回调上下文
-    let task = prolens.0.new_task_inner(cb_ctx);
-    // 将 task 转换为原始指针
-    task.into_raw()
-}
-
-// void protolens_free_task(Task* task, FfiProlens* prolens);
-#[no_mangle]
-pub extern "C" fn protolens_free_task(task: *mut Task<FfiPacket>, prolens: *mut FfiProlens) {
-    if task.is_null() || prolens.is_null() {
-        return;
-    }
-
-    unsafe {
-        let prolens = &*prolens;
-        Task::from_raw(task, prolens.0.pool.clone());
-    }
-}
-
-// c 头文件：
-// typedef enum {
-//     TASK_PENDING = 0,  // None
-//     TASK_DONE = 1,     // Some(Ok(()))
-//     TASK_ERROR = 2     // Some(Err(()))
-// } TaskResult;
-// TaskResult protolens_run_task(FfiProlens* prolens, Task* task, void* pkt_ptr);
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum TaskResult {
-    Pending = 0,
-    Done = 1,
-    Error = 2,
-}
-
-#[no_mangle]
-pub extern "C" fn protolens_run_task(
-    prolens: *mut FfiProlens,
-    task: *mut Task<FfiPacket>,
-    pkt_ptr: *mut c_void,
-) -> TaskResult {
-    if prolens.is_null() || task.is_null() || pkt_ptr.is_null() {
-        return TaskResult::Error;
-    }
-
-    let prolens = unsafe { &mut *prolens };
-    let task = unsafe { &mut *task };
-    let pkt = FfiPacket {
-        packet_ptr: pkt_ptr,
-    };
-
-    // 调用 run_task 并转换返回值
-    match prolens.0.run_task(task, pkt) {
-        None => TaskResult::Pending,
-        Some(Ok(())) => TaskResult::Done,
-        Some(Err(())) => TaskResult::Error,
-    }
 }
