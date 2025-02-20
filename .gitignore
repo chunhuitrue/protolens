@@ -15,3 +15,4 @@ example/smtp
 
 .DS_Store
 .aider*
+.vscode

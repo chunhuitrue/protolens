@@ -1,19 +1,18 @@
 use crate::pool::Pool;
 use crate::Packet;
+use crate::Parser;
 use crate::ParserFuture;
-use crate::ParserInner;
 use crate::PktStrm;
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::Mutex;
 
-pub trait StreamReadCbFn: FnMut(&[u8], usize, u32, *const c_void) + Send + Sync {}
-impl<F: FnMut(&[u8], usize, u32, *const c_void) + Send + Sync> StreamReadCbFn for F {}
-pub(crate) type CbStreamRead = Arc<Mutex<dyn StreamReadCbFn>>;
+pub trait StreamReadCbFn: FnMut(&[u8], usize, u32, *mut c_void) {}
+impl<F: FnMut(&[u8], usize, u32, *mut c_void)> StreamReadCbFn for F {}
+pub(crate) type CbStreamRead = Rc<RefCell<dyn StreamReadCbFn + 'static>>;
 
 pub struct StreamReadParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -35,7 +34,7 @@ impl<T: Packet + Ord + 'static> StreamReadParser<T> {
     fn c2s_parser_inner(
         &self,
         stream: *const PktStrm<T>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> impl Future<Output = Result<(), ()>> {
         let callback = self.cb_read.clone();
         let mut read_buff = self.read_buff.clone();
@@ -51,7 +50,7 @@ impl<T: Packet + Ord + 'static> StreamReadParser<T> {
                     Ok((read_len, seq)) => {
                         if read_len > 0 {
                             if let Some(ref callback) = callback {
-                                callback.lock().unwrap()(
+                                callback.borrow_mut()(
                                     &read_buff[..read_len],
                                     read_len,
                                     seq,
@@ -77,7 +76,7 @@ impl<T: Packet + Ord + 'static> Default for StreamReadParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> ParserInner for StreamReadParser<T> {
+impl<T: Packet + Ord + 'static> Parser for StreamReadParser<T> {
     type PacketType = T;
 
     fn new() -> Self {
@@ -102,7 +101,7 @@ impl<T: Packet + Ord + 'static> ParserInner for StreamReadParser<T> {
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         Some(
             self.pool()
@@ -124,14 +123,13 @@ mod tests {
         let _ = pkt1.decode();
         pkt1.set_l7_proto(L7Proto::StreamRead);
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-        let seq_value = Arc::new(Mutex::new(0u32));
-
-        let vec_clone = Arc::clone(&vec);
-        let seq_clone = Arc::clone(&seq_value);
-        let callback = move |bytes: &[u8], len: usize, seq: u32, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().extend_from_slice(&bytes[..len]);
-            *seq_clone.lock().unwrap() = seq;
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let seq_value = Rc::new(RefCell::new(0u32));
+        let seq_clone = Rc::clone(&seq_value);
+        let callback = move |bytes: &[u8], len: usize, seq: u32, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().extend_from_slice(&bytes[..len]);
+            *seq_clone.borrow_mut() = seq;
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -141,8 +139,8 @@ mod tests {
         protolens.run_task(&mut task, pkt1);
 
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        assert_eq!(*vec.lock().unwrap(), expected);
-        assert_eq!(*seq_value.lock().unwrap(), seq1);
+        assert_eq!(*vec.borrow(), expected);
+        assert_eq!(*seq_value.borrow(), seq1);
     }
 
     #[test]
@@ -155,14 +153,13 @@ mod tests {
         let _ = pkt2.decode();
         pkt1.set_l7_proto(L7Proto::StreamRead);
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-        let seq_values = Arc::new(Mutex::new(Vec::new()));
-
-        let vec_clone = Arc::clone(&vec);
-        let seq_clone = Arc::clone(&seq_values);
-        let callback = move |bytes: &[u8], len: usize, seq: u32, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().extend_from_slice(&bytes[..len]);
-            seq_clone.lock().unwrap().push(seq);
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let seq_values = Rc::new(RefCell::new(Vec::new()));
+        let seq_clone = Rc::clone(&seq_values);
+        let callback = move |bytes: &[u8], len: usize, seq: u32, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().extend_from_slice(&bytes[..len]);
+            seq_clone.borrow_mut().push(seq);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -174,7 +171,7 @@ mod tests {
 
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let expected_seqs = vec![seq1, seq2];
-        assert_eq!(*vec.lock().unwrap(), expected);
-        assert_eq!(*seq_values.lock().unwrap(), expected_seqs);
+        assert_eq!(*vec.borrow(), expected);
+        assert_eq!(*seq_values.borrow(), expected_seqs);
     }
 }

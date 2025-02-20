@@ -1,19 +1,18 @@
 use crate::pool::Pool;
 use crate::Packet;
+use crate::Parser;
 use crate::ParserFuture;
-use crate::ParserInner;
 use crate::PktStrm;
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::Mutex;
 
-pub trait OrdPktCbFn<T>: FnMut(T, *const c_void) + Send + Sync {}
-impl<F, T> OrdPktCbFn<T> for F where F: FnMut(T, *const c_void) + Send + Sync {}
-pub(crate) type CbOrdPkt<T> = Arc<Mutex<dyn OrdPktCbFn<T>>>;
+pub trait OrdPktCbFn<T>: FnMut(T, *mut c_void) {}
+impl<F, T> OrdPktCbFn<T> for F where F: FnMut(T, *mut c_void) {}
+pub(crate) type CbOrdPkt<T> = Rc<RefCell<dyn OrdPktCbFn<T> + 'static>>;
 
 pub struct OrdPacketParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -33,7 +32,7 @@ impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
     fn c2s_parser_inner(
         &self,
         stream: *const PktStrm<T>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> impl Future<Output = Result<(), ()>> {
         let callback = self.cb_ord_pkt.clone();
 
@@ -47,7 +46,7 @@ impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
                 let pkt = stm.next_ord_pkt().await;
                 if let Some(ref callback) = callback {
                     if let Some(pkt) = pkt {
-                        callback.lock().unwrap()(pkt, cb_ctx);
+                        callback.borrow_mut()(pkt, cb_ctx);
                     }
                 }
             }
@@ -62,7 +61,7 @@ impl<T: Packet + Ord + 'static> Default for OrdPacketParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> ParserInner for OrdPacketParser<T> {
+impl<T: Packet + Ord + 'static> Parser for OrdPacketParser<T> {
     type PacketType = T;
 
     fn new() -> Self {
@@ -84,7 +83,7 @@ impl<T: Packet + Ord + 'static> ParserInner for OrdPacketParser<T> {
         std::mem::size_of_val(&future)
     }
 
-    fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *const c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(
             self.pool()
                 .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
@@ -108,12 +107,12 @@ mod tests {
         let file_path = project_root.join("tests/res/smtp.pcap");
         println!("Opening pcap file: {:?}", file_path);
         let mut cap = Capture::init(file_path).unwrap();
-        let count = Arc::new(Mutex::new(0));
+        let count = Rc::new(RefCell::new(0));
         let count_clone = count.clone();
 
-        let callback = move |pkt: CapPacket, _cb_ctx: *const c_void| {
+        let callback = move |pkt: CapPacket, _cb_ctx: *mut c_void| {
             println!("Callback triggered with packet seq: {}", pkt.seq());
-            let mut count = count_clone.lock().unwrap();
+            let mut count = count_clone.borrow_mut();
             *count += 1;
             println!("Current count: {}", *count);
             dbg!(pkt.seq(), *count);
@@ -169,8 +168,8 @@ mod tests {
             }
         }
 
-        println!("Loop finished. Final count: {}", *count.lock().unwrap());
-        assert_eq!(*count.lock().unwrap(), 18);
+        println!("Loop finished. Final count: {}", *count.borrow());
+        assert_eq!(*count.borrow(), 18);
     }
 
     #[test]
@@ -190,12 +189,12 @@ mod tests {
         let pkt4 = build_pkt(seq4, true); // 最后一个包带 fin
         let _ = pkt4.decode();
 
-        let vec = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let vec = Rc::new(RefCell::new(Vec::<u8>::new()));
 
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |pkt: CapPacket, _cb_ctx: *const c_void| {
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |pkt: CapPacket, _cb_ctx: *mut c_void| {
             // 获取包的payload并添加到结果向量中
-            vec_clone.lock().unwrap().extend(pkt.payload());
+            vec_clone.borrow_mut().extend(pkt.payload());
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -215,7 +214,7 @@ mod tests {
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第三个包的数据
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第四个包的数据(带fin)
         ];
-        assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*vec.borrow_mut(), expected);
     }
 
     #[test]
@@ -235,12 +234,12 @@ mod tests {
         let pkt2 = build_pkt(seq2, false);
         let _ = pkt2.decode();
 
-        let vec = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let vec = Rc::new(RefCell::new(Vec::<u8>::new()));
 
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |pkt: CapPacket, _cb_ctx: *const c_void| {
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |pkt: CapPacket, _cb_ctx: *mut c_void| {
             // 获取包的payload并添加到结果向量中
-            vec_clone.lock().unwrap().extend(pkt.payload());
+            vec_clone.borrow_mut().extend(pkt.payload());
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -258,7 +257,7 @@ mod tests {
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第一个数据包
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第二个数据包
         ];
-        assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*vec.borrow(), expected);
     }
 
     #[test]

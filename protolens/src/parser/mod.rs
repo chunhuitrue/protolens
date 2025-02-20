@@ -1,5 +1,3 @@
-// #![allow(unused)]
-
 pub mod ordpacket;
 #[cfg(test)]
 pub mod rawpacket;
@@ -19,45 +17,16 @@ pub mod stream_readn2;
 
 use crate::pool::Pool;
 use crate::pool::PoolBox;
-use crate::task::PacketBind;
 use crate::Packet;
 use crate::PktStrm;
 use futures::Future;
 use std::ffi::c_void;
-use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::rc::Rc;
 
-#[repr(transparent)]
-pub struct Parser<P: PacketBind, T: ParserInner<PacketType = P>>(PoolBox<T>);
-
-impl<P: PacketBind, T: ParserInner<PacketType = P>> Parser<P, T> {
-    pub(crate) fn new(inner: PoolBox<T>) -> Self {
-        Self(inner)
-    }
-
-    pub(crate) fn into_inner(self) -> PoolBox<T> {
-        self.0
-    }
-}
-
-impl<P: PacketBind, T: ParserInner<PacketType = P>> Deref for Parser<P, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<P: PacketBind, T: ParserInner<PacketType = P>> DerefMut for Parser<P, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 pub(crate) type ParserFuture = Pin<PoolBox<dyn Future<Output = Result<(), ()>>>>;
 
-pub trait ParserInner {
+pub(crate) trait Parser {
     type PacketType: Packet + Ord + 'static;
 
     fn new() -> Self
@@ -83,7 +52,7 @@ pub trait ParserInner {
     fn c2s_parser(
         &self,
         _stream: *const PktStrm<Self::PacketType>,
-        _cb_ctx: *const c_void,
+        _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
     }
@@ -91,7 +60,7 @@ pub trait ParserInner {
     fn s2c_parser(
         &self,
         _stream: *const PktStrm<Self::PacketType>,
-        _cb_ctx: *const c_void,
+        _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
     }
@@ -100,7 +69,7 @@ pub trait ParserInner {
         &self,
         _c2s_stream: *const PktStrm<Self::PacketType>,
         _s2c_stream: *const PktStrm<Self::PacketType>,
-        _cb_ctx: *const c_void,
+        _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
     }

@@ -1,19 +1,18 @@
 use crate::pool::Pool;
 use crate::Packet;
+use crate::Parser;
 use crate::ParserFuture;
-use crate::ParserInner;
 use crate::PktStrm;
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::Mutex;
 
-pub trait ReadnCbFn: FnMut(Vec<u8>, *const c_void) + Send + Sync {}
-impl<F: FnMut(Vec<u8>, *const c_void) + Send + Sync> ReadnCbFn for F {}
-pub(crate) type CbReadn = Arc<Mutex<dyn ReadnCbFn>>;
+pub trait ReadnCbFn: FnMut(Vec<u8>, *mut c_void) {}
+impl<F: FnMut(Vec<u8>, *mut c_void)> ReadnCbFn for F {}
+pub(crate) type CbReadn = Rc<RefCell<dyn ReadnCbFn + 'static>>;
 
 pub struct StreamReadnParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -35,7 +34,7 @@ impl<T: Packet + Ord + 'static> StreamReadnParser<T> {
     fn c2s_parser_inner(
         &self,
         stream: *const PktStrm<T>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> impl Future<Output = Result<(), ()>> {
         let callback = self.cb_readn.clone();
         let read_size = self.read_size;
@@ -52,7 +51,7 @@ impl<T: Packet + Ord + 'static> StreamReadnParser<T> {
                     break;
                 }
                 if let Some(ref callback) = callback {
-                    callback.lock().unwrap()(bytes, cb_ctx);
+                    callback.borrow_mut()(bytes, cb_ctx);
                 }
             }
             Ok(())
@@ -66,7 +65,7 @@ impl<T: Packet + Ord + 'static> Default for StreamReadnParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> ParserInner for StreamReadnParser<T> {
+impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
     type PacketType = T;
 
     fn new() -> Self {
@@ -91,7 +90,7 @@ impl<T: Packet + Ord + 'static> ParserInner for StreamReadnParser<T> {
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         Some(
             self.pool()
@@ -113,11 +112,10 @@ mod tests {
         let _ = pkt1.decode();
         pkt1.set_l7_proto(L7Proto::StreamReadn);
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |bytes: Vec<u8>, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().extend(bytes);
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |bytes: Vec<u8>, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().extend(bytes);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -128,7 +126,7 @@ mod tests {
 
         // 验证收到的数据是否正确
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*vec.borrow(), expected);
     }
 
     #[test]
@@ -141,11 +139,10 @@ mod tests {
         let _ = pkt2.decode();
         pkt1.set_l7_proto(L7Proto::StreamReadn);
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |bytes: Vec<u8>, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().extend(bytes);
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |bytes: Vec<u8>, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().extend(bytes);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -160,7 +157,7 @@ mod tests {
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第一个包的数据
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第二个包的数据
         ];
-        assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*vec.borrow_mut(), expected);
     }
 
     #[test]
@@ -180,11 +177,10 @@ mod tests {
         let _ = pkt2.decode();
         pkt_syn.set_l7_proto(L7Proto::StreamReadn);
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |bytes: Vec<u8>, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().extend(bytes);
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |bytes: Vec<u8>, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().extend(bytes);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -201,7 +197,7 @@ mod tests {
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第一个数据包
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第二个数据包
         ];
-        assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*vec.borrow(), expected);
     }
 
     #[test]

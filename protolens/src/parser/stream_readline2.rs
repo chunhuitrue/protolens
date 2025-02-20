@@ -1,27 +1,26 @@
 use crate::pool::Pool;
 use crate::Packet;
+use crate::Parser;
 use crate::ParserFuture;
-use crate::ParserInner;
 use crate::PktStrm;
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::Mutex;
 
-pub trait ReadLineCbFn: FnMut(String, *const c_void) + Send + Sync {}
-impl<F: FnMut(String, *const c_void) + Send + Sync> ReadLineCbFn for F {}
-pub(crate) type CbReadline = Arc<Mutex<dyn ReadLineCbFn>>;
+pub trait ReadLine2CbFn: FnMut(&[u8], u32, *mut c_void) {}
+impl<F: FnMut(&[u8], u32, *mut c_void)> ReadLine2CbFn for F {}
+pub(crate) type CbReadline2 = Rc<RefCell<dyn ReadLine2CbFn + 'static>>;
 
-pub struct StreamReadlineParser<T: Packet + Ord + 'static> {
+pub struct StreamReadline2Parser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     pool: Option<Rc<Pool>>,
-    pub(crate) cb_readline: Option<CbReadline>,
+    pub(crate) cb_readline: Option<CbReadline2>,
 }
 
-impl<T: Packet + Ord + 'static> StreamReadlineParser<T> {
+impl<T: Packet + Ord + 'static> StreamReadline2Parser<T> {
     pub fn new() -> Self {
         Self {
             _phantom: PhantomData,
@@ -33,7 +32,7 @@ impl<T: Packet + Ord + 'static> StreamReadlineParser<T> {
     fn c2s_parser_inner(
         &self,
         stream: *const PktStrm<T>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> impl Future<Output = Result<(), ()>> {
         let callback = self.cb_readline.clone();
 
@@ -44,16 +43,12 @@ impl<T: Packet + Ord + 'static> StreamReadlineParser<T> {
             }
 
             while !stm.fin() {
-                match stm.readline().await {
-                    Ok(line) => {
-                        if line.is_empty() {
-                            break;
-                        }
-                        if let Some(ref callback) = callback {
-                            callback.lock().unwrap()(line, cb_ctx);
-                        }
-                    }
-                    Err(_) => break,
+                let (line, seq) = stm.readline2().await?;
+                if line.is_empty() {
+                    break;
+                }
+                if let Some(ref callback) = callback {
+                    callback.borrow_mut()(line, seq, cb_ctx);
                 }
             }
             Ok(())
@@ -61,13 +56,13 @@ impl<T: Packet + Ord + 'static> StreamReadlineParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> Default for StreamReadlineParser<T> {
+impl<T: Packet + Ord + 'static> Default for StreamReadline2Parser<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Packet + Ord + 'static> ParserInner for StreamReadlineParser<T> {
+impl<T: Packet + Ord + 'static> Parser for StreamReadline2Parser<T> {
     type PacketType = T;
 
     fn new() -> Self {
@@ -92,7 +87,7 @@ impl<T: Packet + Ord + 'static> ParserInner for StreamReadlineParser<T> {
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         Some(
             self.pool()
@@ -108,34 +103,59 @@ mod tests {
     use crate::*;
 
     #[test]
-    fn test_stream_readline_single_line() {
+    fn test_stream_readline2_single_line() {
         // 创建一个包含一行数据的包
         let seq1 = 1;
         let payload = [b'H', b'e', b'l', b'l', b'o', b'\n', b'W', b'o', b'r', b'l'];
         let pkt1 = build_pkt_line(seq1, payload);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::StreamReadline);
+        pkt1.set_l7_proto(L7Proto::StreamReadline2);
 
-        let lines = Arc::new(Mutex::new(Vec::new()));
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let lines_clone = Rc::clone(&lines);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            lines_clone.borrow_mut().push(line.to_vec());
+            seqs_clone.borrow_mut().push(seq);
+            dbg!(seq);
+        };
 
-        let lines_clone = Arc::clone(&lines);
-        let callback = move |line: String, _cb_ctx: *const c_void| {
-            lines_clone.lock().unwrap().push(line);
+        // 添加用于验证原始TCP流数据的变量
+        let raw_data = Rc::new(RefCell::new(Vec::new()));
+        let raw_data_clone = Rc::clone(&raw_data);
+        let raw_seqs = Rc::new(RefCell::new(Vec::new()));
+        let raw_seqs_clone = Rc::clone(&raw_seqs);
+        let stm_callback = move |data: &[u8], seq: u32, _cb_ctx: *const c_void| {
+            raw_data_clone.borrow_mut().push(data.to_vec());
+            raw_seqs_clone.borrow_mut().push(seq);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        protolens.set_cb_readline(callback);
+        protolens.set_cb_readline2(callback);
         let mut task = protolens.new_task();
+
+        // 设置原始TCP流callback
+        protolens.set_cb_task_c2s(&mut task, stm_callback);
 
         protolens.run_task(&mut task, pkt1);
 
         // 验证收到的行是否正确
-        let expected = vec!["Hello\n".to_string()];
-        assert_eq!(*lines.lock().unwrap(), expected);
+        let line_expected = vec![b"Hello\n".to_vec()];
+        let seq_expected = vec![1];
+        dbg!(&seq_expected);
+        assert_eq!(*lines.borrow(), line_expected);
+        assert_eq!(*seqs.borrow(), seq_expected);
+
+        // 验证原始TCP流数据是否正确
+        let raw_data_expected = vec![b"Hello\n".to_vec()];
+        let raw_seq_expected = vec![seq1];
+        assert_eq!(*raw_data.borrow(), raw_data_expected);
+        assert_eq!(*raw_seqs.borrow(), raw_seq_expected);
     }
 
     #[test]
-    fn test_stream_readline_multiple_packets() {
+    fn test_stream_readline2_multiple_packets() {
         // 第一个包包含 "Hello\nWor"
         let seq1 = 1;
         let payload1 = [b'H', b'e', b'l', b'l', b'o', b'\n', b'W', b'o', b'r', b' '];
@@ -148,33 +168,37 @@ mod tests {
 
         let _ = pkt1.decode();
         let _ = pkt2.decode();
-        pkt1.set_l7_proto(L7Proto::StreamReadline);
+        pkt1.set_l7_proto(L7Proto::StreamReadline2);
 
-        let lines = Arc::new(Mutex::new(Vec::new()));
-
-        let lines_clone = Arc::clone(&lines);
-        let callback = move |line: String, _cb_ctx: *const c_void| {
-            lines_clone.lock().unwrap().push(line);
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let lines_clone = Rc::clone(&lines);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            lines_clone.borrow_mut().push(line.to_vec());
+            seqs_clone.borrow_mut().push(seq);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        protolens.set_cb_readline(callback);
+        protolens.set_cb_readline2(callback);
         let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
 
         // 验证收到的行是否正确
-        let expected = vec![
-            "Hello\n".to_string(),
-            "Wor ld!\n".to_string(),
-            "Bye\n".to_string(),
+        let line_expected = vec![
+            b"Hello\n".to_vec(),
+            b"Wor ld!\n".to_vec(),
+            b"Bye\n".to_vec(),
         ];
-        assert_eq!(*lines.lock().unwrap(), expected);
+        let seq_expected = vec![1, 7, 15];
+        assert_eq!(*lines.borrow(), line_expected);
+        assert_eq!(*seqs.borrow(), seq_expected);
     }
 
     #[test]
-    fn test_stream_readline_with_syn() {
+    fn test_stream_readline2_with_syn() {
         // 创建SYN包
         let seq1 = 1;
         let pkt_syn = build_pkt_syn(seq1);
@@ -191,17 +215,19 @@ mod tests {
         let _ = pkt_syn.decode();
         let _ = pkt1.decode();
         let _ = pkt2.decode();
-        pkt_syn.set_l7_proto(L7Proto::StreamReadline);
+        pkt_syn.set_l7_proto(L7Proto::StreamReadline2);
 
-        let lines = Arc::new(Mutex::new(Vec::new()));
-
-        let lines_clone = Arc::clone(&lines);
-        let callback = move |line: String, _cb_ctx: *const c_void| {
-            lines_clone.lock().unwrap().push(line);
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let lines_clone = Rc::clone(&lines);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            lines_clone.borrow_mut().push(line.to_vec());
+            seqs_clone.borrow_mut().push(seq);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
-        protolens.set_cb_readline(callback);
+        protolens.set_cb_readline2(callback);
         let mut task = protolens.new_task();
 
         // 乱序发送包
@@ -210,18 +236,16 @@ mod tests {
         protolens.run_task(&mut task, pkt1);
 
         // 验证收到的行是否正确
-        let expected = vec![
-            "Hello\n".to_string(),
-            "World!\n".to_string(),
-            "Bye\n".to_string(),
-        ];
-        assert_eq!(*lines.lock().unwrap(), expected);
+        let line_expected = vec![b"Hello\n".to_vec(), b"World!\n".to_vec(), b"Bye\n".to_vec()];
+        let seq_expected = vec![2, 8, 15];
+        assert_eq!(*lines.borrow(), line_expected);
+        assert_eq!(*seqs.borrow(), seq_expected);
     }
 
     #[test]
-    fn test_readline_future_sizes() {
+    fn test_readline2_future_sizes() {
         let pool = Rc::new(Pool::new(4096, vec![4]));
-        let mut parser = StreamReadlineParser::<CapPacket>::new();
+        let mut parser = StreamReadline2Parser::<CapPacket>::new();
         parser.set_pool(pool);
 
         println!(
@@ -230,7 +254,7 @@ mod tests {
         );
         println!(
             "Size of callback: {} bytes",
-            std::mem::size_of::<Option<CbReadline>>()
+            std::mem::size_of::<Option<CbReadline2>>()
         );
 
         let c2s_size = parser.c2s_parser_size();
@@ -241,7 +265,7 @@ mod tests {
         println!("bdir size: {} bytes", bdir_size);
 
         let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
-            + std::mem::size_of::<Option<CbReadline>>();
+            + std::mem::size_of::<Option<CbReadline2>>();
 
         assert!(
             c2s_size >= min_size,

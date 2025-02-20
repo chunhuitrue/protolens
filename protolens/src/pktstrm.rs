@@ -11,6 +11,7 @@ use futures::future;
 use futures::future::poll_fn;
 use futures::Future;
 use futures_util::stream::{Stream, StreamExt};
+use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::ffi::c_void;
@@ -23,9 +24,9 @@ use std::sync::{Arc, Mutex};
 use std::task::Context;
 use std::task::Poll;
 
-pub trait StmCallbackFn: FnMut(&[u8], u32, *const c_void) + Send + Sync {}
-impl<F> StmCallbackFn for F where F: FnMut(&[u8], u32, *const c_void) + Send + Sync {}
-pub type StmCallback = Arc<Mutex<dyn StmCallbackFn>>;
+pub trait StmCbFn: FnMut(&[u8], u32, *const c_void) {}
+impl<F> StmCbFn for F where F: FnMut(&[u8], u32, *const c_void) {}
+pub type CbStrm = Rc<RefCell<dyn StmCbFn + 'static>>;
 
 pub struct PktStrm<T>
 where
@@ -39,7 +40,7 @@ where
     fin: bool,
     // 只有成功返回的才会被callback，比如hello\nxxx。对readline2来说，hello\n成功读取，然后调用callback。
     // 后续的xxx不会调用callback
-    callback: Option<StmCallback>,
+    cb_strm: Option<CbStrm>,
     cb_ctx: *const c_void, // 只在c语言api中使用
 }
 
@@ -57,16 +58,16 @@ where
             read_buff_len: 0,
             next_seq: 0,
             fin: false,
-            callback: None,
+            cb_strm: None,
             cb_ctx,
         }
     }
 
-    pub(crate) fn set_callback<F>(&mut self, callback: F)
+    pub(crate) fn set_cb<F>(&mut self, callback: F)
     where
-        F: StmCallbackFn + 'static,
+        F: StmCbFn + 'static,
     {
-        self.callback = Some(Arc::new(Mutex::new(callback)));
+        self.cb_strm = Some(Rc::new(RefCell::new(callback)));
     }
 
     pub(crate) fn push(&mut self, packet: T) {
@@ -371,16 +372,16 @@ where
     }
 
     fn call_cb(&mut self, buff: &[u8], seq: u32) {
-        if let Some(ref mut cb) = self.callback {
-            cb.lock().unwrap()(buff, seq, self.cb_ctx);
+        if let Some(ref mut cb) = self.cb_strm {
+            cb.borrow_mut()(buff, seq, self.cb_ctx);
         }
     }
 
     fn prepare_result(&mut self, len: usize) -> Result<(&[u8], u32), ()> {
         let seq = self.next_seq - self.read_buff_len as u32;
         let data = &self.read_buff[..len];
-        if let Some(ref mut cb) = self.callback {
-            cb.lock().unwrap()(data, seq, self.cb_ctx);
+        if let Some(ref mut cb) = self.cb_strm {
+            cb.borrow_mut()(data, seq, self.cb_ctx);
         }
         let result = Ok((data, seq));
         self.read_buff_len = 0;

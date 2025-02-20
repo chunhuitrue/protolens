@@ -1,7 +1,7 @@
 use crate::pool::Pool;
 use crate::Packet;
+use crate::Parser;
 use crate::ParserFuture;
-use crate::ParserInner;
 use crate::PktStrm;
 use nom::{
     bytes::complete::{tag, take_till, take_while},
@@ -10,13 +10,12 @@ use nom::{
     error::context,
     IResult, Offset,
 };
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 #[derive(Debug)]
 enum ContentType {
@@ -24,10 +23,10 @@ enum ContentType {
     Alt,
 }
 
-pub trait SmtpCbFn: FnMut(&[u8], u32, *const c_void) + Send + Sync {}
-impl<F: FnMut(&[u8], u32, *const c_void) + Send + Sync> SmtpCbFn for F {}
-pub type CbUser = Arc<Mutex<dyn SmtpCbFn>>;
-pub(crate) type CbPass = Arc<Mutex<dyn SmtpCbFn>>;
+pub trait SmtpCbFn: FnMut(&[u8], u32, *mut c_void) {}
+impl<F: FnMut(&[u8], u32, *mut c_void)> SmtpCbFn for F {}
+pub(crate) type CbUser = Rc<RefCell<dyn SmtpCbFn + 'static>>;
+pub(crate) type CbPass = Rc<RefCell<dyn SmtpCbFn + 'static>>;
 
 pub struct SmtpParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -49,7 +48,7 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
     fn c2s_parser_inner(
         &self,
         stream: *const PktStrm<T>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> impl Future<Output = Result<(), ()>> {
         let callback_user = self.cb_user.clone();
         let callback_pass = self.cb_pass.clone();
@@ -77,14 +76,14 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
             // user
             let (user, seq) = stm.read_clean_line().await?;
             if let Some(cb) = callback_user {
-                cb.lock().unwrap()(user, seq, cb_ctx);
+                cb.borrow_mut()(user, seq, cb_ctx);
             }
             dbg!(user, seq);
 
             // pass
             let (pass, seq) = stm.read_clean_line().await?;
             if let Some(cb) = callback_pass.clone() {
-                cb.lock().unwrap()(pass, seq, cb_ctx);
+                cb.borrow_mut()(pass, seq, cb_ctx);
             }
             dbg!(std::str::from_utf8(pass).expect("need utf8"), seq);
 
@@ -127,7 +126,7 @@ impl<T: Packet + Ord + 'static> Default for SmtpParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> ParserInner for SmtpParser<T> {
+impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
     type PacketType = T;
 
     fn new() -> Self {
@@ -152,7 +151,7 @@ impl<T: Packet + Ord + 'static> ParserInner for SmtpParser<T> {
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         Some(
             self.pool()
@@ -287,7 +286,6 @@ mod tests {
     use crate::test_utils::*;
     use crate::*;
     use std::env;
-    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -425,17 +423,17 @@ mod tests {
         let file_path = project_root.join("tests/res/smtp.pcap");
         let mut cap = Capture::init(file_path).unwrap();
 
-        let captured_user = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let captured_user_seq = Arc::new(Mutex::new(0u32));
-        let captured_pass = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let captured_pass_seq = Arc::new(Mutex::new(0u32));
+        let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_user_seq = Rc::new(RefCell::new(0u32));
+        let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_pass_seq = Rc::new(RefCell::new(0u32));
 
         let user_callback = {
             let user_clone = captured_user.clone();
             let seq_clone = captured_user_seq.clone();
-            move |user: &[u8], seq: u32, _cb_ctx: *const c_void| {
-                let mut user_guard = user_clone.lock().unwrap();
-                let mut seq_guard = seq_clone.lock().unwrap();
+            move |user: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut user_guard = user_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
                 *user_guard = user.to_vec();
                 *seq_guard = seq;
                 dbg!("in callback", std::str::from_utf8(user).unwrap(), seq);
@@ -445,9 +443,9 @@ mod tests {
         let pass_callback = {
             let pass_clone = captured_pass.clone();
             let seq_clone = captured_pass_seq.clone();
-            move |pass: &[u8], seq: u32, _cb_ctx: *const c_void| {
-                let mut pass_guard = pass_clone.lock().unwrap();
-                let mut seq_guard = seq_clone.lock().unwrap();
+            move |pass: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut pass_guard = pass_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
                 *pass_guard = pass.to_vec();
                 *seq_guard = seq;
                 dbg!("pass callback", std::str::from_utf8(pass).unwrap(), seq);
@@ -483,23 +481,23 @@ mod tests {
         }
 
         assert_eq!(
-            captured_user.lock().unwrap().as_slice(),
+            captured_user.borrow().as_slice(),
             b"dXNlcjEyMzQ1QGV4YW1wbGUxMjMuY29t",
             "User should match expected value"
         );
         assert_eq!(
-            *captured_user_seq.lock().unwrap(),
+            *captured_user_seq.borrow(),
             1341098188,
             "Sequence number should match packet sequence"
         );
 
         assert_eq!(
-            captured_pass.lock().unwrap().as_slice(),
+            captured_pass.borrow().as_slice(),
             b"MTIzNDU2Nzg=",
             "Password should match expected value"
         );
         assert_eq!(
-            *captured_pass_seq.lock().unwrap(),
+            *captured_pass_seq.borrow(),
             1341098222,
             "Password sequence number should match packet sequence"
         );

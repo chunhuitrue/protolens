@@ -1,6 +1,6 @@
 mod config;
 mod dynamic_heap;
-// mod ffi;
+mod ffi;
 mod heap;
 mod packet;
 mod parser;
@@ -34,12 +34,11 @@ pub use crate::stream_readn::StreamReadnParser;
 #[cfg(test)]
 pub use crate::stream_readn2::StreamReadn2Parser;
 
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 use crate::ordpacket::*;
 #[cfg(test)]
@@ -159,67 +158,59 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         self.new_task_inner(ptr::null_mut())
     }
 
-    fn new_task_inner(&self, cb_ctx: *mut c_void) -> Task<P> {
+    pub(crate) fn new_task_inner(&self, cb_ctx: *mut c_void) -> Task<P> {
         Task::new(self.pool.alloc(|| TaskInner::new(&self.pool, cb_ctx)))
     }
 
-    fn new_parser<T: ParserInner<PacketType = P>>(&self) -> Parser<P, T> {
-        Parser::new(self.pool.alloc(|| {
-            let mut parser = T::new();
-            parser.set_pool(Rc::clone(&self.pool));
-            parser
-        }))
+    fn new_parser<T: Parser<PacketType = P>>(&self) -> PoolBox<T> {
+        self.pool.alloc(|| {
+            let mut p = T::new();
+            p.set_pool(self.pool.clone());
+            p
+        })
     }
 
     // 为已存在的 task 设置 parser
     // 这个方法用于在运行了一些数据包并确定了合适的 parser 类型后调用
-    fn task_set_parser<T: ParserInner<PacketType = P>>(
-        &self,
-        task: &mut Task<P>,
-        parser: Parser<P, T>,
-    ) {
-        task.as_inner_mut().init_parser(parser.into_inner());
+    fn task_set_parser<T: Parser<PacketType = P>>(&self, task: &mut Task<P>, parser: PoolBox<T>) {
+        task.as_inner_mut().init_parser(parser);
     }
 
-    // task stream callback
     pub fn set_cb_task_c2s<F>(&self, task: &mut Task<P>, callback: F)
     where
-        F: StmCallbackFn + 'static,
+        F: StmCbFn + 'static,
     {
-        task.as_inner_mut().set_c2s_callback(callback);
+        task.as_inner_mut().set_cb_c2s(callback);
     }
 
     pub fn set_cb_task_s2c<F>(&self, task: &mut Task<P>, callback: F)
     where
-        F: StmCallbackFn + 'static,
+        F: StmCbFn + 'static,
     {
-        task.as_inner_mut().set_s2c_callback(callback);
+        task.as_inner_mut().set_cb_s2c(callback);
     }
 
-    // ord packet callback
     pub fn set_cb_ord_pkt<F>(&mut self, callback: F)
     where
         F: OrdPktCbFn<P> + 'static,
     {
-        self.cb_ord_pkt = Some(Arc::new(Mutex::new(callback)));
+        self.cb_ord_pkt = Some(Rc::new(RefCell::new(callback)));
     }
 
-    // raw packet callback
     #[cfg(test)]
     pub fn set_cb_raw_pkt<F>(&mut self, callback: F)
     where
         F: RawPktCbFn<P> + 'static,
     {
-        self.cb_raw_pkt = Some(Arc::new(Mutex::new(callback)));
+        self.cb_raw_pkt = Some(Rc::new(RefCell::new(callback)));
     }
 
-    // stream next callback
     #[cfg(test)]
     pub fn set_cb_stream_next_byte<F>(&mut self, callback: F)
     where
         F: StreamNextCbFn + 'static,
     {
-        self.cb_stream_next_byte = Some(Arc::new(Mutex::new(callback)));
+        self.cb_stream_next_byte = Some(Rc::new(RefCell::new(callback)));
     }
 
     #[cfg(test)]
@@ -227,7 +218,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     where
         F: StreamReadCbFn + 'static,
     {
-        self.cb_stream_read = Some(Arc::new(Mutex::new(callback)));
+        self.cb_stream_read = Some(Rc::new(RefCell::new(callback)));
     }
 
     #[cfg(test)]
@@ -235,7 +226,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     where
         F: ReadLineCbFn + 'static,
     {
-        self.cb_stream_readline = Some(Arc::new(Mutex::new(callback)));
+        self.cb_stream_readline = Some(Rc::new(RefCell::new(callback)));
     }
 
     #[cfg(test)]
@@ -243,7 +234,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     where
         F: ReadLine2CbFn + 'static,
     {
-        self.cb_stream_readline2 = Some(Arc::new(Mutex::new(callback)));
+        self.cb_stream_readline2 = Some(Rc::new(RefCell::new(callback)));
     }
 
     #[cfg(test)]
@@ -251,7 +242,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     where
         F: ReadnCbFn + 'static,
     {
-        self.cb_readn = Some(Arc::new(Mutex::new(callback)));
+        self.cb_readn = Some(Rc::new(RefCell::new(callback)));
     }
 
     #[cfg(test)]
@@ -259,42 +250,22 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     where
         F: Readn2CbFn + 'static,
     {
-        self.cb_readn2 = Some(Arc::new(Mutex::new(callback)));
+        self.cb_readn2 = Some(Rc::new(RefCell::new(callback)));
     }
 
-    // smtp callback
     pub fn set_cb_smtp_user<F>(&mut self, callback: F)
     where
         F: SmtpCbFn + 'static,
     {
-        self.cb_smtp_user = Some(Arc::new(Mutex::new(callback)));
+        self.cb_smtp_user = Some(Rc::new(RefCell::new(callback)));
     }
 
     pub fn set_cb_smtp_pass<F>(&mut self, callback: F)
     where
         F: SmtpCbFn + 'static,
     {
-        self.cb_smtp_pass = Some(Arc::new(Mutex::new(callback)) as CbPass);
+        self.cb_smtp_pass = Some(Rc::new(RefCell::new(callback)) as CbPass);
     }
-
-    // // 如果第一个包就已经识别成功。可以确定用哪个parser。使用这个api
-    // pub fn new_task_with_parser<T: ParserInner<PacketType = P>>(
-    //     &self,
-    //     parser: Parser<P, T>,
-    // ) -> Task<P> {
-    //     self.new_task_with_parser_inner(parser, ptr::null_mut())
-    // }
-
-    // fn new_task_with_parser_inner<T: ParserInner<PacketType = P>>(
-    //     &self,
-    //     parser: Parser<P, T>,
-    //     cb_ctx: *mut c_void,
-    // ) -> Task<P> {
-    //     Task::new(
-    //         self.pool
-    //             .alloc(|| TaskInner::new_with_parser(parser.into_inner(), cb_ctx)),
-    //     )
-    // }
 
     // None - 表示解析器还在pending状态或没有parser
     // Some(Ok(())) - 表示解析成功完成
@@ -415,7 +386,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Default for Prolens<P> {
 fn get_parser_sizes<P, T>(pool: &Rc<Pool>, res: &mut Vec<usize>)
 where
     P: Packet + Ord + 'static,
-    T: ParserInner<PacketType = P>,
+    T: Parser<PacketType = P>,
 {
     let mut parser = T::new();
     parser.set_pool(pool.clone());
@@ -434,7 +405,7 @@ mod tests {
     use crate::parser::smtp::SmtpParser;
     use crate::test_utils::MyPacket;
     use crate::test_utils::{CapPacket, PacketRef};
-    use std::sync::{Arc, Mutex};
+    use std::cell::RefCell;
 
     #[test]
     fn test_protolens_basic() {
@@ -471,12 +442,12 @@ mod tests {
 
     #[test]
     fn test_protolens_lifetime() {
-        let vec = Arc::new(Mutex::new(Vec::new()));
-        let vec_clone = Arc::clone(&vec);
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
 
         let mut protolens = Prolens::<MyPacket>::default();
-        protolens.set_cb_ord_pkt(move |pkt, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().push(pkt.seq());
+        protolens.set_cb_ord_pkt(move |pkt, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().push(pkt.seq());
         });
         let mut task = protolens.new_task();
 
@@ -486,7 +457,7 @@ mod tests {
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
 
-        assert_eq!(*vec.lock().unwrap(), vec![1, 2]);
+        assert_eq!(*vec.borrow(), vec![1, 2]);
     }
 
     #[test]
@@ -600,5 +571,102 @@ mod tests {
         // 继续处理数据包
         let pkt3 = MyPacket::new(L7Proto::Unknown, 3, false);
         protolens.run_task(&mut task, pkt3);
+    }
+
+    #[test]
+    fn test_task_raw_conversion() {
+        let mut protolens = Prolens::<MyPacket>::default();
+
+        // 设置 OrdPacket 回调（可选）
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        protolens.set_cb_ord_pkt(move |pkt, _| {
+            vec_clone.borrow_mut().push(pkt.seq());
+        });
+
+        let mut task = protolens.new_task();
+
+        // 使用 OrdPacket 协议类型
+        let pkt1 = MyPacket::new(L7Proto::OrdPacket, 1, false);
+        let pkt2 = MyPacket::new(L7Proto::OrdPacket, 2, false);
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
+
+        // 转换为原始指针
+        let raw_ptr = task.into_raw();
+        assert!(!raw_ptr.is_null(), "Raw pointer should not be null");
+
+        // 从原始指针恢复
+        let pool = protolens.pool.clone();
+        let mut recovered_task = unsafe { Task::from_raw(raw_ptr, pool) };
+
+        // 继续处理新数据包验证功能正常
+        let pkt3 = MyPacket::new(L7Proto::OrdPacket, 3, true);
+        let result = protolens.run_task(&mut recovered_task, pkt3);
+        assert!(
+            result.is_some(),
+            "Should get parsing result after conversion"
+        );
+
+        // 验证最终状态和回调结果
+        assert_eq!(
+            *vec.borrow(),
+            vec![1, 2, 3],
+            "Should collect all sequence numbers"
+        );
+    }
+
+    #[test]
+    fn test_task_raw_conversion_ctx() {
+        let mut protolens = Prolens::<MyPacket>::default();
+
+        let ctx = Rc::new(RefCell::new(std::ptr::null_mut::<c_void>()));
+        let ctx_clone = Rc::clone(&ctx);
+
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+
+        protolens.set_cb_ord_pkt(move |pkt, cb_ctx| {
+            *ctx_clone.borrow_mut() = cb_ctx;
+            vec_clone.borrow_mut().push(pkt.seq());
+        });
+
+        let mut task = protolens.new_task_inner(42 as *mut c_void);
+
+        // 使用 OrdPacket 协议类型
+        let pkt1 = MyPacket::new(L7Proto::OrdPacket, 1, false);
+        let pkt2 = MyPacket::new(L7Proto::OrdPacket, 2, false);
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
+
+        // 转换为原始指针
+        let raw_ptr = task.into_raw();
+        assert!(!raw_ptr.is_null(), "Raw pointer should not be null");
+
+        // 从原始指针恢复
+        let pool = protolens.pool.clone();
+        let mut recovered_task = unsafe { Task::from_raw(raw_ptr, pool) };
+
+        // 继续处理新数据包验证功能正常
+        let pkt3 = MyPacket::new(L7Proto::OrdPacket, 3, true);
+        let result = protolens.run_task(&mut recovered_task, pkt3);
+        assert!(
+            result.is_some(),
+            "Should get parsing result after conversion"
+        );
+
+        // 验证最终状态和回调结果
+        assert_eq!(
+            *vec.borrow(),
+            vec![1, 2, 3],
+            "Should collect all sequence numbers"
+        );
+
+        // 检查共享的上下文指针
+        assert_eq!(
+            *ctx.borrow(),
+            42 as *mut c_void,
+            "Callback context should match"
+        );
     }
 }

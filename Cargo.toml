@@ -1,20 +1,6 @@
-[package]
-name    = "protolens"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-name       = "protolens"
-crate-type = ["rlib", "cdylib"]
-
-[dependencies]
-libc            = "*"
-futures         = "0.3.31"
-futures-util    = "0.3.31"
-futures-channel = "0.3.31"
-nom             = "7.1.3"
-lazy_static     = "1.5"
-
-[dev-dependencies]
-pcap       = "2.2.0"
-etherparse = "0.13.0"
+[workspace]
+resolver = "2"
+members = [
+    "protolens",  # 如果你的库代码位于 src 目录下，则将其添加为成员
+    "rust_example",  # 将 example/rust 添加为成员
+]

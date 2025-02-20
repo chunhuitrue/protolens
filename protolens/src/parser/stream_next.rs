@@ -1,20 +1,19 @@
 use crate::pool::Pool;
 use crate::Packet;
+use crate::Parser;
 use crate::ParserFuture;
-use crate::ParserInner;
 use crate::PktStrm;
 use futures::StreamExt;
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::Mutex;
 
-pub trait StreamNextCbFn: FnMut(u8, *const c_void) + Send + Sync {}
-impl<F: FnMut(u8, *const c_void) + Send + Sync> StreamNextCbFn for F {}
-pub(crate) type CbStreamNext = Arc<Mutex<dyn StreamNextCbFn>>;
+pub trait StreamNextCbFn: FnMut(u8, *mut c_void) {}
+impl<F: FnMut(u8, *mut c_void)> StreamNextCbFn for F {}
+pub(crate) type CbStreamNext = Rc<RefCell<dyn StreamNextCbFn + 'static>>;
 
 pub struct StreamNextParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -34,7 +33,7 @@ impl<T: Packet + Ord + 'static> StreamNextParser<T> {
     fn c2s_parser_inner(
         &self,
         stream: *const PktStrm<T>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> impl Future<Output = Result<(), ()>> {
         let callback = self.cb_next_byte.clone();
 
@@ -46,7 +45,7 @@ impl<T: Packet + Ord + 'static> StreamNextParser<T> {
 
             while let Some(byte) = stm.next().await {
                 if let Some(ref callback) = callback {
-                    callback.lock().unwrap()(byte, cb_ctx);
+                    callback.borrow_mut()(byte, cb_ctx);
                 }
             }
             Ok(())
@@ -60,7 +59,7 @@ impl<T: Packet + Ord + 'static> Default for StreamNextParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> ParserInner for StreamNextParser<T> {
+impl<T: Packet + Ord + 'static> Parser for StreamNextParser<T> {
     type PacketType = T;
 
     fn new() -> Self {
@@ -85,7 +84,7 @@ impl<T: Packet + Ord + 'static> ParserInner for StreamNextParser<T> {
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         Some(
             self.pool()
@@ -108,12 +107,11 @@ mod tests {
         let _ = pkt1.decode();
         pkt1.set_l7_proto(L7Proto::StreamNext);
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *const c_void| {
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
             dbg!("in callback. push one byte");
-            vec_clone.lock().unwrap().push(byte);
+            vec_clone.borrow_mut().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -122,7 +120,7 @@ mod tests {
 
         protolens.run_task(&mut task, pkt1);
 
-        assert_eq!(*vec.lock().unwrap(), (1..=10).collect::<Vec<u8>>());
+        assert_eq!(*vec.borrow(), (1..=10).collect::<Vec<u8>>());
     }
 
     #[test]
@@ -135,11 +133,10 @@ mod tests {
         let _ = pkt2.decode();
         pkt1.set_l7_proto(L7Proto::StreamNext);
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().push(byte);
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -151,7 +148,7 @@ mod tests {
 
         // 验证收到了两组相同的字节序列 (1-10, 1-10)
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*vec.borrow(), expected);
     }
 
     #[test]
@@ -160,11 +157,10 @@ mod tests {
         let _ = pkt.decode();
         pkt.set_l7_proto(L7Proto::StreamNext);
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().push(byte);
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -174,7 +170,7 @@ mod tests {
         protolens.run_task(&mut task, pkt);
 
         // 验证没有收到任何字节
-        assert_eq!(vec.lock().unwrap().len(), 0);
+        assert_eq!(vec.borrow().len(), 0);
     }
 
     // 测试多个连续包加一个fin包的情况
@@ -198,11 +194,10 @@ mod tests {
         let _ = pkt3.decode();
         let _ = pkt4.decode();
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().push(byte);
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -222,7 +217,7 @@ mod tests {
             10, // 第三个包的数据
                 // 第四个包没有数据，只有fin标志
         ];
-        assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*vec.borrow(), expected);
     }
 
     // 测试带有纯ACK包的连续数据流
@@ -250,11 +245,10 @@ mod tests {
         let _ = pkt3.decode();
         let _ = pkt4.decode();
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().push(byte);
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -276,7 +270,7 @@ mod tests {
             10, // 第三个包的数据
                 // 最后的FIN包没有数据
         ];
-        assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*vec.borrow(), expected);
     }
 
     // 测试乱序到达的数据包
@@ -302,11 +296,10 @@ mod tests {
         let _ = pkt4.decode();
         pkt1.set_l7_proto(L7Proto::StreamNext);
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().push(byte);
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -334,7 +327,7 @@ mod tests {
             10, // 第三个包的数据
                 // 最后的FIN包没有数据
         ];
-        assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*vec.borrow(), expected);
     }
 
     // 测试以SYN包开始的乱序数据流
@@ -366,11 +359,10 @@ mod tests {
         let _ = pkt4.decode();
         pkt_syn.set_l7_proto(L7Proto::StreamNext);
 
-        let vec = Arc::new(Mutex::new(Vec::new()));
-
-        let vec_clone = Arc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *const c_void| {
-            vec_clone.lock().unwrap().push(byte);
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -393,7 +385,7 @@ mod tests {
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第三个
                 // FIN包没有数据
         ];
-        assert_eq!(*vec.lock().unwrap(), expected);
+        assert_eq!(*vec.borrow(), expected);
     }
 
     #[test]

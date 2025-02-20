@@ -1,20 +1,19 @@
 use crate::pool::Pool;
 use crate::Packet;
+use crate::Parser;
 use crate::ParserFuture;
-use crate::ParserInner;
 use crate::PktStrm;
 use crate::Prolens;
+use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::Mutex;
 
-pub trait RawPktCbFn<T>: FnMut(T, *const c_void) + Send + Sync {}
-impl<F, T> RawPktCbFn<T> for F where F: FnMut(T, *const c_void) + Send + Sync {}
-pub(crate) type CbRawPkt<T> = Arc<Mutex<dyn RawPktCbFn<T>>>;
+pub trait RawPktCbFn<T>: FnMut(T, *mut c_void) {}
+impl<F, T> RawPktCbFn<T> for F where F: FnMut(T, *mut c_void) {}
+pub(crate) type CbRawPkt<T> = Rc<RefCell<dyn RawPktCbFn<T> + 'static>>;
 
 pub struct RawPacketParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
@@ -34,7 +33,7 @@ impl<T: Packet + Ord + 'static> RawPacketParser<T> {
     fn c2s_parser_inner(
         &self,
         stream: *const PktStrm<T>,
-        cb_ctx: *const c_void,
+        cb_ctx: *mut c_void,
     ) -> impl Future<Output = Result<(), ()>> {
         let callback = self.cb_raw_pkt.clone();
 
@@ -48,7 +47,7 @@ impl<T: Packet + Ord + 'static> RawPacketParser<T> {
                 let pkt = stm.next_raw_pkt().await;
                 if let Some(ref callback) = callback {
                     if let Some(pkt) = pkt {
-                        callback.lock().unwrap()(pkt, cb_ctx);
+                        callback.borrow_mut()(pkt, cb_ctx);
                     }
                 }
             }
@@ -63,7 +62,7 @@ impl<T: Packet + Ord + 'static> Default for RawPacketParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> ParserInner for RawPacketParser<T> {
+impl<T: Packet + Ord + 'static> Parser for RawPacketParser<T> {
     type PacketType = T;
 
     fn new() -> Self {
@@ -85,7 +84,7 @@ impl<T: Packet + Ord + 'static> ParserInner for RawPacketParser<T> {
         std::mem::size_of_val(&future)
     }
 
-    fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *const c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(
             self.pool()
                 .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
@@ -117,11 +116,11 @@ mod tests {
         let _ = pkt3.decode();
         pkt3.set_l7_proto(L7Proto::RawPacket);
 
-        let count = Arc::new(Mutex::new(0));
+        let count = Rc::new(RefCell::new(0));
         let count_clone = count.clone();
 
-        let callback = move |pkt: CapPacket, _cb_ctx: *const c_void| {
-            let mut count = count_clone.lock().unwrap();
+        let callback = move |pkt: CapPacket, _cb_ctx: *mut c_void| {
+            let mut count = count_clone.borrow_mut();
             *count += 1;
             dbg!(pkt.seq(), *count);
             match *count {
@@ -148,7 +147,7 @@ mod tests {
         // 如果加上原始包顺序的接口和parser。这种机制就会影响对原始顺序包的读取。如果fin时候乱序到来的。fin以后的包就没办法读出。
         // 这样就影响了原始顺序的语意思。
         // 所以，count是1。
-        assert_eq!(*count.lock().unwrap(), 1);
+        assert_eq!(*count.borrow(), 1);
     }
 
     #[test]

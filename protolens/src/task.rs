@@ -1,11 +1,11 @@
 use crate::Packet;
+use crate::Parser;
 use crate::ParserFuture;
-use crate::ParserInner;
 use crate::PktDirection;
 use crate::PktStrm;
 use crate::Pool;
 use crate::PoolBox;
-use crate::StmCallbackFn;
+use crate::StmCbFn;
 use core::{
     pin::Pin,
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
@@ -29,6 +29,22 @@ impl<P: PacketBind> Task<P> {
 
     pub(crate) fn as_inner_mut(&mut self) -> &mut PoolBox<TaskInner<P>> {
         &mut self.0
+    }
+
+    pub(crate) fn into_raw(self) -> *mut Task<P> {
+        // Task 是 PoolBox<TaskInner<P>> 的透明包装
+        // 所以我们可以直接将 self.0 (PoolBox) 转换为原始指针
+        self.0.into_raw() as *mut Task<P>
+    }
+
+    /// 从原始指针创建 Task（用于 FFI）
+    ///
+    /// # Safety
+    /// - 指针必须是由 into_raw 创建的有效 Task 指针
+    /// - 指针必须指向由内存池分配的内存
+    pub(crate) unsafe fn from_raw(ptr: *mut Task<P>, pool: Rc<Pool>) -> Self {
+        // 将指针转换回 TaskInner 类型，然后用 PoolBox::from_raw 重建
+        Self(PoolBox::from_raw(ptr as *mut TaskInner<P>, pool))
     }
 
     // /// 从原始指针创建 TaskHandle（unsafe，仅用于 FFI）
@@ -110,11 +126,11 @@ pub struct TaskInner<T: PacketBind> {
     c2s_state: TaskState,
     s2c_state: TaskState,
     bdir_state: TaskState,
-    cb_ctx: *const c_void, // 只在c语言api中使用
+    cb_ctx: *mut c_void, // 只在c语言api中使用
 }
 
 impl<T: PacketBind> TaskInner<T> {
-    pub(crate) fn new(pool: &Rc<Pool>, cb_ctx: *const c_void) -> Self {
+    pub(crate) fn new(pool: &Rc<Pool>, cb_ctx: *mut c_void) -> Self {
         let stream_c2s = pool.alloc(|| PktStrm::new(pool, cb_ctx));
         let stream_s2c = pool.alloc(|| PktStrm::new(pool, cb_ctx));
 
@@ -132,17 +148,7 @@ impl<T: PacketBind> TaskInner<T> {
         }
     }
 
-    // pub(crate) fn new_with_parser<P: ParserInner<PacketType = T>>(
-    //     parser: PoolBox<P>,
-    //     cb_ctx: *mut c_void,
-    // ) -> Self {
-    //     let pool = Rc::clone(parser.pool());
-    //     let mut task = TaskInner::new(&pool, cb_ctx);
-    //     task.init_parser(parser);
-    //     task
-    // }
-
-    pub(crate) fn init_parser<P: ParserInner<PacketType = T>>(&mut self, parser: PoolBox<P>) {
+    pub(crate) fn init_parser<P: Parser<PacketType = T>>(&mut self, parser: PoolBox<P>) {
         let p_stream_c2s: *const PktStrm<T> = &*self.stream_c2s;
         let p_stream_s2c: *const PktStrm<T> = &*self.stream_s2c;
 
@@ -152,18 +158,18 @@ impl<T: PacketBind> TaskInner<T> {
         self.parser_inited = true;
     }
 
-    pub(crate) fn set_c2s_callback<F>(&mut self, callback: F)
+    pub(crate) fn set_cb_c2s<F>(&mut self, callback: F)
     where
-        F: StmCallbackFn + 'static,
+        F: StmCbFn + 'static,
     {
-        self.stream_c2s.set_callback(callback);
+        self.stream_c2s.set_cb(callback);
     }
 
-    pub(crate) fn set_s2c_callback<F>(&mut self, callback: F)
+    pub(crate) fn set_cb_s2c<F>(&mut self, callback: F)
     where
-        F: StmCallbackFn + 'static,
+        F: StmCbFn + 'static,
     {
-        self.stream_s2c.set_callback(callback);
+        self.stream_s2c.set_cb(callback);
     }
 
     // None - 表示解析器还在pending状态或没有parser

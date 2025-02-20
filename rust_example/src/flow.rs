@@ -9,10 +9,9 @@ use protolens::SmtpParser;
 use protolens::Task;
 use std::cmp::Ordering;
 use std::ffi::c_void;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::{
-    borrow::{Borrow, BorrowMut},
+    borrow::Borrow,
     cell::{Ref, RefCell, RefMut},
     net::IpAddr,
     ops::Deref,
@@ -226,8 +225,8 @@ pub struct FlowNode {
 
     parser_task: Option<Task<CapPacket>>,
     // 解码出来的元数据
-    user: Arc<Mutex<Vec<u8>>>,
-    pass: Arc<Mutex<Vec<u8>>>,
+    user: Rc<RefCell<Vec<u8>>>,
+    pass: Rc<RefCell<Vec<u8>>>,
 }
 
 impl FlowNode {
@@ -242,8 +241,8 @@ impl FlowNode {
             server_stat: StreamState::Unknown,
 
             parser_task: None,
-            user: Arc::new(Mutex::new(Vec::<u8>::new())),
-            pass: Arc::new(Mutex::new(Vec::<u8>::new())),
+            user: Rc::new(RefCell::new(Vec::<u8>::new())),
+            pass: Rc::new(RefCell::new(Vec::<u8>::new())),
         }
     }
 
@@ -329,28 +328,27 @@ impl FlowNode {
         }
 
         // 设置用户名回调
-        let user_data = self.user.clone();
-        let user_callback = move |user: &[u8], seq: u32, _cb_ctx: *const c_void| {
-            if let Ok(mut user_guard) = user_data.lock() {
-                *user_guard = user.to_vec();
-                println!(
-                    "get user: {}, seq: {}",
-                    std::str::from_utf8(user).unwrap(),
-                    seq
-                );
-            }
+        let mut user_data = self.user.clone();
+        let user_callback = move |user: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            let mut user_guard = user_data.borrow_mut();
+            *user_guard = user.to_vec();
+            println!(
+                "get user: {}, seq: {}",
+                std::str::from_utf8(user).unwrap(),
+                seq
+            );
         };
+
         // 设置密码回调
-        let pass_data = self.pass.clone();
-        let pass_callback = move |pass: &[u8], seq: u32, _cb_ctx: *const c_void| {
-            if let Ok(mut pass_guard) = pass_data.lock() {
-                pass_guard.extend_from_slice(pass);
-                println!(
-                    "get pass: {}, seq: {}",
-                    std::str::from_utf8(pass).unwrap(),
-                    seq
-                );
-            }
+        let mut pass_data = self.pass.clone();
+        let pass_callback = move |pass: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            let mut pass_guard = pass_data.borrow_mut();
+            *pass_guard = pass.to_vec();
+            println!(
+                "get pass: {}, seq: {}",
+                std::str::from_utf8(pass).unwrap(),
+                seq
+            );
         };
         prolens.set_cb_smtp_user(user_callback);
         prolens.set_cb_smtp_pass(pass_callback);
