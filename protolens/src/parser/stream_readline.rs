@@ -1,11 +1,10 @@
-use crate::pool::Pool;
 use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::pool::Pool;
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::future::Future;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
@@ -29,34 +28,30 @@ impl<T: Packet + Ord + 'static> StreamReadlineParser<T> {
         }
     }
 
-    fn c2s_parser_inner(
-        &self,
+    async fn c2s_parser_inner(
+        cb_readline: Option<CbReadline>,
         stream: *const PktStrm<T>,
         cb_ctx: *mut c_void,
-    ) -> impl Future<Output = Result<(), ()>> {
-        let callback = self.cb_readline.clone();
-
-        async move {
-            let stm: &mut PktStrm<T>;
-            unsafe {
-                stm = &mut *(stream as *mut PktStrm<T>);
-            }
-
-            while !stm.fin() {
-                match stm.readline().await {
-                    Ok(line) => {
-                        if line.is_empty() {
-                            break;
-                        }
-                        if let Some(ref callback) = callback {
-                            callback.borrow_mut()(line, cb_ctx);
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-            Ok(())
+    ) -> Result<(), ()> {
+        let stm: &mut PktStrm<T>;
+        unsafe {
+            stm = &mut *(stream as *mut PktStrm<T>);
         }
+
+        while !stm.fin() {
+            match stm.readline().await {
+                Ok(line) => {
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some(ref cb) = cb_readline {
+                        cb.borrow_mut()(line, cb_ctx);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        Ok(())
     }
 }
 
@@ -84,7 +79,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadlineParser<T> {
     fn c2s_parser_size(&self) -> usize {
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr, ptr::null_mut());
+        let future = Self::c2s_parser_inner(None, stream_ptr, ptr::null_mut());
         std::mem::size_of_val(&future)
     }
 
@@ -93,10 +88,11 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadlineParser<T> {
         stream: *const PktStrm<Self::PacketType>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        Some(
-            self.pool()
-                .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
-        )
+        Some(self.pool().alloc_future(Self::c2s_parser_inner(
+            self.cb_readline.clone(),
+            stream,
+            cb_ctx,
+        )))
     }
 }
 

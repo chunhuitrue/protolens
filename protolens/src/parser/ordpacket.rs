@@ -1,11 +1,10 @@
-use crate::pool::Pool;
 use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::pool::Pool;
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::future::Future;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
@@ -29,29 +28,25 @@ impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
         }
     }
 
-    fn c2s_parser_inner(
-        &self,
+    async fn c2s_parser_inner(
+        cb_ord_pkt: Option<CbOrdPkt<T>>,
         stream: *const PktStrm<T>,
         cb_ctx: *mut c_void,
-    ) -> impl Future<Output = Result<(), ()>> {
-        let callback = self.cb_ord_pkt.clone();
+    ) -> Result<(), ()> {
+        let stm: &mut PktStrm<T>;
+        unsafe {
+            stm = &mut *(stream as *mut PktStrm<T>);
+        }
 
-        async move {
-            let stm: &mut PktStrm<T>;
-            unsafe {
-                stm = &mut *(stream as *mut PktStrm<T>);
-            }
-
-            while !stm.fin() {
-                let pkt = stm.next_ord_pkt().await;
-                if let Some(ref callback) = callback {
-                    if let Some(pkt) = pkt {
-                        callback.borrow_mut()(pkt, cb_ctx);
-                    }
+        while !stm.fin() {
+            let pkt = stm.next_ord_pkt().await;
+            if let Some(ref cb) = cb_ord_pkt {
+                if let Some(pkt) = pkt {
+                    cb.borrow_mut()(pkt, cb_ctx);
                 }
             }
-            Ok(())
         }
+        Ok(())
     }
 }
 
@@ -79,15 +74,16 @@ impl<T: Packet + Ord + 'static> Parser for OrdPacketParser<T> {
     fn c2s_parser_size(&self) -> usize {
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr, ptr::null_mut());
+        let future = Self::c2s_parser_inner(None, stream_ptr, ptr::null_mut());
         std::mem::size_of_val(&future)
     }
 
     fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
-        Some(
-            self.pool()
-                .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
-        )
+        Some(self.pool().alloc_future(Self::c2s_parser_inner(
+            self.cb_ord_pkt.clone(),
+            stream,
+            cb_ctx,
+        )))
     }
 }
 

@@ -1,18 +1,17 @@
-use crate::pool::Pool;
 use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::pool::Pool;
 use nom::{
+    IResult, Offset,
     bytes::complete::{tag, take_till, take_while},
     character::complete::digit1,
     combinator::map_res,
     error::context,
-    IResult, Offset,
 };
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::future::Future;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
@@ -45,78 +44,74 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
         }
     }
 
-    fn c2s_parser_inner(
-        &self,
+    async fn c2s_parser_inner(
+        cb_user: Option<CbUser>,
+        cb_pass: Option<CbPass>,
         stream: *const PktStrm<T>,
         cb_ctx: *mut c_void,
-    ) -> impl Future<Output = Result<(), ()>> {
-        let callback_user = self.cb_user.clone();
-        let callback_pass = self.cb_pass.clone();
-
-        async move {
-            let stm: &mut PktStrm<T>;
-            unsafe {
-                stm = &mut *(stream as *mut PktStrm<T>);
-            }
-
-            // 验证EHLO命令,如果EHLO命令不正确，则返回错误，无法继续解析
-            let (ehlo_line, _) = stm.readline2().await?;
-            if !starts_with_ehlo(ehlo_line) {
-                dbg!("First line is not EHLO command");
-                return Err(());
-            }
-
-            // 读取AUTH LOGIN命令
-            let (auth_line, _) = stm.readline2().await?;
-            if !starts_with_auth_login(auth_line) {
-                dbg!("Second line is not AUTH LOGIN command");
-                return Err(());
-            }
-
-            // user
-            let (user, seq) = stm.read_clean_line().await?;
-            if let Some(cb) = callback_user {
-                cb.borrow_mut()(user, seq, cb_ctx);
-            }
-            dbg!(user, seq);
-
-            // pass
-            let (pass, seq) = stm.read_clean_line().await?;
-            if let Some(cb) = callback_pass.clone() {
-                cb.borrow_mut()(pass, seq, cb_ctx);
-            }
-            dbg!(std::str::from_utf8(pass).expect("need utf8"), seq);
-
-            // mail from
-            let (from, seq) = stm.read_clean_line_str().await?;
-            if let Ok((_, ((mail, offset), size))) = mail_from(from) {
-                let mail_seq = seq + offset as u32;
-                dbg!("from", mail, size, mail_seq);
-            } else {
-                dbg!("from return err");
-                return Err(());
-            }
-
-            // rcpt to
-            let (rcpt, seq) = stm.read_clean_line_str().await?;
-            if let Ok((_, (mail, offset))) = rcpt_to(rcpt) {
-                let mail_seq = seq + offset as u32;
-                dbg!("rcpt", mail, mail_seq);
-            } else {
-                dbg!("rcpt return err");
-                return Err(());
-            }
-
-            // DATA
-            let (data, seq) = stm.readline2().await?;
-            dbg!(std::str::from_utf8(data).expect("no"), seq);
-
-            // mail head
-            let (content_type, bdry) = mail_head(stm).await?;
-            dbg!(content_type, bdry);
-
-            Ok(())
+    ) -> Result<(), ()> {
+        let stm: &mut PktStrm<T>;
+        unsafe {
+            stm = &mut *(stream as *mut PktStrm<T>);
         }
+
+        // 验证EHLO命令,如果EHLO命令不正确，则返回错误，无法继续解析
+        let (ehlo_line, _) = stm.readline2().await?;
+        if !starts_with_ehlo(ehlo_line) {
+            dbg!("First line is not EHLO command");
+            return Err(());
+        }
+
+        // 读取AUTH LOGIN命令
+        let (auth_line, _) = stm.readline2().await?;
+        if !starts_with_auth_login(auth_line) {
+            dbg!("Second line is not AUTH LOGIN command");
+            return Err(());
+        }
+
+        // user
+        let (user, seq) = stm.read_clean_line().await?;
+        if let Some(cb) = cb_user {
+            cb.borrow_mut()(user, seq, cb_ctx);
+        }
+        dbg!(user, seq);
+
+        // pass
+        let (pass, seq) = stm.read_clean_line().await?;
+        if let Some(cb) = cb_pass.clone() {
+            cb.borrow_mut()(pass, seq, cb_ctx);
+        }
+        dbg!(std::str::from_utf8(pass).expect("need utf8"), seq);
+
+        // mail from
+        let (from, seq) = stm.read_clean_line_str().await?;
+        if let Ok((_, ((mail, offset), size))) = mail_from(from) {
+            let mail_seq = seq + offset as u32;
+            dbg!("from", mail, size, mail_seq);
+        } else {
+            dbg!("from return err");
+            return Err(());
+        }
+
+        // rcpt to
+        let (rcpt, seq) = stm.read_clean_line_str().await?;
+        if let Ok((_, (mail, offset))) = rcpt_to(rcpt) {
+            let mail_seq = seq + offset as u32;
+            dbg!("rcpt", mail, mail_seq);
+        } else {
+            dbg!("rcpt return err");
+            return Err(());
+        }
+
+        // DATA
+        let (data, seq) = stm.readline2().await?;
+        dbg!(std::str::from_utf8(data).expect("no"), seq);
+
+        // mail head
+        let (content_type, bdry) = mail_head(stm).await?;
+        dbg!(content_type, bdry);
+
+        Ok(())
     }
 }
 
@@ -144,7 +139,7 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
     fn c2s_parser_size(&self) -> usize {
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr, ptr::null_mut());
+        let future = Self::c2s_parser_inner(None, None, stream_ptr, ptr::null_mut());
         std::mem::size_of_val(&future)
     }
 
@@ -153,10 +148,12 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
         stream: *const PktStrm<Self::PacketType>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        Some(
-            self.pool()
-                .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
-        )
+        Some(self.pool().alloc_future(Self::c2s_parser_inner(
+            self.cb_user.clone(),
+            self.cb_pass.clone(),
+            stream,
+            cb_ctx,
+        )))
     }
 }
 

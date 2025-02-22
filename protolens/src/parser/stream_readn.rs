@@ -1,11 +1,10 @@
-use crate::pool::Pool;
 use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::pool::Pool;
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::future::Future;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
@@ -17,51 +16,45 @@ pub(crate) type CbReadn = Rc<RefCell<dyn ReadnCbFn + 'static>>;
 pub struct StreamReadnParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     pool: Option<Rc<Pool>>,
-    read_size: usize, // 每次读取的字节数
     pub(crate) cb_readn: Option<CbReadn>,
 }
 
 impl<T: Packet + Ord + 'static> StreamReadnParser<T> {
-    pub(crate) fn new(read_size: usize) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             _phantom: PhantomData,
             pool: None,
             cb_readn: None,
-            read_size,
         }
     }
 
-    fn c2s_parser_inner(
-        &self,
+    async fn c2s_parser_inner(
+        cb_readn: Option<CbReadn>,
+        read_size: usize, // 每次读取的字节数
         stream: *const PktStrm<T>,
         cb_ctx: *mut c_void,
-    ) -> impl Future<Output = Result<(), ()>> {
-        let callback = self.cb_readn.clone();
-        let read_size = self.read_size;
-
-        async move {
-            let stm: &mut PktStrm<T>;
-            unsafe {
-                stm = &mut *(stream as *mut PktStrm<T>);
-            }
-
-            while !stm.fin() {
-                let bytes = stm.readn(read_size).await;
-                if bytes.is_empty() {
-                    break;
-                }
-                if let Some(ref callback) = callback {
-                    callback.borrow_mut()(bytes, cb_ctx);
-                }
-            }
-            Ok(())
+    ) -> Result<(), ()> {
+        let stm: &mut PktStrm<T>;
+        unsafe {
+            stm = &mut *(stream as *mut PktStrm<T>);
         }
+
+        while !stm.fin() {
+            let bytes = stm.readn(read_size).await;
+            if bytes.is_empty() {
+                break;
+            }
+            if let Some(ref cb) = cb_readn {
+                cb.borrow_mut()(bytes, cb_ctx);
+            }
+        }
+        Ok(())
     }
 }
 
 impl<T: Packet + Ord + 'static> Default for StreamReadnParser<T> {
     fn default() -> Self {
-        Self::new(10) // 默认读取10个字节
+        Self::new()
     }
 }
 
@@ -69,7 +62,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
     type PacketType = T;
 
     fn new() -> Self {
-        Self::new(10) // 使用默认大小 10
+        Self::new()
     }
 
     fn pool(&self) -> &Rc<Pool> {
@@ -83,7 +76,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
     fn c2s_parser_size(&self) -> usize {
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr, ptr::null_mut());
+        let future = Self::c2s_parser_inner(None, 0, stream_ptr, ptr::null_mut());
         std::mem::size_of_val(&future)
     }
 
@@ -92,10 +85,12 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadnParser<T> {
         stream: *const PktStrm<Self::PacketType>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        Some(
-            self.pool()
-                .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
-        )
+        Some(self.pool().alloc_future(Self::c2s_parser_inner(
+            self.cb_readn.clone(),
+            10,
+            stream,
+            cb_ctx,
+        )))
     }
 }
 
@@ -203,7 +198,7 @@ mod tests {
     #[test]
     fn test_readn_future_sizes() {
         let pool = Rc::new(Pool::new(4096, vec![4]));
-        let mut parser = StreamReadnParser::<CapPacket>::new(10);
+        let mut parser = StreamReadnParser::<CapPacket>::new();
         parser.set_pool(pool);
 
         println!(

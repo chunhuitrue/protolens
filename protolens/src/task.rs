@@ -32,44 +32,12 @@ impl<P: PacketBind> Task<P> {
     }
 
     pub(crate) fn into_raw(self) -> *mut Task<P> {
-        // Task 是 PoolBox<TaskInner<P>> 的透明包装
-        // 所以我们可以直接将 self.0 (PoolBox) 转换为原始指针
         self.0.into_raw() as *mut Task<P>
     }
 
-    /// 从原始指针创建 Task（用于 FFI）
-    ///
-    /// # Safety
-    /// - 指针必须是由 into_raw 创建的有效 Task 指针
-    /// - 指针必须指向由内存池分配的内存
     pub(crate) unsafe fn from_raw(ptr: *mut Task<P>, pool: Rc<Pool>) -> Self {
-        // 将指针转换回 TaskInner 类型，然后用 PoolBox::from_raw 重建
-        Self(PoolBox::from_raw(ptr as *mut TaskInner<P>, pool))
+        unsafe { Self(PoolBox::from_raw(ptr as *mut TaskInner<P>, pool)) }
     }
-
-    // /// 从原始指针创建 TaskHandle（unsafe，仅用于 FFI）
-    // ///
-    // /// # Safety
-    // /// 指针必须是有效的 Task 指针，且由内存池分配
-    // pub(crate) unsafe fn from_raw(ptr: *mut Task<P>) -> Self {
-    //     Self(PoolBox::from_raw(ptr))
-    // }
-
-    // /// 转换为原始指针（unsafe，仅用于 FFI）
-    // ///
-    // /// # Safety
-    // /// 返回的指针仍由 TaskHandle 拥有，调用者不能释放它
-    // pub(crate) fn as_ptr(&self) -> *const Task<P> {
-    //     self.0.as_ref() as *const _
-    // }
-
-    // /// 转换为可变原始指针（unsafe，仅用于 FFI）
-    // ///
-    // /// # Safety
-    // /// 返回的指针仍由 TaskHandle 拥有，调用者不能释放它
-    // pub(crate) fn as_mut_ptr(&mut self) -> *mut Task<P> {
-    //     self.0.as_mut() as *mut _
-    // }
 }
 
 impl<P: PacketBind> fmt::Debug for Task<P> {
@@ -93,28 +61,6 @@ impl<P: PacketBind> DerefMut for Task<P> {
         &mut self.0
     }
 }
-
-// // 为了支持在 HashMap 中使用，实现必要的 trait
-// impl<P: PacketBind> PartialEq for TaskHandle<P>
-// where
-//     Task<P>: PartialEq,
-// {
-//     fn eq(&self, other: &Self) -> bool {
-//         self.0 == other.0
-//     }
-// }
-
-// impl<P: Eq> Eq for TaskHandle<P: PacketBind> where Task<P>: Eq {}
-
-// // 如果需要在 HashMap 中作为 key 使用，还需要实现 Hash
-// impl<P: std::hash::Hash> std::hash::Hash for TaskHandle<P>
-// where
-//     Task<P>: std::hash::Hash,
-// {
-//     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-//         self.0.hash(state)
-//     }
-// }
 
 pub struct TaskInner<T: PacketBind> {
     stream_c2s: PoolBox<PktStrm<T>>,

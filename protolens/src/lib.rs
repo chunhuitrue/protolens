@@ -351,12 +351,12 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         res.push(strm_size);
         dbg!(task_size, pktstrm_size, heap_size, strm_size);
 
-        let pool = Rc::new(Pool::new(4096, vec![1]));
+        let pool = Rc::new(Pool::new(8192, vec![1]));
 
         get_parser_sizes::<P, OrdPacketParser<P>>(&pool, &mut res);
+        get_parser_sizes::<P, SmtpParser<P>>(&pool, &mut res);
         #[cfg(test)]
         get_parser_sizes::<P, RawPacketParser<P>>(&pool, &mut res);
-        get_parser_sizes::<P, SmtpParser<P>>(&pool, &mut res);
         #[cfg(test)]
         get_parser_sizes::<P, StreamNextParser<P>>(&pool, &mut res);
         #[cfg(test)]
@@ -388,9 +388,11 @@ where
     P: Packet + Ord + 'static,
     T: Parser<PacketType = P>,
 {
+    let parser_size = std::mem::size_of::<T>();
+    res.push(parser_size);
+
     let mut parser = T::new();
     parser.set_pool(pool.clone());
-
     let c2s_size = parser.c2s_parser_size();
     let s2c_size = parser.s2c_parser_size();
     let bdir_size = parser.bdir_parser_size();

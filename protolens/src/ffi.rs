@@ -1,9 +1,9 @@
 extern crate libc;
-use crate::packet::PktDirection;
-use crate::packet::TransProto;
 use crate::L7Proto;
 use crate::Prolens;
 use crate::Task;
+use crate::packet::PktDirection;
+use crate::packet::TransProto;
 use std::ffi::c_void;
 
 #[repr(C)]
@@ -67,7 +67,7 @@ static mut VTABLE: PacketVTable = PacketVTable {
     payload: missing_ptr,
 };
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn prolens_init_vtable(vtable: PacketVTable) {
     unsafe {
         VTABLE = vtable;
@@ -128,13 +128,13 @@ impl crate::Packet for FfiPacket {
 #[allow(dead_code)]
 pub struct FfiProlens(Prolens<FfiPacket>);
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn prolens_new() -> *mut FfiProlens {
     let prolens = Box::new(FfiProlens(Prolens::<FfiPacket>::default()));
     Box::into_raw(prolens)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn prolens_free(prolens: *mut FfiProlens) {
     if !prolens.is_null() {
         unsafe {
@@ -147,7 +147,7 @@ pub extern "C" fn prolens_free(prolens: *mut FfiProlens) {
 // // 示例用法：
 // void* my_ctx = ...; // 用户的回调上下文
 // Task* task = protolens_new_task(prolens, my_ctx);
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn protolens_task_new(
     prolens: *mut FfiProlens,
     cb_ctx: *mut c_void,
@@ -164,7 +164,7 @@ pub extern "C" fn protolens_task_new(
 }
 
 // void protolens_free_task(Task* task, FfiProlens* prolens);
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn protolens_task_free(task: *mut Task<FfiPacket>, prolens: *mut FfiProlens) {
     if task.is_null() || prolens.is_null() {
         return;
@@ -191,7 +191,7 @@ pub enum TaskResult {
     Error = 2,
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn protolens_task_run(
     prolens: *mut FfiProlens,
     task: *mut Task<FfiPacket>,
@@ -217,7 +217,7 @@ pub extern "C" fn protolens_task_run(
 
 pub type CbStm = extern "C" fn(data: *const u8, data_len: usize, seq: u32, *const c_void);
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_task_c2s(task: *mut Task<FfiPacket>, callback: CbStm) {
     if task.is_null() {
         return;
@@ -230,7 +230,7 @@ pub extern "C" fn prolens_set_cb_task_c2s(task: *mut Task<FfiPacket>, callback: 
     (*task).as_inner_mut().set_cb_c2s(wrapper);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_task_s2c(task: *mut Task<FfiPacket>, callback: CbStm) {
     if task.is_null() {
         return;
@@ -245,7 +245,7 @@ pub extern "C" fn prolens_set_cb_task_s2c(task: *mut Task<FfiPacket>, callback: 
 
 type CbOrdPkt = extern "C" fn(pkt_ptr: *mut c_void, ctx: *const c_void);
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_ord_pkt(prolens: *mut FfiProlens, callback: CbOrdPkt) {
     if prolens.is_null() {
         return;
@@ -265,7 +265,7 @@ pub extern "C" fn prolens_set_cb_ord_pkt(prolens: *mut FfiProlens, callback: CbO
 // SMTP 回调函数类型定义
 type CbSmtp = extern "C" fn(data: *const u8, len: usize, seq: u32, ctx: *const c_void);
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_smtp_user(prolens: *mut FfiProlens, callback: CbSmtp) {
     if prolens.is_null() {
         return;
@@ -278,7 +278,7 @@ pub extern "C" fn prolens_set_cb_smtp_user(prolens: *mut FfiProlens, callback: C
     prolens.0.set_cb_smtp_user(wrapper);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_smtp_pass(prolens: *mut FfiProlens, callback: CbSmtp) {
     if prolens.is_null() {
         return;

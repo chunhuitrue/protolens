@@ -1,8 +1,8 @@
-use crate::pool::Pool;
 use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::pool::Pool;
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
@@ -17,27 +17,25 @@ pub(crate) type CbStreamRead = Rc<RefCell<dyn StreamReadCbFn + 'static>>;
 pub struct StreamReadParser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
     pool: Option<Rc<Pool>>,
-    read_buff: Vec<u8>,
     pub(crate) cb_read: Option<CbStreamRead>,
 }
 
 impl<T: Packet + Ord + 'static> StreamReadParser<T> {
-    pub fn new(read_size: usize) -> Self {
+    pub fn new() -> Self {
         Self {
             _phantom: PhantomData,
             pool: None,
-            read_buff: vec![0; read_size],
             cb_read: None,
         }
     }
 
     fn c2s_parser_inner(
-        &self,
+        cb_read: Option<CbStreamRead>,
+        read_size: usize,
         stream: *const PktStrm<T>,
         cb_ctx: *mut c_void,
     ) -> impl Future<Output = Result<(), ()>> {
-        let callback = self.cb_read.clone();
-        let mut read_buff = self.read_buff.clone();
+        let mut read_buff: Vec<u8> = vec![0; read_size];
 
         async move {
             let stm: &mut PktStrm<T>;
@@ -49,13 +47,8 @@ impl<T: Packet + Ord + 'static> StreamReadParser<T> {
                 match stm.read(&mut read_buff).await {
                     Ok((read_len, seq)) => {
                         if read_len > 0 {
-                            if let Some(ref callback) = callback {
-                                callback.borrow_mut()(
-                                    &read_buff[..read_len],
-                                    read_len,
-                                    seq,
-                                    cb_ctx,
-                                );
+                            if let Some(ref cb) = cb_read {
+                                cb.borrow_mut()(&read_buff[..read_len], read_len, seq, cb_ctx);
                             }
                         }
                         if read_len == 0 {
@@ -72,7 +65,7 @@ impl<T: Packet + Ord + 'static> StreamReadParser<T> {
 
 impl<T: Packet + Ord + 'static> Default for StreamReadParser<T> {
     fn default() -> Self {
-        Self::new(20)
+        Self::new()
     }
 }
 
@@ -80,7 +73,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadParser<T> {
     type PacketType = T;
 
     fn new() -> Self {
-        Self::new(10)
+        Self::new()
     }
 
     fn pool(&self) -> &Rc<Pool> {
@@ -94,7 +87,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadParser<T> {
     fn c2s_parser_size(&self) -> usize {
         let stream_ptr = std::ptr::null();
 
-        let future = self.c2s_parser_inner(stream_ptr, ptr::null_mut());
+        let future = Self::c2s_parser_inner(None, 0, stream_ptr, ptr::null_mut());
         std::mem::size_of_val(&future)
     }
 
@@ -103,10 +96,12 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadParser<T> {
         stream: *const PktStrm<Self::PacketType>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        Some(
-            self.pool()
-                .alloc_future(self.c2s_parser_inner(stream, cb_ctx)),
-        )
+        Some(self.pool().alloc_future(Self::c2s_parser_inner(
+            self.cb_read.clone(),
+            10,
+            stream,
+            cb_ctx,
+        )))
     }
 }
 
