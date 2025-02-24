@@ -1,9 +1,10 @@
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::mem;
+use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
+use std::ptr;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
@@ -53,10 +54,11 @@ pub(crate) struct PoolBox<T: ?Sized> {
 
 impl<T> PoolBox<T> {
     pub fn into_raw(self) -> *mut T {
-        let ptr = self.ptr;
-        // 使用 forget 避免 Drop 被调用，否则内存会被释放
-        mem::forget(self);
-        ptr
+        let this = ManuallyDrop::new(self);
+        unsafe {
+            let _ = ptr::read(&this.pool);
+        }
+        this.ptr
     }
 
     pub unsafe fn from_raw(ptr: *mut T, pool: Rc<Pool>) -> Self {
@@ -79,8 +81,10 @@ impl<T: ?Sized> DerefMut for PoolBox<T> {
 
 impl<T: ?Sized> Drop for PoolBox<T> {
     fn drop(&mut self) {
-        unsafe {
-            let _ = Box::from_raw(self.ptr);
+        if !self.ptr.is_null() {
+            unsafe {
+                let _ = Box::from_raw(self.ptr);
+            }
         }
     }
 }
@@ -182,5 +186,33 @@ mod tests {
 
         assert_eq!(reconstructed1.value, 1);
         assert_eq!(reconstructed2.value, 2);
+    }
+
+    #[test]
+    fn test_into_raw_rc_count() {
+        use std::rc::Rc;
+
+        let pool = Pool::new(4096, vec![10]);
+        let pool_rc = Rc::new(pool);
+        let pool_weak = Rc::downgrade(&pool_rc);
+
+        let obj = PoolBox {
+            ptr: Box::into_raw(Box::new(42)),
+            pool: pool_rc.clone(),
+        };
+        assert_eq!(Rc::strong_count(&pool_rc), 2); // 一个在 pool_rc，一个在 obj.pool
+
+        let raw_ptr = obj.into_raw();
+        assert_eq!(Rc::strong_count(&pool_rc), 1); // 现在只剩下 pool_rc
+
+        // 验证指针仍然有效
+        unsafe {
+            assert_eq!(*raw_ptr, 42);
+            // 清理测试资源
+            let _ = Box::from_raw(raw_ptr);
+        }
+
+        // 验证 weak 引用仍然有效
+        assert!(pool_weak.upgrade().is_some());
     }
 }

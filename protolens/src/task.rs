@@ -94,6 +94,26 @@ impl<T: PacketBind> TaskInner<T> {
         }
     }
 
+    pub(crate) fn debug_info(&self) {
+        if self.c2s_parser.is_none() {
+            eprintln!(
+                "task debug info: c2s parser is none. state: {:?}, parser_inited: {:?}, cb_ctx: {:?}",
+                self.c2s_state, self.parser_inited, self.cb_ctx
+            );
+        } else {
+            eprintln!(
+                "task debug info: c2s parser is some. state: {:?}, parser_inited: {:?}, cb_ctx: {:?}",
+                self.c2s_state, self.parser_inited, self.cb_ctx
+            );
+        }
+
+        if self.s2c_parser.is_none() {
+            eprintln!("task debug info: s2c parser is none");
+        } else {
+            eprintln!("task debug info: s2c parser is some");
+        }
+    }
+
     pub(crate) fn init_parser<P: Parser<PacketType = T>>(&mut self, parser: PoolBox<P>) {
         let p_stream_c2s: *const PktStrm<T> = &*self.stream_c2s;
         let p_stream_s2c: *const PktStrm<T> = &*self.stream_s2c;
@@ -101,6 +121,7 @@ impl<T: PacketBind> TaskInner<T> {
         self.c2s_parser = parser.c2s_parser(p_stream_c2s, self.cb_ctx);
         self.s2c_parser = parser.s2c_parser(p_stream_s2c, self.cb_ctx);
         self.bdir_parser = parser.bdir_parser(p_stream_c2s, p_stream_s2c, self.cb_ctx);
+
         self.parser_inited = true;
     }
 

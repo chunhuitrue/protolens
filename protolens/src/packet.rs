@@ -5,6 +5,7 @@ use std::fmt::Debug;
 #[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Copy)]
 pub enum L7Proto {
     OrdPacket,
+    Smtp,
     #[cfg(test)]
     RawPacket,
     #[cfg(test)]
@@ -19,7 +20,6 @@ pub enum L7Proto {
     StreamReadn,
     #[cfg(test)]
     StreamReadn2,
-    Smtp,
     Unknown,
 }
 

@@ -1,55 +1,76 @@
-#ifndef __PROTOLENS_H__
-#define __PROTOLENS_H__
+#ifndef _H_PROTOLENS_H
+#define _H_PROTOLENS_H
 
+#include <stdint.h>
 #include <stddef.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdint.h>
 #include <stdbool.h>
 
-typedef enum {
-    Tcp,
-    Udp,
-    Other
-} TransProto;
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct FfiProlens FfiProlens;
+typedef struct Task Task;
 
 typedef enum {
-    Client2Server,
-    Server2Client,
-    BiDirection,
-    Unknown,
+    CLIENT2SERVER,
+    SERVER2CLIENT,
+    BIDIRECTION,
+    DIRUNKNOWN,
 } PktDirection;
 
 typedef enum {
-    Smtp,
-    Http,
-    Undef,
-} ParserType;
+    ORDPACKET,
+    SMTP,
+    L7UNKNOWN,
+} L7Proto;
+
+typedef enum {
+    TCP,
+    UDP,
+    OTHER,
+} TransProto;
+
+typedef enum {
+    TASK_PENDING,
+    TASK_DONE,
+    TASK_ERROR,
+} TaskResult;
 
 typedef struct {
-    TransProto (*trans_proto)(void* packet);
-    uint16_t (*tu_sport)(void* packet);
-    uint16_t (*tu_dport)(void* packet);
-    uint32_t (*seq)(void* packet);
-    bool (*syn)(void* packet);
-    bool (*fin)(void* packet);
-    size_t (*payload_len)(void* packet);
-    const uint8_t* (*payload)(void* packet);
+    PktDirection (*direction)(void* pkt_ptr);
+    L7Proto (*l7_proto)(void* pkt_ptr);
+    TransProto (*trans_proto)(void* pkt_ptr);
+    uint16_t (*tu_sport)(void* pkt_ptr);
+    uint16_t (*tu_dport)(void* pkt_ptr);
+    uint32_t (*seq)(void* pkt_ptr);
+    bool (*syn)(void* pkt_ptr);
+    bool (*fin)(void* pkt_ptr);
+    size_t (*payload_len)(void* pkt_ptr);
+    const uint8_t* (*payload)(void* pkt_ptr);
 } PacketVTable;
 
-typedef struct Task Task;
+typedef void (*CbStm)(const uint8_t *data, size_t data_len, uint32_t seq, const void *ctx);
+typedef void (*CbOrdPkt)(void *pkt_ptr, const void *ctx);
+typedef void (*CbSmtp)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx);
 
-Task *task_new(void);
-void  task_free(Task* ptr);
-Task *task_new_with_parser(ParserType parser_type);
-Task *task_init_parser(Task* task_ptr, ParserType parser_type);
-void task_run(Task *task_ptr, void *packet_ptr, const PacketVTable *vtable_ptr,
-              PktDirection pkt_dir, uint64_t ts);
+void        prolens_init_vtable(PacketVTable vtable);
+FfiProlens *prolens_new(void);
+void        prolens_free(FfiProlens *prolens);
 
-/* smtp */
-typedef void (*SmtpUserCallback)(const char* username);
-void task_set_smtp_user_callback(SmtpUserCallback callback);
+Task       *protolens_task_new(FfiProlens *prolens, void *cb_ctx);
+void        protolens_task_free(FfiProlens *prolens, Task *task);
+TaskResult  protolens_task_run(FfiProlens *prolens, Task *task, void *pkt_ptr);
+void        protolens_task_dbinfo(FfiProlens *prolens, Task *task);
 
-/* http */
+void prolens_set_cb_task_c2s(FfiProlens *prolens, Task *task, CbStm callback);
+void prolens_set_cb_task_s2c(FfiProlens *prolens, Task *task, CbStm callback);
+void prolens_set_cb_ord_pkt(FfiProlens *prolens, CbOrdPkt callback);
+void prolens_set_cb_smtp_user(FfiProlens *prolens, CbSmtp callback);
+void prolens_set_cb_smtp_pass(FfiProlens *prolens, CbSmtp callback);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

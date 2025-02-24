@@ -4,10 +4,11 @@
 # LD_LIBRARY_PATH=../target/debug/ ./smtp
 
 CC=gcc
-LDFLAGS=-L../../target/debug/
+LDFLAGS=-L../target/debug/
 LDLIBS=-lprotolens -lpcap
 
-TARGETS=simple smtp
+TARGETS=simple
+# TARGETS=simple smtp
 
 all: $(TARGETS)
 
