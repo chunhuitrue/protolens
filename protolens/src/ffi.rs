@@ -22,7 +22,6 @@ pub struct PacketVTable {
     pub payload: extern "C" fn(*mut std::ffi::c_void) -> *const u8,
 }
 
-// 为不同返回类型添加对应的 panic 函数
 extern "C" fn missing_direction(_: *mut std::ffi::c_void) -> PktDirection {
     panic!("VTABLE not initialized")
 }
