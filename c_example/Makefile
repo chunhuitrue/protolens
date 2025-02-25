@@ -7,7 +7,7 @@ CC=gcc
 LDFLAGS=-L../target/debug/
 LDLIBS=-lprotolens -lpcap
 
-TARGETS=simple smtp
+TARGETS=simple smtp simple_thread
 
 all: $(TARGETS)
 
@@ -15,6 +15,9 @@ simple: simple.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
 smtp: smtp.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
+
+simple_thread: simple_thread.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
 clean:

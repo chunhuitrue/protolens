@@ -12,6 +12,7 @@ Cargo.lock
 
 c_example/simple
 c_example/smtp
+c_example/simple_thread
 
 .DS_Store
 .aider*
