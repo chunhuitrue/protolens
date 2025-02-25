@@ -7,8 +7,7 @@ CC=gcc
 LDFLAGS=-L../target/debug/
 LDLIBS=-lprotolens -lpcap
 
-TARGETS=simple
-# TARGETS=simple smtp
+TARGETS=simple smtp
 
 all: $(TARGETS)
 

@@ -72,7 +72,7 @@ void callback_smtp_pass(const uint8_t* data, size_t len, uint32_t seq, const voi
 
 int main(void) {
     // 创建 Prolens 实例
-    FfiProlens* prolens = prolens_new();
+    FfiProlens *prolens = prolens_new();
     if (!prolens) {
         printf("Failed to create prolens instance\n");
         return 1;
@@ -80,16 +80,16 @@ int main(void) {
 
     // 设置 vtable
     PacketVTable vtable = {
-        .direction = packet_direction,
-        .l7_proto = packet_l7_proto,
+        .direction   = packet_direction,
+        .l7_proto    = packet_l7_proto,
         .trans_proto = packet_trans_proto,
-        .tu_sport = packet_sport,
-        .tu_dport = packet_dport,
-        .seq = packet_seq,
-        .syn = packet_syn,
-        .fin = packet_fin,
+        .tu_sport    = packet_sport,
+        .tu_dport    = packet_dport,
+        .seq         = packet_seq,
+        .syn         = packet_syn,
+        .fin         = packet_fin,
         .payload_len = packet_payload_len,
-        .payload = packet_payload,
+        .payload     = packet_payload,
     };
     prolens_init_vtable(vtable);
 
