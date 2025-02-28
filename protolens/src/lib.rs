@@ -1,5 +1,5 @@
+mod box_pool;
 mod config;
-mod dynamic_heap;
 mod ffi;
 mod heap;
 mod packet;
@@ -9,7 +9,6 @@ mod pool;
 mod task;
 #[cfg(test)]
 mod test_utils;
-mod util;
 
 pub use crate::packet::L7Proto;
 pub use crate::packet::Packet;
@@ -87,28 +86,20 @@ pub struct Prolens<P> {
     stats: Stats,
 
     cb_ord_pkt: Option<CbOrdPkt<P>>,
-
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<P>>,
-
     #[cfg(test)]
     cb_stream_next_byte: Option<CbStreamNext>,
-
     #[cfg(test)]
     cb_stream_read: Option<CbStreamRead>,
-
     #[cfg(test)]
     cb_stream_readline: Option<CbReadline>,
-
     #[cfg(test)]
     cb_stream_readline2: Option<CbReadline2>,
-
     #[cfg(test)]
     cb_readn: Option<CbReadn>,
-
     #[cfg(test)]
     cb_readn2: Option<CbReadn2>,
-
     cb_smtp_user: Option<CbUser>,
     cb_smtp_pass: Option<CbPass>,
 }
@@ -119,32 +110,28 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         Prolens {
             _phantom: PhantomData,
             config: config.clone(),
-            pool: Rc::new(Pool::new(config.pool_size, Self::objs_size(config))),
+            pool: Rc::new(Pool::new_with_type(
+                config.pool_type,
+                config.pool_size,
+                Self::objs_size(config),
+            )),
             stats: Stats::new(),
 
             cb_ord_pkt: None,
-
             #[cfg(test)]
             cb_raw_pkt: None,
-
             #[cfg(test)]
             cb_stream_next_byte: None,
-
             #[cfg(test)]
             cb_stream_read: None,
-
             #[cfg(test)]
             cb_stream_readline: None,
-
             #[cfg(test)]
             cb_stream_readline2: None,
-
             #[cfg(test)]
             cb_readn: None,
-
             #[cfg(test)]
             cb_readn2: None,
-
             cb_smtp_user: None,
             cb_smtp_pass: None,
         }
@@ -351,7 +338,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         res.push(strm_size);
         dbg!(task_size, pktstrm_size, heap_size, strm_size);
 
-        let pool = Rc::new(Pool::new(8192, vec![1]));
+        let pool = Rc::new(Pool::new(1024, vec![1]));
 
         get_parser_sizes::<P, OrdPacketParser<P>>(&pool, &mut res);
         get_parser_sizes::<P, SmtpParser<P>>(&pool, &mut res);
@@ -421,6 +408,7 @@ mod tests {
     #[test]
     fn test_protolens_config() {
         let config = Config {
+            pool_type: PoolType::Box,
             pool_size: 20,
             max_buf_packet: 32,
         };
@@ -465,6 +453,7 @@ mod tests {
     #[test]
     fn test_objs_size() {
         let config = Config {
+            pool_type: PoolType::Box,
             pool_size: 20,
             max_buf_packet: 64,
         };
@@ -486,6 +475,7 @@ mod tests {
     #[test]
     fn test_objs_size_with_packetref() {
         let config = Config {
+            pool_type: PoolType::Box,
             pool_size: 20,
             max_buf_packet: 64,
         };
@@ -518,6 +508,7 @@ mod tests {
     #[test]
     fn test_objs_size_with_cappacket_ref() {
         let config = Config {
+            pool_type: PoolType::Box,
             pool_size: 20,
             max_buf_packet: 64,
         };

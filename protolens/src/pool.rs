@@ -1,6 +1,6 @@
+use crate::box_pool::*;
 use std::fmt;
 use std::future::Future;
-use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
@@ -8,26 +8,51 @@ use std::ptr;
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
+#[derive(Clone, Copy, Debug)]
+pub enum PoolType {
+    Box,
+    // 将来可以添加其他类型
+    // Custom,
+}
+
 #[derive(Clone)]
-pub struct Pool {
-    _marker: PhantomData<()>,
+pub(crate) enum PoolImpl {
+    Box(Rc<BoxPool>),
+    // 将来可以添加其他实现
+    // Custom(Rc<CustomPool>),
+}
+
+#[derive(Clone)]
+pub(crate) struct Pool {
+    inner: PoolImpl,
 }
 
 impl Pool {
-    pub fn new(_total_size: usize, _obj_sizes: Vec<usize>) -> Self {
-        Pool {
-            _marker: PhantomData,
-        }
+    pub(crate) fn new(total_size: usize, obj_sizes: Vec<usize>) -> Self {
+        Self::new_with_type(PoolType::Box, total_size, obj_sizes)
+    }
+
+    pub(crate) fn new_with_type(
+        pool_type: PoolType,
+        total_size: usize,
+        obj_sizes: Vec<usize>,
+    ) -> Self {
+        let inner = match pool_type {
+            PoolType::Box => PoolImpl::Box(Rc::new(BoxPool::new(total_size, obj_sizes))),
+            // 将来添加其他实现
+            // PoolType::Custom => PoolImpl::Custom(Rc::new(CustomPool::new(total_size, obj_sizes))),
+        };
+        Pool { inner }
     }
 
     pub(crate) fn alloc<T, F>(&self, init: F) -> PoolBox<T>
     where
         F: FnOnce() -> T,
     {
-        let ptr = Box::into_raw(Box::new(init()));
-        PoolBox {
-            ptr,
-            pool: Rc::new(self.clone()),
+        match &self.inner {
+            PoolImpl::Box(boxpool) => boxpool.alloc(init, self.inner.clone()),
+            // 将来添加其他实现
+            // PoolImpl::Custom(custompool) => custompool.alloc(init, self.inner.clone()),
         }
     }
 
@@ -35,21 +60,17 @@ impl Pool {
     where
         F: Future + 'static,
     {
-        let future = Box::new(future);
-        let ptr = Box::into_raw(future) as *mut dyn Future<Output = F::Output>;
-        unsafe {
-            Pin::new_unchecked(PoolBox {
-                ptr,
-                pool: Rc::new(self.clone()),
-            })
+        match &self.inner {
+            PoolImpl::Box(boxpool) => boxpool.alloc_future(future, self.inner.clone()),
+            // 将来添加其他实现
+            // PoolImpl::Custom(custompool) => custompool.alloc_future(future, self.inner.clone()),
         }
     }
 }
 
 pub(crate) struct PoolBox<T: ?Sized> {
-    ptr: *mut T,
-    #[allow(dead_code)]
-    pool: Rc<Pool>,
+    pub(crate) ptr: *mut T,
+    pub(crate) pool: PoolImpl,
 }
 
 impl<T> PoolBox<T> {
@@ -61,8 +82,11 @@ impl<T> PoolBox<T> {
         this.ptr
     }
 
-    pub unsafe fn from_raw(ptr: *mut T, pool: Rc<Pool>) -> Self {
-        PoolBox { ptr, pool }
+    pub(crate) unsafe fn from_raw(ptr: *mut T, pool: &Pool) -> Self {
+        PoolBox {
+            ptr,
+            pool: pool.inner.clone(),
+        }
     }
 }
 
@@ -156,8 +180,8 @@ mod tests {
         let raw_ptr = obj.into_raw();
 
         // 使用 from_raw 重新构造 PoolBox
-        let pool_ref = Rc::new(pool);
-        let reconstructed_obj = unsafe { PoolBox::from_raw(raw_ptr, pool_ref) };
+        // let pool_ref = pool.inner.clone();
+        let reconstructed_obj = unsafe { PoolBox::from_raw(raw_ptr, &pool) };
 
         // 验证重构后的对象值正确
         assert_eq!(reconstructed_obj.value, 42);
@@ -171,18 +195,18 @@ mod tests {
     #[test]
     fn test_multiple_into_raw_from_raw() {
         let pool = Pool::new(4096, vec![10]);
-        let pool_ref = Rc::new(pool);
+        // let pool_ref = pool.inner.clone();
 
         // 创建多个对象并测试转换
-        let obj1 = pool_ref.alloc(|| TestObj { value: 1 });
-        let obj2 = pool_ref.alloc(|| TestObj { value: 2 });
+        let obj1 = pool.alloc(|| TestObj { value: 1 });
+        let obj2 = pool.alloc(|| TestObj { value: 2 });
 
         let raw_ptr1 = obj1.into_raw();
         let raw_ptr2 = obj2.into_raw();
 
         // 重新构造并验证
-        let reconstructed1 = unsafe { PoolBox::from_raw(raw_ptr1, pool_ref.clone()) };
-        let reconstructed2 = unsafe { PoolBox::from_raw(raw_ptr2, pool_ref.clone()) };
+        let reconstructed1 = unsafe { PoolBox::from_raw(raw_ptr1, &pool) };
+        let reconstructed2 = unsafe { PoolBox::from_raw(raw_ptr2, &pool) };
 
         assert_eq!(reconstructed1.value, 1);
         assert_eq!(reconstructed2.value, 2);
@@ -193,26 +217,32 @@ mod tests {
         use std::rc::Rc;
 
         let pool = Pool::new(4096, vec![10]);
-        let pool_rc = Rc::new(pool);
-        let pool_weak = Rc::downgrade(&pool_rc);
 
-        let obj = PoolBox {
-            ptr: Box::into_raw(Box::new(42)),
-            pool: pool_rc.clone(),
+        // 获取 BoxPool 的引用，用于检查引用计数
+        let boxpool = match &pool.inner {
+            PoolImpl::Box(bp) => bp.clone(),
         };
-        assert_eq!(Rc::strong_count(&pool_rc), 2); // 一个在 pool_rc，一个在 obj.pool
 
+        // 记录初始引用计数（此时应该是 2：一个在 pool.inner，一个在 boxpool）
+        let initial_count = Rc::strong_count(&boxpool);
+        assert_eq!(initial_count, 2);
+
+        let obj = pool.alloc(|| 42);
+
+        let count_after_alloc = Rc::strong_count(&boxpool);
+        assert_eq!(count_after_alloc, 3);
+
+        let pool_weak = Rc::downgrade(&boxpool);
         let raw_ptr = obj.into_raw();
-        assert_eq!(Rc::strong_count(&pool_rc), 1); // 现在只剩下 pool_rc
-
-        // 验证指针仍然有效
         unsafe {
             assert_eq!(*raw_ptr, 42);
-            // 清理测试资源
-            let _ = Box::from_raw(raw_ptr);
+            // 使用 from_raw 重新构造 PoolBox
+            let reconstructed = PoolBox::from_raw(raw_ptr, &pool);
+            assert_eq!(*reconstructed, 42);
         }
 
-        // 验证 weak 引用仍然有效
         assert!(pool_weak.upgrade().is_some());
+        // 验证最终引用计数与初始引用计数相同
+        assert_eq!(Rc::strong_count(&boxpool), initial_count);
     }
 }

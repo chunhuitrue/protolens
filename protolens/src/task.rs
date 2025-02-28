@@ -36,7 +36,7 @@ impl<P: PacketBind> Task<P> {
     }
 
     pub(crate) unsafe fn from_raw(ptr: *mut Task<P>, pool: Rc<Pool>) -> Self {
-        unsafe { Self(PoolBox::from_raw(ptr as *mut TaskInner<P>, pool)) }
+        unsafe { Self(PoolBox::from_raw(ptr as *mut TaskInner<P>, &pool)) }
     }
 }
 
