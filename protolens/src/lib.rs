@@ -1,4 +1,3 @@
-mod box_pool;
 mod config;
 mod ffi;
 mod heap;
@@ -107,14 +106,17 @@ pub struct Prolens<P> {
 impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     // 每个线程一个protolens
     pub fn new(config: &Config) -> Self {
+        let pool = Rc::new(Pool::new_with_type(
+            config.pool_type,
+            config.pool_size,
+            Self::objs_size(config),
+        ));
+        pool.init();
+
         Prolens {
             _phantom: PhantomData,
             config: config.clone(),
-            pool: Rc::new(Pool::new_with_type(
-                config.pool_type,
-                config.pool_size,
-                Self::objs_size(config),
-            )),
+            pool,
             stats: Stats::new(),
 
             cb_ord_pkt: None,

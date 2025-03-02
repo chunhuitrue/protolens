@@ -1,132 +1,46 @@
-use crate::box_pool::*;
-use std::fmt;
-use std::future::Future;
-use std::mem::ManuallyDrop;
-use std::ops::{Deref, DerefMut};
+use crate::pool::*;
+use std::marker::PhantomData;
 use std::pin::Pin;
-use std::ptr;
-use std::rc::Rc;
-use std::task::{Context, Poll};
-
-#[derive(Clone, Copy, Debug)]
-pub enum PoolType {
-    Box,
-    // 将来可以添加其他类型
-    // Custom,
-}
 
 #[derive(Clone)]
-pub(crate) enum PoolImpl {
-    Box(Rc<BoxPool>),
-    // 将来可以添加其他实现
-    // Custom(Rc<CustomPool>),
+pub(crate) struct BoxPool {
+    _marker: PhantomData<()>,
 }
 
-#[derive(Clone)]
-pub(crate) struct Pool {
-    inner: PoolImpl,
-}
-
-impl Pool {
-    pub(crate) fn new(total_size: usize, obj_sizes: Vec<usize>) -> Self {
-        Self::new_with_type(PoolType::Box, total_size, obj_sizes)
+impl BoxPool {
+    pub(crate) fn new(_total_size: usize, _obj_sizes: Vec<usize>) -> Self {
+        BoxPool {
+            _marker: PhantomData,
+        }
     }
 
-    pub(crate) fn new_with_type(
-        pool_type: PoolType,
-        total_size: usize,
-        obj_sizes: Vec<usize>,
-    ) -> Self {
-        let inner = match pool_type {
-            PoolType::Box => PoolImpl::Box(Rc::new(BoxPool::new(total_size, obj_sizes))),
-            // 将来添加其他实现
-            // PoolType::Custom => PoolImpl::Custom(Rc::new(CustomPool::new(total_size, obj_sizes))),
-        };
-        Pool { inner }
-    }
-
-    pub(crate) fn alloc<T, F>(&self, init: F) -> PoolBox<T>
+    pub(crate) fn alloc<T, F>(&self, init: F, pool_impl: PoolImpl) -> PoolBox<T>
     where
         F: FnOnce() -> T,
     {
-        match &self.inner {
-            PoolImpl::Box(boxpool) => boxpool.alloc(init, self.inner.clone()),
-            // 将来添加其他实现
-            // PoolImpl::Custom(custompool) => custompool.alloc(init, self.inner.clone()),
+        let ptr = Box::into_raw(Box::new(init()));
+        PoolBox {
+            ptr,
+            pool: pool_impl,
         }
     }
 
-    pub(crate) fn alloc_future<F>(&self, future: F) -> Pin<PoolBox<dyn Future<Output = F::Output>>>
+    pub(crate) fn alloc_future<F>(
+        &self,
+        future: F,
+        pool_impl: PoolImpl,
+    ) -> Pin<PoolBox<dyn Future<Output = F::Output>>>
     where
         F: Future + 'static,
     {
-        match &self.inner {
-            PoolImpl::Box(boxpool) => boxpool.alloc_future(future, self.inner.clone()),
-            // 将来添加其他实现
-            // PoolImpl::Custom(custompool) => custompool.alloc_future(future, self.inner.clone()),
-        }
-    }
-}
-
-pub(crate) struct PoolBox<T: ?Sized> {
-    pub(crate) ptr: *mut T,
-    pub(crate) pool: PoolImpl,
-}
-
-impl<T> PoolBox<T> {
-    pub fn into_raw(self) -> *mut T {
-        let this = ManuallyDrop::new(self);
+        let future = Box::new(future);
+        let ptr = Box::into_raw(future) as *mut dyn Future<Output = F::Output>;
         unsafe {
-            let _ = ptr::read(&this.pool);
+            Pin::new_unchecked(PoolBox {
+                ptr,
+                pool: pool_impl,
+            })
         }
-        this.ptr
-    }
-
-    pub(crate) unsafe fn from_raw(ptr: *mut T, pool: &Pool) -> Self {
-        PoolBox {
-            ptr,
-            pool: pool.inner.clone(),
-        }
-    }
-}
-
-impl<T: ?Sized> Deref for PoolBox<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        unsafe { &*self.ptr }
-    }
-}
-
-impl<T: ?Sized> DerefMut for PoolBox<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { &mut *self.ptr }
-    }
-}
-
-impl<T: ?Sized> Drop for PoolBox<T> {
-    fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            unsafe {
-                let _ = Box::from_raw(self.ptr);
-            }
-        }
-    }
-}
-
-impl<F: Future> Future for PoolBox<F> {
-    type Output = F::Output;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        unsafe {
-            let future = &mut *self.get_unchecked_mut().ptr;
-            Pin::new_unchecked(future).poll(cx)
-        }
-    }
-}
-
-impl<T: ?Sized + fmt::Debug> fmt::Debug for PoolBox<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&**self, f)
     }
 }
 
@@ -221,6 +135,7 @@ mod tests {
         // 获取 BoxPool 的引用，用于检查引用计数
         let boxpool = match &pool.inner {
             PoolImpl::Box(bp) => bp.clone(),
+            _ => panic!("Expected BoxPool implementation"),
         };
 
         // 记录初始引用计数（此时应该是 2：一个在 pool.inner，一个在 boxpool）
