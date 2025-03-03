@@ -142,7 +142,6 @@ impl<T: PacketBind> TaskInner<T> {
     // None - 表示解析器还在pending状态或没有parser
     // Some(Ok(())) - 表示解析成功完成
     // Some(Err(())) - 表示解析遇到错误
-
     pub(crate) fn run(&mut self, pkt: T) -> Option<Result<(), ()>> {
         match pkt.direction() {
             PktDirection::Client2Server => {
@@ -158,25 +157,6 @@ impl<T: PacketBind> TaskInner<T> {
         };
         self.bdir_run()
     }
-
-    // pub(crate) fn run(&mut self, pkt: T) -> Option<Result<(), ()>> {
-    //     match pkt.direction() {
-    //         PktDirection::Client2Server => {
-    //             self.stream_c2s.push(pkt);
-    //             if self.c2s_parser.is_some() {
-    //                 return self.c2s_run();
-    //             }
-    //         }
-    //         PktDirection::Server2Client => {
-    //             self.stream_s2c.push(pkt);
-    //             if self.s2c_parser.is_some() {
-    //                 return self.s2c_run();
-    //             }
-    //         }
-    //         _ => {}
-    //     };
-    //     self.bdir_run()
-    // }
 
     fn c2s_run(&mut self) -> Option<Result<(), ()>> {
         if self.c2s_state == TaskState::End || self.c2s_state == TaskState::Error {
