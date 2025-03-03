@@ -11,7 +11,6 @@ struct Chunk {
     next: *mut Chunk,
 }
 
-#[derive(Clone)]
 pub(crate) struct ChunkPool {
     chunk_list: RefCell<*mut Chunk>,
 
@@ -143,8 +142,10 @@ impl ChunkPool {
 
     fn mem_free(&mut self) {
         let ptr = *self.mem_ptr.borrow();
-        unsafe {
-            munmap(ptr as *mut c_void, *self.mem_total.borrow());
+        if !ptr.is_null() {
+            unsafe {
+                munmap(ptr as *mut c_void, *self.mem_total.borrow());
+            }
         }
         *self.mem_ptr.borrow_mut() = ptr::null_mut();
     }
@@ -167,7 +168,6 @@ mod tests {
         // 内存大小等于CHUNK_SIZE
         let pool = ChunkPool {
             chunk_list: RefCell::new(ptr::null_mut()),
-
             mem_total: RefCell::new(CHUNK_SIZE),
             mem_ptr: RefCell::new(ptr::null_mut()),
         };
@@ -176,13 +176,6 @@ mod tests {
         assert!(result);
         assert!(!(*pool.mem_ptr.borrow()).is_null());
         assert_eq!(*pool.mem_total.borrow(), CHUNK_SIZE);
-
-        unsafe {
-            munmap(
-                *pool.mem_ptr.borrow() as *mut c_void,
-                *pool.mem_total.borrow(),
-            );
-        }
     }
 
     #[test]
@@ -200,13 +193,6 @@ mod tests {
         assert!(result);
         assert!(!(*pool.mem_ptr.borrow()).is_null());
         assert_eq!(*pool.mem_total.borrow(), 2 * CHUNK_SIZE);
-
-        unsafe {
-            munmap(
-                *pool.mem_ptr.borrow() as *mut c_void,
-                *pool.mem_total.borrow(),
-            );
-        }
     }
 
     #[test]
@@ -225,13 +211,6 @@ mod tests {
         assert!(!(*pool.mem_ptr.borrow()).is_null());
         // 验证内存大小已经对齐到CHUNK_SIZE
         assert_eq!(*pool.mem_total.borrow(), CHUNK_SIZE);
-
-        unsafe {
-            munmap(
-                *pool.mem_ptr.borrow() as *mut c_void,
-                *pool.mem_total.borrow(),
-            );
-        }
     }
 
     #[test]
@@ -277,13 +256,6 @@ mod tests {
             let first_addr = first_chunk as usize;
             let second_addr = second_chunk as usize;
             assert_eq!(second_addr - first_addr, CHUNK_SIZE);
-        }
-
-        unsafe {
-            munmap(
-                *pool.mem_ptr.borrow() as *mut c_void,
-                *pool.mem_total.borrow(),
-            );
         }
     }
 
@@ -339,13 +311,6 @@ mod tests {
             }
             assert_eq!(count, 4);
         }
-
-        unsafe {
-            munmap(
-                *pool.mem_ptr.borrow() as *mut c_void,
-                *pool.mem_total.borrow(),
-            );
-        }
     }
 
     #[test]
@@ -373,13 +338,6 @@ mod tests {
             }
             assert_eq!(count, 2);
         }
-
-        unsafe {
-            munmap(
-                *pool.mem_ptr.borrow() as *mut c_void,
-                *pool.mem_total.borrow(),
-            );
-        }
     }
 
     #[test]
@@ -391,7 +349,8 @@ mod tests {
             mem_ptr: RefCell::new(ptr::null_mut()),
         };
 
-        assert!(pool.mem_init());
+        let result = pool.mem_init();
+        assert!(result);
         assert!(pool.chunk_list_init());
 
         let chunk1 = pool.chunk_get();
@@ -422,13 +381,6 @@ mod tests {
         let chunk4 = pool.chunk_get();
         assert!(chunk4.is_some());
         assert_eq!(chunk4.unwrap(), chunk2);
-
-        unsafe {
-            munmap(
-                *pool.mem_ptr.borrow() as *mut c_void,
-                *pool.mem_total.borrow(),
-            );
-        }
     }
 
     #[test]
@@ -440,7 +392,8 @@ mod tests {
             mem_ptr: RefCell::new(ptr::null_mut()),
         };
 
-        assert!(pool.mem_init());
+        let result = pool.mem_init();
+        assert!(result);
         assert!(pool.chunk_list_init());
 
         let chunk = pool.chunk_get();
@@ -451,13 +404,6 @@ mod tests {
         // 尝试将null放回链表，不应该有任何影响
         pool.chunk_put(ptr::null_mut());
         assert!(pool.chunk_get().is_none());
-
-        unsafe {
-            munmap(
-                *pool.mem_ptr.borrow() as *mut c_void,
-                *pool.mem_total.borrow(),
-            );
-        }
     }
 
     #[test]
@@ -483,7 +429,8 @@ mod tests {
             mem_ptr: RefCell::new(ptr::null_mut()),
         };
 
-        assert!(pool.mem_init());
+        let result = pool.mem_init();
+        assert!(result);
         assert!(pool.chunk_list_init());
 
         // 获取所有chunk
@@ -501,12 +448,5 @@ mod tests {
         assert_eq!(retrieved_chunk1, chunk2);
         assert_eq!(retrieved_chunk2, chunk1);
         assert!(pool.chunk_get().is_none());
-
-        unsafe {
-            munmap(
-                *pool.mem_ptr.borrow() as *mut c_void,
-                *pool.mem_total.borrow(),
-            );
-        }
     }
 }
