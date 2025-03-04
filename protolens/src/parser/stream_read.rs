@@ -2,6 +2,7 @@ use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::packet::*;
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::future::Future;
@@ -12,15 +13,25 @@ pub trait StreamReadCbFn: FnMut(&[u8], usize, u32, *mut c_void) {}
 impl<F: FnMut(&[u8], usize, u32, *mut c_void)> StreamReadCbFn for F {}
 pub(crate) type CbStreamRead = Rc<RefCell<dyn StreamReadCbFn + 'static>>;
 
-pub struct StreamReadParser<T: Packet + Ord + 'static> {
-    _phantom: PhantomData<T>,
+pub struct StreamReadParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
+    _phantom_t: PhantomData<T>,
+    _phantom_p: PhantomData<P>,
     pub(crate) cb_read: Option<CbStreamRead>,
 }
 
-impl<T: Packet + Ord + 'static> StreamReadParser<T> {
+impl<T, P> StreamReadParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
     pub fn new() -> Self {
         Self {
-            _phantom: PhantomData,
+            _phantom_t: PhantomData,
+            _phantom_p: PhantomData,
             cb_read: None,
         }
     }
@@ -28,15 +39,15 @@ impl<T: Packet + Ord + 'static> StreamReadParser<T> {
     fn c2s_parser_inner(
         cb_read: Option<CbStreamRead>,
         read_size: usize,
-        stream: *const PktStrm<T>,
+        stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> impl Future<Output = Result<(), ()>> {
         let mut read_buff: Vec<u8> = vec![0; read_size];
 
         async move {
-            let stm: &mut PktStrm<T>;
+            let stm: &mut PktStrm<T, P>;
             unsafe {
-                stm = &mut *(stream as *mut PktStrm<T>);
+                stm = &mut *(stream as *mut PktStrm<T, P>);
             }
 
             while !stm.fin() {
@@ -59,14 +70,23 @@ impl<T: Packet + Ord + 'static> StreamReadParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> Default for StreamReadParser<T> {
+impl<T, P> Default for StreamReadParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Packet + Ord + 'static> Parser for StreamReadParser<T> {
+impl<T, P> Parser for StreamReadParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
     type PacketType = T;
+    type PtrType = P;
 
     fn new() -> Self {
         Self::new()
@@ -74,7 +94,7 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadParser<T> {
 
     fn c2s_parser(
         &self,
-        stream: *const PktStrm<Self::PacketType>,
+        stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
@@ -108,7 +128,7 @@ mod tests {
             *seq_clone.borrow_mut() = seq;
         };
 
-        let mut protolens = Prolens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_stream_read(callback);
         let mut task = protolens.new_task();
 
@@ -138,7 +158,7 @@ mod tests {
             seq_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_stream_read(callback);
         let mut task = protolens.new_task();
 

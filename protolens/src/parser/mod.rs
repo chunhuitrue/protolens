@@ -15,6 +15,8 @@ pub mod stream_readn;
 #[cfg(test)]
 pub mod stream_readn2;
 
+use crate::PtrNew;
+use crate::PtrWrapper;
 use crate::Packet;
 use crate::PktStrm;
 use futures::Future;
@@ -25,6 +27,7 @@ pub(crate) type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 
 pub(crate) trait Parser {
     type PacketType: Packet + Ord + 'static;
+    type PtrType: PtrWrapper<Self::PacketType> + PtrNew<Self::PacketType>;
 
     fn new() -> Self
     where
@@ -32,7 +35,7 @@ pub(crate) trait Parser {
 
     fn c2s_parser(
         &self,
-        _stream: *const PktStrm<Self::PacketType>,
+        _stream: *const PktStrm<Self::PacketType, Self::PtrType>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
@@ -40,7 +43,7 @@ pub(crate) trait Parser {
 
     fn s2c_parser(
         &self,
-        _stream: *const PktStrm<Self::PacketType>,
+        _stream: *const PktStrm<Self::PacketType, Self::PtrType>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
@@ -48,8 +51,8 @@ pub(crate) trait Parser {
 
     fn bdir_parser(
         &self,
-        _c2s_stream: *const PktStrm<Self::PacketType>,
-        _s2c_stream: *const PktStrm<Self::PacketType>,
+        _c2s_stream: *const PktStrm<Self::PacketType, Self::PtrType>,
+        _s2c_stream: *const PktStrm<Self::PacketType, Self::PtrType>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None

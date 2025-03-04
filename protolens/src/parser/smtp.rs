@@ -2,6 +2,7 @@ use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::packet::*;
 use nom::{
     IResult, Offset,
     bytes::complete::{tag, take_till, take_while},
@@ -25,16 +26,26 @@ impl<F: FnMut(&[u8], u32, *mut c_void)> SmtpCbFn for F {}
 pub(crate) type CbUser = Rc<RefCell<dyn SmtpCbFn + 'static>>;
 pub(crate) type CbPass = Rc<RefCell<dyn SmtpCbFn + 'static>>;
 
-pub struct SmtpParser<T: Packet + Ord + 'static> {
-    _phantom: PhantomData<T>,
+pub struct SmtpParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
+    _phantom_t: PhantomData<T>,
+    _phantom_p: PhantomData<P>,
     pub(crate) cb_user: Option<CbUser>,
     pub(crate) cb_pass: Option<CbPass>,
 }
 
-impl<T: Packet + Ord + 'static> SmtpParser<T> {
+impl<T, P> SmtpParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
     pub(crate) fn new() -> Self {
         Self {
-            _phantom: PhantomData,
+            _phantom_t: PhantomData,
+            _phantom_p: PhantomData,
             cb_user: None,
             cb_pass: None,
         }
@@ -43,12 +54,12 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
     async fn c2s_parser_inner(
         cb_user: Option<CbUser>,
         cb_pass: Option<CbPass>,
-        stream: *const PktStrm<T>,
+        stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T>;
+        let stm: &mut PktStrm<T, P>;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T>);
+            stm = &mut *(stream as *mut PktStrm<T, P>);
         }
 
         // 验证EHLO命令,如果EHLO命令不正确，则返回错误，无法继续解析
@@ -111,14 +122,23 @@ impl<T: Packet + Ord + 'static> SmtpParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> Default for SmtpParser<T> {
+impl<T, P> Default for SmtpParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
+impl<T, P> Parser for SmtpParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
     type PacketType = T;
+    type PtrType = P;
 
     fn new() -> Self {
         Self::new()
@@ -126,7 +146,7 @@ impl<T: Packet + Ord + 'static> Parser for SmtpParser<T> {
 
     fn c2s_parser(
         &self,
-        stream: *const PktStrm<Self::PacketType>,
+        stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
@@ -167,9 +187,11 @@ fn rcpt_to(input: &str) -> IResult<&str, (&str, usize)> {
     Ok((input, (mail, start_pos)))
 }
 
-async fn mail_head<T: Packet + Ord + 'static>(
-    stm: &mut PktStrm<T>,
-) -> Result<(ContentType, String), ()> {
+async fn mail_head<T, P>(stm: &mut PktStrm<T, P>) -> Result<(ContentType, String), ()>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
     let mut cont_type_ok = false;
     let mut cont_type = ContentType::Unknown;
     let mut boundary = String::new();
@@ -343,7 +365,7 @@ mod tests {
         let _ = pkt1.decode();
         pkt1.set_l7_proto(L7Proto::Smtp);
 
-        let mut protolens = Prolens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         let mut task = protolens.new_task();
 
         // 运行解析器，应该会因为不是EHLO命令而失败
@@ -356,7 +378,7 @@ mod tests {
         let pkt2 = build_pkt_line(seq2, correct_commands);
         let _ = pkt2.decode();
 
-        let mut protolens = Prolens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         let mut task = protolens.new_task();
 
         // 运行解析器，应该成功处理正确的命令序列
@@ -399,7 +421,7 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
         let mut task = protolens.new_task();

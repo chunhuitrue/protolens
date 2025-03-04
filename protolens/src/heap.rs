@@ -128,10 +128,12 @@ mod tests {
     use super::*;
     use crate::test_utils::MyPacket;
     use crate::{L7Proto, PacketWrapper};
+    use std::marker::PhantomData;
+    use std::rc::Rc;
 
     #[test]
     fn test_memory_size() {
-        let heap = Heap::<PacketWrapper<MyPacket>, 32>::new();
+        let heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>, 32>::new();
         assert_eq!(heap.capacity(), 32);
     }
 
@@ -157,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_packet_ordering() {
-        let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new();
+        let mut heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>, 5>::new();
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -189,19 +191,28 @@ mod tests {
             data: vec![7, 8, 9],
         };
 
-        heap.push(PacketWrapper(packet1.clone()));
-        heap.push(PacketWrapper(packet2.clone()));
-        heap.push(PacketWrapper(packet3.clone()));
+        heap.push(PacketWrapper {
+            ptr: Rc::new(packet1.clone()),
+            _phantom: PhantomData,
+        });
+        heap.push(PacketWrapper {
+            ptr: Rc::new(packet2.clone()),
+            _phantom: PhantomData,
+        });
+        heap.push(PacketWrapper {
+            ptr: Rc::new(packet3.clone()),
+            _phantom: PhantomData,
+        });
 
-        assert_eq!(heap.pop().map(|p| p.0.sequence), Some(990));
-        assert_eq!(heap.pop().map(|p| p.0.sequence), Some(995));
-        assert_eq!(heap.pop().map(|p| p.0.sequence), Some(1000));
+        assert_eq!(heap.pop().map(|p| p.ptr.sequence), Some(990));
+        assert_eq!(heap.pop().map(|p| p.ptr.sequence), Some(995));
+        assert_eq!(heap.pop().map(|p| p.ptr.sequence), Some(1000));
         assert_eq!(heap.pop(), None);
     }
 
     #[test]
     fn test_packet_ordering_with_syn_fin() {
-        let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new();
+        let mut heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>, 5>::new();
 
         let syn_packet = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -233,19 +244,28 @@ mod tests {
             data: vec![],
         };
 
-        heap.push(PacketWrapper(fin_packet.clone()));
-        heap.push(PacketWrapper(data_packet.clone()));
-        heap.push(PacketWrapper(syn_packet.clone()));
+        heap.push(PacketWrapper {
+            ptr: Rc::new(fin_packet.clone()),
+            _phantom: PhantomData,
+        });
+        heap.push(PacketWrapper {
+            ptr: Rc::new(data_packet.clone()),
+            _phantom: PhantomData,
+        });
+        heap.push(PacketWrapper {
+            ptr: Rc::new(syn_packet.clone()),
+            _phantom: PhantomData,
+        });
 
-        let first = heap.pop().unwrap().0;
+        let first = heap.pop().unwrap().ptr;
         assert!(first.syn_flag);
         assert_eq!(first.sequence, 100);
 
-        let second = heap.pop().unwrap().0;
+        let second = heap.pop().unwrap().ptr;
         assert!(!second.syn_flag && !second.fin_flag);
         assert_eq!(second.sequence, 101);
 
-        let third = heap.pop().unwrap().0;
+        let third = heap.pop().unwrap().ptr;
         assert!(third.fin_flag);
         assert_eq!(third.sequence, 104);
 

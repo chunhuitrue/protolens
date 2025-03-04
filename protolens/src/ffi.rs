@@ -6,6 +6,7 @@ use crate::packet::PktDirection;
 use crate::packet::TransProto;
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::rc::Rc;  
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -76,7 +77,7 @@ pub extern "C" fn prolens_init_vtable(vtable: PacketVTable) {
     });
 }
 
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd, Clone)]
 pub struct FfiPacket {
     packet_ptr: *mut std::ffi::c_void,
 }
@@ -128,11 +129,11 @@ impl crate::Packet for FfiPacket {
 }
 
 #[allow(dead_code)]
-pub struct FfiProlens(Prolens<FfiPacket>);
+pub struct FfiProlens(Prolens<FfiPacket, Rc<FfiPacket>>);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn prolens_new() -> *mut FfiProlens {
-    let prolens = Box::new(FfiProlens(Prolens::<FfiPacket>::default()));
+    let prolens = Box::new(FfiProlens(Prolens::<FfiPacket, Rc<FfiPacket>>::default()));
     Box::into_raw(prolens)
 }
 
@@ -149,7 +150,7 @@ pub extern "C" fn prolens_free(prolens: *mut FfiProlens) {
 pub extern "C" fn protolens_task_new(
     prolens: *mut FfiProlens,
     cb_ctx: *mut c_void,
-) -> *mut Task<FfiPacket> {
+) -> *mut Task<FfiPacket, Rc<FfiPacket>> {
     if prolens.is_null() {
         return std::ptr::null_mut();
     }
@@ -161,7 +162,7 @@ pub extern "C" fn protolens_task_new(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn protolens_task_free(prolens: *mut FfiProlens, task: *mut Task<FfiPacket>) {
+pub extern "C" fn protolens_task_free(prolens: *mut FfiProlens, task: *mut Task<FfiPacket, Rc<FfiPacket>>) {
     if task.is_null() || prolens.is_null() {
         return;
     }
@@ -174,7 +175,7 @@ pub extern "C" fn protolens_task_free(prolens: *mut FfiProlens, task: *mut Task<
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn protolens_task_dbinfo(prolens: *mut FfiProlens, task: *mut Task<FfiPacket>) {
+pub extern "C" fn protolens_task_dbinfo(prolens: *mut FfiProlens, task: *mut Task<FfiPacket, Rc<FfiPacket>>) {
     if task.is_null() || prolens.is_null() {
         return;
     }
@@ -200,7 +201,7 @@ pub enum TaskResult {
 #[unsafe(no_mangle)]
 pub extern "C" fn protolens_task_run(
     prolens: *mut FfiProlens,
-    task: *mut Task<FfiPacket>,
+    task: *mut Task<FfiPacket, Rc<FfiPacket>>,
     pkt_ptr: *mut c_void,
 ) -> TaskResult {
     if prolens.is_null() || task.is_null() || pkt_ptr.is_null() {
@@ -229,7 +230,7 @@ pub type CbStm = extern "C" fn(data: *const u8, data_len: usize, seq: u32, *cons
 #[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_task_c2s(
     prolens: *mut FfiProlens,
-    task: *mut Task<FfiPacket>,
+    task: *mut Task<FfiPacket, Rc<FfiPacket>>,
     callback: Option<CbStm>,
 ) {
     if prolens.is_null() || task.is_null() || callback.is_none() {
@@ -250,7 +251,7 @@ pub extern "C" fn prolens_set_cb_task_c2s(
 #[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_task_s2c(
     prolens: *mut FfiProlens,
-    task: *mut Task<FfiPacket>,
+    task: *mut Task<FfiPacket, Rc<FfiPacket>>,
     callback: Option<CbStm>,
 ) {
     if prolens.is_null() || task.is_null() || callback.is_none() {

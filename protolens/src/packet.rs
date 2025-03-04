@@ -1,5 +1,9 @@
 use std::cmp::{Ord, Ordering, PartialOrd};
 use std::fmt::Debug;
+use std::marker::PhantomData;
+use std::ops::Deref;
+use std::rc::Rc;
+use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Copy)]
@@ -40,7 +44,7 @@ pub enum PktDirection {
     Unknown,
 }
 
-pub trait Packet {
+pub trait Packet: Clone {
     fn direction(&self) -> PktDirection;
     fn l7_proto(&self) -> L7Proto;
     fn trans_proto(&self) -> TransProto;
@@ -56,28 +60,56 @@ pub trait Packet {
     fn payload(&self) -> &[u8];
 }
 
-// 包装结构体，必须实现以seq比较，才能用于数据包排序
-#[derive(Debug, Clone)]
-#[repr(transparent)]
-pub struct PacketWrapper<T>(pub T);
+// 表示可以用作包装器的智能指针
+pub trait PtrWrapper<T: ?Sized>: Clone + Deref<Target = T> {}
 
-impl<T: Packet> PartialEq for PacketWrapper<T> {
-    fn eq(&self, other: &PacketWrapper<T>) -> bool {
-        self.0.seq() == other.0.seq()
+impl<T: ?Sized> PtrWrapper<T> for Rc<T> {}
+impl<T: ?Sized> PtrWrapper<T> for Arc<T> {}
+
+pub trait PtrNew<T>: PtrWrapper<T> {
+    fn new(value: T) -> Self;
+}
+
+impl<T> PtrNew<T> for Rc<T> {
+    fn new(value: T) -> Self {
+        Rc::new(value)
     }
 }
 
-impl<T: Packet> Eq for PacketWrapper<T> {}
+impl<T> PtrNew<T> for Arc<T> {
+    fn new(value: T) -> Self {
+        Arc::new(value)
+    }
+}
 
-impl<T: Packet + Ord> PartialOrd for PacketWrapper<T> {
+// 包装结构体，必须实现以seq比较，才能用于数据包排序
+#[derive(Debug)]
+pub struct PacketWrapper<T: Packet, P>
+where
+    T: Packet,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    pub(crate) ptr: P,
+    pub(crate) _phantom: PhantomData<T>,
+}
+
+impl<T: Packet, P: PtrWrapper<T> + PtrNew<T>> PartialEq for PacketWrapper<T, P> {
+    fn eq(&self, other: &PacketWrapper<T, P>) -> bool {
+        self.ptr.seq() == other.ptr.seq()
+    }
+}
+
+impl<T: Packet, P: PtrWrapper<T> + PtrNew<T>> Eq for PacketWrapper<T, P> {}
+
+impl<T: Packet + Ord, P: PtrWrapper<T> + PtrNew<T>> PartialOrd for PacketWrapper<T, P> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T: Packet + Ord> Ord for PacketWrapper<T> {
+impl<T: Packet + Ord, P: PtrWrapper<T> + PtrNew<T>> Ord for PacketWrapper<T, P> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.0.seq().cmp(&other.0.seq())
+        self.ptr.seq().cmp(&other.ptr.seq())
     }
 }
 
@@ -108,7 +140,16 @@ mod tests {
             data: vec![4, 5, 6],
         };
 
-        assert_eq!(PacketWrapper(packet1), PacketWrapper(packet2));
+        assert_eq!(
+            PacketWrapper {
+                ptr: Rc::new(packet1),
+                _phantom: PhantomData
+            },
+            PacketWrapper {
+                ptr: Rc::new(packet2),
+                _phantom: PhantomData
+            }
+        );
     }
 
     #[test]
@@ -133,7 +174,16 @@ mod tests {
             data: vec![4, 5, 6],
         };
 
-        assert_ne!(PacketWrapper(packet1), PacketWrapper(packet2));
+        assert_ne!(
+            PacketWrapper {
+                ptr: Rc::new(packet1),
+                _phantom: PhantomData
+            },
+            PacketWrapper {
+                ptr: Rc::new(packet2),
+                _phantom: PhantomData
+            }
+        );
     }
 
     #[test]
@@ -158,7 +208,15 @@ mod tests {
             data: vec![4, 5, 6],
         };
 
-        assert!(PacketWrapper(packet1) > PacketWrapper(packet2));
+        assert!(
+            PacketWrapper {
+                ptr: Rc::new(packet1),
+                _phantom: PhantomData
+            } > PacketWrapper {
+                ptr: Rc::new(packet2),
+                _phantom: PhantomData
+            }
+        );
     }
 
     #[test]
@@ -183,6 +241,14 @@ mod tests {
             data: vec![4, 5, 6],
         };
 
-        assert!(PacketWrapper(packet1) < PacketWrapper(packet2));
+        assert!(
+            PacketWrapper {
+                ptr: Rc::new(packet1),
+                _phantom: PhantomData
+            } < PacketWrapper {
+                ptr: Rc::new(packet2),
+                _phantom: PhantomData
+            }
+        );
     }
 }

@@ -3,6 +3,8 @@
 use crate::Heap;
 use crate::Packet;
 use crate::PacketWrapper;
+use crate::PtrNew;
+use crate::PtrWrapper;
 use crate::TransProto;
 use crate::config::*;
 use futures::Future;
@@ -12,6 +14,7 @@ use futures_util::stream::{Stream, StreamExt};
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::fmt;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::Context;
@@ -21,12 +24,13 @@ pub trait StmCbFn: FnMut(&[u8], u32, *const c_void) {}
 impl<F> StmCbFn for F where F: FnMut(&[u8], u32, *const c_void) {}
 pub type CbStrm = Rc<RefCell<dyn StmCbFn + 'static>>;
 
-pub struct PktStrm<T>
+pub struct PktStrm<T, P>
 where
     T: Packet,
-    PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
+    P: PtrWrapper<T> + PtrNew<T>,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
-    pkt_buff: Heap<PacketWrapper<T>, { MAX_PKT_BUFF }>,
+    pkt_buff: Heap<PacketWrapper<T, P>, { MAX_PKT_BUFF }>,
     read_buff: Box<[u8; MAX_READ_BUFF]>,
     read_buff_len: usize,
     next_seq: u32,
@@ -37,10 +41,11 @@ where
     cb_ctx: *const c_void, // 只在c语言api中使用
 }
 
-impl<T> PktStrm<T>
+impl<T, P> PktStrm<T, P>
 where
     T: Packet,
-    PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
+    P: PtrWrapper<T> + PtrNew<T>,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
     pub(crate) fn new(cb_ctx: *const c_void) -> Self {
         PktStrm {
@@ -61,20 +66,19 @@ where
         self.cb_strm = Some(Rc::new(RefCell::new(callback)));
     }
 
-    pub(crate) fn push(&mut self, packet: T) {
+    pub(crate) fn push(&mut self, packet: PacketWrapper<T, P>) {
         if self.fin {
             return;
         }
 
-        if packet.trans_proto() != TransProto::Tcp {
+        if packet.ptr.trans_proto() != TransProto::Tcp {
             return;
         }
         if self.pkt_buff.len() >= MAX_PKT_BUFF {
             return;
         }
 
-        let pkt = PacketWrapper(packet);
-        self.pkt_buff.push(pkt);
+        self.pkt_buff.push(packet);
     }
 
     // 无论是否严格seq连续，peek一个当前最有序的包
@@ -83,17 +87,17 @@ where
         if self.fin {
             return None;
         }
-        self.pkt_buff.peek().map(|p| &p.0)
+        self.pkt_buff.peek().map(|p| &*p.ptr)
     }
 
     // 无论是否严格seq连续，都pop一个当前包。
     // 注意：next_seq由调用者负责
-    pub(crate) fn pop(&mut self) -> Option<T> {
-        if let Some(pkt) = self.pkt_buff.pop().map(|p| p.0) {
-            if pkt.fin() {
+    pub(crate) fn pop(&mut self) -> Option<PacketWrapper<T, P>> {
+        if let Some(wrapper) = self.pkt_buff.pop() {
+            if wrapper.ptr.fin() {
                 self.fin = true;
             }
-            return Some(pkt);
+            return Some(wrapper);
         }
         None
     }
@@ -137,7 +141,7 @@ where
 
     // 严格有序。弹出一个严格有序的包，可能包含载荷为0的。否则为none
     // 并不需要关心fin标记，这不是pkt这一层关心的问题
-    pub(crate) fn pop_ord(&mut self) -> Option<T> {
+    pub(crate) fn pop_ord(&mut self) -> Option<PacketWrapper<T, P>> {
         if self.fin {
             return None;
         }
@@ -175,7 +179,7 @@ where
     }
 
     // 严格有序。pop一个带数据的严格有序的包。否则为none
-    pub(crate) fn pop_ord_data(&mut self) -> Option<T> {
+    pub(crate) fn pop_ord_data(&mut self) -> Option<PacketWrapper<T, P>> {
         if self.fin {
             return None;
         }
@@ -326,7 +330,9 @@ where
     }
 
     // 异步方式获取下一个严格有序的包。包含载荷为0的
-    pub(crate) fn next_ord_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
+    pub(crate) fn next_ord_pkt(
+        &mut self,
+    ) -> impl Future<Output = Option<PacketWrapper<T, P>>> + '_ {
         poll_fn(|_cx| {
             if self.fin {
                 return Poll::Ready(None);
@@ -341,7 +347,9 @@ where
     // 这个接口没必要提供
     // 异步方式获取下一个原始顺序的包。包含载荷为0的。如果cache中每到来一个包，就调用，那就是原始到来的包顺序
     #[cfg(test)]
-    pub(crate) fn next_raw_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
+    pub(crate) fn next_raw_pkt(
+        &mut self,
+    ) -> impl Future<Output = Option<PacketWrapper<T, P>>> + '_ {
         poll_fn(|_cx| {
             if let Some(_pkt) = self.peek() {
                 return Poll::Ready(self.pop());
@@ -372,27 +380,30 @@ where
     }
 }
 
-impl<T> Drop for PktStrm<T>
+impl<T, P> Drop for PktStrm<T, P>
 where
     T: Packet,
-    PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
+    P: PtrWrapper<T> + PtrNew<T>,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
     fn drop(&mut self) {
         self.pkt_buff.clear();
     }
 }
 
-impl<T> Unpin for PktStrm<T>
+impl<T, P> Unpin for PktStrm<T, P>
 where
     T: Packet,
-    PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
+    P: PtrWrapper<T> + PtrNew<T>,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
 }
 
-impl<T> Stream for PktStrm<T>
+impl<T, P> Stream for PktStrm<T, P>
 where
     T: Packet,
-    PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
+    P: PtrWrapper<T> + PtrNew<T>,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
     type Item = u8;
 
@@ -449,10 +460,11 @@ where
     // }
 }
 
-impl<T> fmt::Debug for PktStrm<T>
+impl<T, P> fmt::Debug for PktStrm<T, P>
 where
     T: Packet,
-    PacketWrapper<T>: PartialEq + Eq + PartialOrd + Ord,
+    P: PtrWrapper<T> + PtrNew<T>,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PktStrm")
@@ -467,6 +479,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::packet;
     use crate::packet::*;
     use crate::test_utils::*;
     use std::ptr;
@@ -483,22 +496,28 @@ mod tests {
 
     #[test]
     fn test_pktstrm_push() {
-        let mut stm = PktStrm::<CapPacket>::new(ptr::null_mut());
+        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
 
         let pkt1 = make_pkt_data(123);
         let _ = pkt1.decode();
-        stm.push(pkt1);
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1),
+            _phantom: PhantomData,
+        });
         assert_eq!(1, stm.len());
 
         let pkt2 = make_pkt_data(123);
         let _ = pkt2.decode();
-        stm.push(pkt2);
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt2),
+            _phantom: PhantomData,
+        });
         assert_eq!(2, stm.len());
     }
 
     #[test]
     fn test_pktstrm_peek() {
-        let mut pkt_strm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -520,8 +539,14 @@ mod tests {
             data: vec![4, 5, 6],
         };
 
-        pkt_strm.push(packet1.clone());
-        pkt_strm.push(packet2.clone());
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet1),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet2.clone()),
+            _phantom: PhantomData,
+        });
 
         if let Some(pkt) = pkt_strm.peek() {
             assert_eq!(*pkt, packet2);
@@ -531,17 +556,66 @@ mod tests {
     }
 
     #[test]
+    fn test_pktstrm_peek_push_clone() {
+        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+
+        let packet1 = MyPacket {
+            l7_proto: L7Proto::Unknown,
+            sport: 12345,
+            dport: 80,
+            sequence: 1000,
+            syn_flag: true,
+            fin_flag: false,
+            data: vec![1, 2, 3],
+        };
+
+        let packet2 = Rc::new(MyPacket {
+            l7_proto: L7Proto::Unknown,
+            sport: 54321,
+            dport: 8080,
+            sequence: 999,
+            syn_flag: false,
+            fin_flag: true,
+            data: vec![4, 5, 6],
+        });
+
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet1),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: packet2.clone(),
+            _phantom: PhantomData,
+        });
+
+        if let Some(pkt) = pkt_strm.peek() {
+            assert_eq!(*pkt, *packet2);
+        } else {
+            panic!("Expected a packet wrapper");
+        }
+    }
+
+    #[test]
     fn test_pktstrm_peek2() {
-        let mut stm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
 
         let pkt1 = MyPacket::new(L7Proto::Unknown, 1, false);
-        stm.push(pkt1);
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1),
+            _phantom: PhantomData,
+        });
 
         let pkt2 = MyPacket::new(L7Proto::Unknown, 30, false);
-        stm.push(pkt2);
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt2),
+            _phantom: PhantomData,
+        });
 
         let pkt3 = MyPacket::new(L7Proto::Unknown, 80, false);
-        stm.push(pkt3);
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt3),
+            _phantom: PhantomData,
+        });
 
         assert_eq!(1, stm.peek().unwrap().seq());
         stm.pop();
@@ -554,7 +628,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_pop() {
-        let mut pkt_strm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -586,12 +660,27 @@ mod tests {
             data: vec![7, 8, 9],
         };
 
-        pkt_strm.push(packet1.clone());
-        pkt_strm.push(packet2.clone());
-        pkt_strm.push(packet3.clone());
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet1.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet2.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet3.clone()),
+            _phantom: PhantomData,
+        });
 
         if let Some(popped_packet) = pkt_strm.pop() {
-            assert_eq!(popped_packet, packet2);
+            assert_eq!(
+                popped_packet,
+                PacketWrapper {
+                    ptr: Rc::new(packet2),
+                    _phantom: PhantomData,
+                }
+            );
         } else {
             panic!("Expected to pop a packet");
         }
@@ -599,13 +688,25 @@ mod tests {
         assert!(pkt_strm.fin);
 
         if let Some(popped_packet) = pkt_strm.pop() {
-            assert_eq!(popped_packet, packet1);
+            assert_eq!(
+                popped_packet,
+                PacketWrapper {
+                    ptr: Rc::new(packet1),
+                    _phantom: PhantomData,
+                }
+            );
         } else {
             panic!("Expected to pop a packet");
         }
 
         if let Some(popped_packet) = pkt_strm.pop() {
-            assert_eq!(popped_packet, packet3);
+            assert_eq!(
+                popped_packet,
+                PacketWrapper {
+                    ptr: Rc::new(packet3),
+                    _phantom: PhantomData,
+                }
+            );
         } else {
             panic!("Expected to pop a packet");
         }
@@ -615,7 +716,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek_ord() {
-        let mut pkt_strm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -657,10 +758,22 @@ mod tests {
             data: vec![4, 5, 6],
         };
 
-        pkt_strm.push(packet1.clone());
-        pkt_strm.push(packet2.clone());
-        pkt_strm.push(packet3.clone());
-        pkt_strm.push(packet4.clone());
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet1.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet2.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet3.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet4.clone()),
+            _phantom: PhantomData,
+        });
 
         if let Some(pkt) = pkt_strm.peek_ord() {
             assert_eq!(*pkt, packet2);
@@ -685,7 +798,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek_ord2() {
-        let mut stm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
@@ -696,23 +809,32 @@ mod tests {
         let seq3 = seq2 + pkt2.payload_len() as u32;
         let pkt3 = MyPacket::new(L7Proto::Unknown, seq3, false);
 
-        stm.push(pkt2.clone());
-        stm.push(pkt3);
-        stm.push(pkt1.clone());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt2.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt3.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
 
         assert_eq!(seq1, stm.peek_ord().unwrap().seq());
-        assert_eq!(seq1, stm.pop_ord().unwrap().seq());
+        assert_eq!(seq1, stm.pop_ord().unwrap().ptr.seq());
         assert_eq!(seq2, stm.peek_ord().unwrap().seq());
-        assert_eq!(seq2, stm.pop_ord().unwrap().seq());
+        assert_eq!(seq2, stm.pop_ord().unwrap().ptr.seq());
         assert_eq!(seq3, stm.peek_ord().unwrap().seq());
-        assert_eq!(seq3, stm.pop_ord().unwrap().seq());
+        assert_eq!(seq3, stm.pop_ord().unwrap().ptr.seq());
         assert!(stm.is_empty());
     }
 
     // 插入的包有完整重传
     #[test]
     fn test_pktstrm_peek_ord_retrans() {
-        let mut stm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
@@ -723,17 +845,29 @@ mod tests {
         let seq3 = seq2 + pkt2.payload_len() as u32;
         let pkt3 = MyPacket::new(L7Proto::Unknown, seq3, false);
 
-        stm.push(pkt1.clone());
-        stm.push(pkt2.clone());
-        stm.push(pkt1.clone());
-        stm.push(pkt3.clone());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt2.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt3.clone()),
+            _phantom: PhantomData,
+        });
 
         assert_eq!(4, stm.len());
         assert_eq!(0, stm.next_seq);
 
         assert_eq!(seq1, stm.peek().unwrap().seq()); // 此时pkt1在top
         assert_eq!(seq1, stm.peek_ord().unwrap().seq()); // 按有序方式，看到pkt1
-        assert_eq!(seq1, stm.pop_ord().unwrap().seq()); // 弹出pkt1, 通过pop_ord_pkt更新next_seq
+        assert_eq!(seq1, stm.pop_ord().unwrap().ptr.seq()); // 弹出pkt1, 通过pop_ord_pkt更新next_seq
         assert_eq!(seq2, stm.next_seq);
 
         assert_eq!(3, stm.len()); // 此时重复的pkt1，仍在里面，top上
@@ -745,13 +879,13 @@ mod tests {
         assert_eq!(2, stm.len()); // peek_ord清理了重复的pkt1
         assert_eq!(seq2, stm.next_seq); //  peek_ord不会更新next_seq
 
-        assert_eq!(seq2, stm.pop_ord().unwrap().seq()); // 弹出pkt2, 通过pop_ord更新next_seq
+        assert_eq!(seq2, stm.pop_ord().unwrap().ptr.seq()); // 弹出pkt2, 通过pop_ord更新next_seq
         assert_eq!(1, stm.len());
         assert_eq!(seq3, stm.next_seq); //  peek_ord不会更新next_seq
 
         assert_eq!(seq3, stm.peek().unwrap().seq()); // 此时pkt3在top
         assert_eq!(seq3, stm.peek_ord().unwrap().seq()); // 看到pkt3
-        assert_eq!(seq3, stm.pop_ord().unwrap().seq()); // 弹出pkt3, 通过pop_ord更新next_seq
+        assert_eq!(seq3, stm.pop_ord().unwrap().ptr.seq()); // 弹出pkt3, 通过pop_ord更新next_seq
         assert_eq!(seq3 + pkt3.payload_len() as u32, stm.next_seq);
 
         assert!(stm.is_empty());
@@ -760,7 +894,7 @@ mod tests {
     // 插入的包有覆盖重传
     #[test]
     fn test_pktstrm_peek_ord_cover() {
-        let mut stm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
@@ -774,31 +908,43 @@ mod tests {
         let seq4 = 25;
         let pkt4 = MyPacket::new(L7Proto::Unknown, seq4, false);
 
-        stm.push(pkt1.clone());
-        stm.push(pkt2.clone());
-        stm.push(pkt3.clone());
-        stm.push(pkt4.clone());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt2.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt3.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt4.clone()),
+            _phantom: PhantomData,
+        });
 
         assert_eq!(4, stm.len());
         assert_eq!(0, stm.next_seq);
 
         assert_eq!(seq1, stm.peek().unwrap().seq()); // 此时pkt1在top
         assert_eq!(seq1, stm.peek_ord().unwrap().seq()); // 看到pkt1
-        assert_eq!(seq1, stm.pop_ord().unwrap().seq()); // 弹出pkt1, 通过pop_ord更新next_seq
+        assert_eq!(seq1, stm.pop_ord().unwrap().ptr.seq()); // 弹出pkt1, 通过pop_ord更新next_seq
         assert_eq!(pkt1.seq() + pkt1.payload_len() as u32, stm.next_seq);
 
         assert_eq!(3, stm.len());
         assert_eq!(seq2, stm.peek().unwrap().seq()); // 此时pkt2在top
-        assert_eq!(seq2, stm.pop_ord().unwrap().seq()); // 弹出pkt2, 通过pop_ord更新next_seq
+        assert_eq!(seq2, stm.pop_ord().unwrap().ptr.seq()); // 弹出pkt2, 通过pop_ord更新next_seq
 
         assert_eq!(2, stm.len());
         assert_eq!(seq3, stm.peek().unwrap().seq()); // 此时pkt3在top
-        assert_eq!(seq3, stm.pop_ord().unwrap().seq()); // 弹出pkt3, 通过pop_ord更新next_seq
+        assert_eq!(seq3, stm.pop_ord().unwrap().ptr.seq()); // 弹出pkt3, 通过pop_ord更新next_seq
 
         assert_eq!(seq3 + pkt3.payload_len() as u32, stm.next_seq);
         assert_eq!(1, stm.len());
         assert_eq!(seq4, stm.peek().unwrap().seq()); // 此时pkt4在top
-        assert_eq!(seq4, stm.pop_ord().unwrap().seq()); // 弹出pkt4, 通过pop_ord更新next_seq
+        assert_eq!(seq4, stm.pop_ord().unwrap().ptr.seq()); // 弹出pkt4, 通过pop_ord更新next_seq
 
         assert_eq!(seq4 + pkt4.payload_len() as u32, stm.next_seq);
         assert!(stm.is_empty());
@@ -807,7 +953,7 @@ mod tests {
     // 有中间丢包
     #[test]
     fn test_pktstrm_peek_drop() {
-        let mut stm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
@@ -818,14 +964,20 @@ mod tests {
         let seq3 = seq2 + pkt2.payload_len() as u32;
         let pkt3 = MyPacket::new(L7Proto::Unknown, seq3, false);
 
-        stm.push(pkt1.clone());
-        stm.push(pkt3.clone());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt3.clone()),
+            _phantom: PhantomData,
+        });
 
         assert_eq!(2, stm.len());
         assert_eq!(0, stm.next_seq);
         assert_eq!(seq1, stm.peek().unwrap().seq()); // 此时pkt1在top
         assert_eq!(seq1, stm.peek_ord().unwrap().seq()); // 看到pkt1
-        assert_eq!(seq1, stm.pop_ord().unwrap().seq()); // 弹出pkt1, 通过pop_ord更新next_seq
+        assert_eq!(seq1, stm.pop_ord().unwrap().ptr.seq()); // 弹出pkt1, 通过pop_ord更新next_seq
         assert_eq!(pkt1.seq() + pkt1.payload_len() as u32, stm.next_seq);
 
         assert_eq!(1, stm.len());
@@ -837,15 +989,18 @@ mod tests {
     // 带数据，带fin。是否可以set fin标记？
     #[test]
     fn test_pkt_fin() {
-        let mut stm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, true);
 
-        stm.push(pkt1);
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
 
         let ret_pkt1 = stm.pop_ord_data();
-        assert_eq!(seq1, ret_pkt1.unwrap().seq());
+        assert_eq!(seq1, ret_pkt1.unwrap().ptr.seq());
         assert!(stm.fin);
     }
 
@@ -853,7 +1008,7 @@ mod tests {
     // 用pop_ord_data，才会设置fin
     #[test]
     fn test_3pkt_fin() {
-        let mut stm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
@@ -867,22 +1022,31 @@ mod tests {
         let pkt3 = MyPacket::new(L7Proto::Unknown, seq3, true);
         println!("pkt3. seq3: {}, pkt3 seq: {}", seq3, pkt3.seq());
 
-        stm.push(pkt2.clone());
-        stm.push(pkt3);
-        stm.push(pkt1.clone());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt2.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt3.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
 
-        assert_eq!(seq1, stm.pop_ord_data().unwrap().seq());
+        assert_eq!(seq1, stm.pop_ord_data().unwrap().ptr.seq());
         assert!(!stm.fin);
-        assert_eq!(seq2, stm.pop_ord_data().unwrap().seq());
+        assert_eq!(seq2, stm.pop_ord_data().unwrap().ptr.seq());
         assert!(!stm.fin);
-        assert_eq!(seq3, stm.pop_ord_data().unwrap().seq());
+        assert_eq!(seq3, stm.pop_ord_data().unwrap().ptr.seq());
         assert!(stm.fin);
         assert!(stm.is_empty());
     }
 
     #[test]
     fn test_pktstrm_pop_ord() {
-        let mut pkt_strm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -924,27 +1088,57 @@ mod tests {
             data: vec![5],
         };
 
-        pkt_strm.push(packet4.clone());
-        pkt_strm.push(packet3.clone());
-        pkt_strm.push(packet2.clone());
-        pkt_strm.push(packet1.clone());
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet4.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet3.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet2.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet1.clone()),
+            _phantom: PhantomData,
+        });
 
         if let Some(popped_packet) = pkt_strm.pop_ord() {
-            assert_eq!(popped_packet, packet1);
+            assert_eq!(
+                popped_packet,
+                PacketWrapper {
+                    ptr: Rc::new(packet1),
+                    _phantom: PhantomData,
+                }
+            );
             assert_eq!(pkt_strm.next_seq, 103);
         } else {
             panic!("Expected to pop a packet");
         }
 
         if let Some(popped_packet) = pkt_strm.pop_ord() {
-            assert_eq!(popped_packet, packet2);
+            assert_eq!(
+                popped_packet,
+                PacketWrapper {
+                    ptr: Rc::new(packet2),
+                    _phantom: PhantomData,
+                }
+            );
             assert_eq!(pkt_strm.next_seq, 106);
         } else {
             panic!("Expected to pop a packet");
         }
 
         if let Some(popped_packet) = pkt_strm.pop_ord() {
-            assert_eq!(popped_packet, packet3);
+            assert_eq!(
+                popped_packet,
+                PacketWrapper {
+                    ptr: Rc::new(packet3),
+                    _phantom: PhantomData,
+                }
+            );
             assert_eq!(pkt_strm.next_seq, 109);
         } else {
             panic!("Expected to pop a packet");
@@ -956,7 +1150,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek_ord_data() {
-        let mut pkt_strm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -998,10 +1192,22 @@ mod tests {
             data: vec![],
         };
 
-        pkt_strm.push(packet1.clone());
-        pkt_strm.push(packet2.clone());
-        pkt_strm.push(packet3.clone());
-        pkt_strm.push(packet4.clone());
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet1.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet2.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet3.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet4.clone()),
+            _phantom: PhantomData,
+        });
 
         if let Some(pkt) = pkt_strm.peek_ord_data() {
             assert_eq!(*pkt, packet2);
@@ -1016,7 +1222,7 @@ mod tests {
 
     #[test]
     fn test_pktstrm_pop_ord_data() {
-        let mut pkt_strm = PktStrm::<MyPacket>::new(ptr::null_mut());
+        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -1058,13 +1264,31 @@ mod tests {
             data: vec![],
         };
 
-        pkt_strm.push(packet1.clone());
-        pkt_strm.push(packet2.clone());
-        pkt_strm.push(packet3.clone());
-        pkt_strm.push(packet4.clone());
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet1.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet2.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet3.clone()),
+            _phantom: PhantomData,
+        });
+        pkt_strm.push(PacketWrapper {
+            ptr: Rc::new(packet4.clone()),
+            _phantom: PhantomData,
+        });
 
         if let Some(pkt) = pkt_strm.pop_ord_data() {
-            assert_eq!(pkt, packet2);
+            assert_eq!(
+                pkt,
+                PacketWrapper {
+                    ptr: Rc::new(packet2),
+                    _phantom: PhantomData,
+                }
+            );
         } else {
             panic!("Expected to peek a packet");
         }
@@ -1086,14 +1310,20 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let mut stm = PktStrm::<CapPacket>::new(ptr::null_mut());
-        stm.push(syn_pkt);
-        stm.push(pkt1);
+        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(syn_pkt.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
 
         let ret_syn_pkt = stm.pop_ord();
-        assert_eq!(1, ret_syn_pkt.unwrap().seq());
+        assert_eq!(1, ret_syn_pkt.unwrap().ptr.seq());
         let ret_pkt1 = stm.pop_ord();
-        assert_eq!(2, ret_pkt1.unwrap().seq());
+        assert_eq!(2, ret_pkt1.unwrap().ptr.seq());
     }
 
     // pop_ord. syn包从0开始
@@ -1108,14 +1338,20 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let mut stm = PktStrm::<CapPacket>::new(ptr::null_mut());
-        stm.push(syn_pkt);
-        stm.push(pkt1);
+        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(syn_pkt.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
 
         let ret_syn_pkt = stm.pop_ord();
-        assert_eq!(0, ret_syn_pkt.unwrap().seq());
+        assert_eq!(0, ret_syn_pkt.unwrap().ptr.seq());
         let ret_pkt1 = stm.pop_ord();
-        assert_eq!(1, ret_pkt1.unwrap().seq());
+        assert_eq!(1, ret_pkt1.unwrap().ptr.seq());
     }
 
     // 可以多次peek。有一个独立的syn包
@@ -1130,9 +1366,15 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let mut stm = PktStrm::<CapPacket>::new(ptr::null_mut());
-        stm.push(syn_pkt);
-        stm.push(pkt1);
+        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(syn_pkt.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
 
         let ret_syn_pkt = stm.peek();
         assert_eq!(syn_pkt_seq, ret_syn_pkt.unwrap().seq());
@@ -1154,9 +1396,15 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let mut stm = PktStrm::<CapPacket>::new(ptr::null_mut());
-        stm.push(syn_pkt);
-        stm.push(pkt1);
+        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(syn_pkt.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
 
         let ret_syn_pkt = stm.peek_ord();
         assert_eq!(syn_pkt_seq, ret_syn_pkt.unwrap().seq());
@@ -1190,12 +1438,27 @@ mod tests {
         let pkt4 = build_pkt_fin(seq4);
         let _ = pkt4.decode();
 
-        let mut stm = PktStrm::<CapPacket>::new(ptr::null_mut());
-        stm.push(syn_pkt);
-        stm.push(pkt2);
-        stm.push(pkt3);
-        stm.push(pkt1);
-        stm.push(pkt4);
+        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(syn_pkt.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt2.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt3.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt4.clone()),
+            _phantom: PhantomData,
+        });
 
         let ret_syn_pkt = stm.peek_ord(); // peek ord pkt 可以看到syn包
         assert_eq!(syn_pkt_seq, ret_syn_pkt.unwrap().seq());
@@ -1206,7 +1469,7 @@ mod tests {
         assert_eq!(seq1, ret_pkt1.unwrap().seq());
 
         let ret_pkt1 = stm.pop_ord_data(); // pop ord data 可以弹出pkt1
-        assert_eq!(seq1, ret_pkt1.unwrap().seq());
+        assert_eq!(seq1, ret_pkt1.unwrap().ptr.seq());
     }
 
     // pop_ord. 独立的fin包
@@ -1221,14 +1484,20 @@ mod tests {
         let pkt2 = build_pkt_fin(seq2);
         let _ = pkt2.decode();
 
-        let mut stm = PktStrm::<CapPacket>::new(ptr::null_mut());
-        stm.push(pkt1);
-        stm.push(pkt2);
+        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt2.clone()),
+            _phantom: PhantomData,
+        });
 
         let ret_pkt1 = stm.pop_ord();
-        assert_eq!(1, ret_pkt1.unwrap().seq());
+        assert_eq!(1, ret_pkt1.unwrap().ptr.seq());
         let ret_pkt2 = stm.pop_ord();
-        assert_eq!(11, ret_pkt2.unwrap().seq());
+        assert_eq!(11, ret_pkt2.unwrap().ptr.seq());
     }
 
     // pop_ord. 独立的fin包。4个包乱序
@@ -1259,27 +1528,45 @@ mod tests {
         let fin_pkt = build_pkt_fin(fin_seq);
         let _ = fin_pkt.decode();
 
-        let mut stm = PktStrm::<CapPacket>::new(ptr::null_mut());
-        stm.push(syn_pkt);
-        stm.push(pkt1);
-        stm.push(pkt4);
-        stm.push(pkt3);
-        stm.push(pkt2);
-        stm.push(fin_pkt);
+        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        stm.push(PacketWrapper {
+            ptr: Rc::new(syn_pkt.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt1.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt4.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt3.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(pkt2.clone()),
+            _phantom: PhantomData,
+        });
+        stm.push(PacketWrapper {
+            ptr: Rc::new(fin_pkt.clone()),
+            _phantom: PhantomData,
+        });
 
         let ret_syn_pkt = stm.pop_ord();
-        assert_eq!(syn_seq, ret_syn_pkt.clone().unwrap().seq());
-        assert_eq!(0, ret_syn_pkt.unwrap().payload_len());
+        assert_eq!(syn_seq, ret_syn_pkt.as_ref().unwrap().ptr.seq());
+        assert_eq!(0, ret_syn_pkt.as_ref().unwrap().ptr.payload_len());
         let ret_pkt1 = stm.pop_ord();
-        assert_eq!(seq1, ret_pkt1.unwrap().seq());
+        assert_eq!(seq1, ret_pkt1.unwrap().ptr.seq());
         let ret_pkt2 = stm.pop_ord();
-        assert_eq!(seq2, ret_pkt2.unwrap().seq());
+        assert_eq!(seq2, ret_pkt2.unwrap().ptr.seq());
         let ret_pkt3 = stm.pop_ord();
-        assert_eq!(seq3, ret_pkt3.unwrap().seq());
+        assert_eq!(seq3, ret_pkt3.unwrap().ptr.seq());
         let ret_pkt4 = stm.pop_ord();
-        assert_eq!(seq4, ret_pkt4.unwrap().seq());
+        assert_eq!(seq4, ret_pkt4.unwrap().ptr.seq());
         let ret_fin = stm.pop_ord();
-        assert_eq!(fin_seq, ret_fin.clone().unwrap().seq());
-        assert_eq!(0, ret_fin.unwrap().payload_len());
+        assert_eq!(fin_seq, ret_fin.as_ref().unwrap().ptr.seq());
+        assert_eq!(0, ret_fin.as_ref().unwrap().ptr.payload_len());
     }
 }

@@ -1,8 +1,11 @@
 use crate::Packet;
+use crate::PacketWrapper;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktDirection;
 use crate::PktStrm;
+use crate::PtrNew;
+use crate::PtrWrapper;
 use crate::StmCbFn;
 use core::{
     pin::Pin,
@@ -14,9 +17,14 @@ use std::fmt;
 pub trait PacketBind: Packet + Ord + std::fmt::Debug + 'static {}
 impl<T: Packet + Ord + std::fmt::Debug + 'static> PacketBind for T {}
 
-pub struct Task<T: PacketBind> {
-    stream_c2s: PktStrm<T>,
-    stream_s2c: PktStrm<T>,
+pub struct Task<T, P>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+{
+    stream_c2s: PktStrm<T, P>,
+    stream_s2c: PktStrm<T, P>,
     c2s_parser: Option<ParserFuture>,
     s2c_parser: Option<ParserFuture>,
     bdir_parser: Option<ParserFuture>,
@@ -27,7 +35,12 @@ pub struct Task<T: PacketBind> {
     cb_ctx: *mut c_void, // 只在c语言api中使用
 }
 
-impl<T: PacketBind> Task<T> {
+impl<T, P> Task<T, P>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+{
     pub(crate) fn new(cb_ctx: *mut c_void) -> Self {
         Task {
             stream_c2s: PktStrm::new(cb_ctx),
@@ -63,9 +76,12 @@ impl<T: PacketBind> Task<T> {
         }
     }
 
-    pub(crate) fn init_parser<P: Parser<PacketType = T>>(&mut self, parser: P) {
-        let p_stream_c2s: *const PktStrm<T> = &self.stream_c2s;
-        let p_stream_s2c: *const PktStrm<T> = &self.stream_s2c;
+    pub(crate) fn init_parser<Q>(&mut self, parser: Q)
+    where
+        Q: Parser<PacketType = T, PtrType = P>,
+    {
+        let p_stream_c2s: *const PktStrm<T, P> = &self.stream_c2s;
+        let p_stream_s2c: *const PktStrm<T, P> = &self.stream_s2c;
 
         self.c2s_parser = parser.c2s_parser(p_stream_c2s, self.cb_ctx);
         self.s2c_parser = parser.s2c_parser(p_stream_s2c, self.cb_ctx);
@@ -91,8 +107,8 @@ impl<T: PacketBind> Task<T> {
     // None - 表示解析器还在pending状态或没有parser
     // Some(Ok(())) - 表示解析成功完成
     // Some(Err(())) - 表示解析遇到错误
-    pub(crate) fn run(&mut self, pkt: T) -> Option<Result<(), ()>> {
-        match pkt.direction() {
+    pub(crate) fn run(&mut self, pkt: PacketWrapper<T, P>) -> Option<Result<(), ()>> {
+        match pkt.ptr.direction() {
             PktDirection::Client2Server => {
                 self.stream_c2s.push(pkt);
                 return self.c2s_run();
@@ -180,7 +196,12 @@ impl<T: PacketBind> Task<T> {
     }
 }
 
-impl<T: Packet + Ord + std::fmt::Debug + 'static> fmt::Debug for Task<T> {
+impl<T, P> fmt::Debug for Task<T, P>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Task")
             .field("c2s_stream", &self.stream_c2s)

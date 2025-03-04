@@ -2,38 +2,52 @@ use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::packet::*;
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 pub trait OrdPktCbFn<T>: FnMut(T, *mut c_void) {}
 impl<F, T> OrdPktCbFn<T> for F where F: FnMut(T, *mut c_void) {}
 pub(crate) type CbOrdPkt<T> = Rc<RefCell<dyn OrdPktCbFn<T> + 'static>>;
 
-pub struct OrdPacketParser<T: Packet + Ord + 'static> {
+pub(crate) struct OrdPacketParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
+    _phantom: PhantomData<P>,
     pub(crate) cb_ord_pkt: Option<CbOrdPkt<T>>,
 }
 
-impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
+impl<T, P> OrdPacketParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
     fn new() -> Self {
-        Self { cb_ord_pkt: None }
+        Self {
+            _phantom: PhantomData,
+            cb_ord_pkt: None,
+        }
     }
 
     async fn c2s_parser_inner(
         cb_ord_pkt: Option<CbOrdPkt<T>>,
-        stream: *const PktStrm<T>,
+        stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T>;
+        let stm: &mut PktStrm<T, P>;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T>);
+            stm = &mut *(stream as *mut PktStrm<T, P>);
         }
 
         while !stm.fin() {
             let pkt = stm.next_ord_pkt().await;
             if let Some(ref cb) = cb_ord_pkt {
-                if let Some(pkt) = pkt {
-                    cb.borrow_mut()(pkt, cb_ctx);
+                if let Some(wrapper) = pkt {
+                    cb.borrow_mut()((*wrapper.ptr).clone(), cb_ctx);
                 }
             }
         }
@@ -41,20 +55,33 @@ impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
     }
 }
 
-impl<T: Packet + Ord + 'static> Default for OrdPacketParser<T> {
+impl<T, P> Default for OrdPacketParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Packet + Ord + 'static> Parser for OrdPacketParser<T> {
+impl<T, P> Parser for OrdPacketParser<T, P>
+where
+    T: Packet + Ord + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
     type PacketType = T;
+    type PtrType = P;
 
     fn new() -> Self {
         Self::new()
     }
 
-    fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(
+        &self,
+        stream: *const PktStrm<T, P>,
+        cb_ctx: *mut c_void,
+    ) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
             self.cb_ord_pkt.clone(),
             stream,
@@ -111,7 +138,7 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_ord_pkt(callback);
         let mut task = protolens.new_task();
         let mut push_count = 0;
@@ -169,7 +196,7 @@ mod tests {
             vec_clone.borrow_mut().extend(pkt.payload());
         };
 
-        let mut protolens = Prolens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_ord_pkt(callback);
         let mut task = protolens.new_task();
 
@@ -214,7 +241,7 @@ mod tests {
             vec_clone.borrow_mut().extend(pkt.payload());
         };
 
-        let mut protolens = Prolens::<CapPacket>::default();
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_ord_pkt(callback);
         let mut task = protolens.new_task();
 

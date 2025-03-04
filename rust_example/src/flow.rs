@@ -5,7 +5,6 @@ use crate::capture::PktHeader;
 use crate::recognize::{Direction, ProtoID, recognize_pkt};
 use etherparse::{IpHeader, PacketHeaders, TransportHeader};
 use protolens::Prolens;
-// use protolens::SmtpParser;
 use protolens::Task;
 use std::cmp::Ordering;
 use std::ffi::c_void;
@@ -56,7 +55,7 @@ impl Flow {
         &self,
         pkt: &CapPacket,
         now: u128,
-        prolens: &mut Prolens<CapPacket>,
+        prolens: &mut Prolens<CapPacket, Rc<CapPacket>>,
     ) -> Option<RefMut<FlowNode>> {
         if let Some(mut node) = self.get_mut_node(pkt, now) {
             // [插入点] 数据包处理
@@ -223,7 +222,7 @@ pub struct FlowNode {
     client_stat: StreamState,
     server_stat: StreamState,
 
-    parser_task: Option<Box<Task<CapPacket>>>,
+    parser_task: Option<Box<Task<CapPacket, Rc<CapPacket>>>>,
     // 解码出来的元数据
     user: Rc<RefCell<Vec<u8>>>,
     pass: Rc<RefCell<Vec<u8>>>,
@@ -314,7 +313,7 @@ impl FlowNode {
         }
     }
 
-    fn parse(&mut self, pkt: CapPacket, prolens: &mut Prolens<CapPacket>) {
+    fn parse(&mut self, pkt: CapPacket, prolens: &mut Prolens<CapPacket, Rc<CapPacket>>) {
         self.init_parser_task(prolens);
 
         if let Some(ref mut task) = self.parser_task {
@@ -322,7 +321,7 @@ impl FlowNode {
         }
     }
 
-    fn init_parser_task(&mut self, prolens: &mut Prolens<CapPacket>) {
+    fn init_parser_task(&mut self, prolens: &mut Prolens<CapPacket, Rc<CapPacket>>) {
         if self.parser_task.is_some() {
             return;
         }

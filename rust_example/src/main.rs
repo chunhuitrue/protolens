@@ -2,6 +2,7 @@ use capture::{CapPacket, Capture};
 use flow::{Flow, FlowNode};
 use protolens::Prolens;
 use std::env;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,7 +32,7 @@ fn main() {
     let flow = Flow::new();
 
     // 一个线程只需要一个protolens实例
-    let mut prolens = Prolens::<CapPacket>::default();
+    let mut prolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
 
     while running.load(Ordering::SeqCst) {
         let now = SystemTime::now()

@@ -15,25 +15,9 @@ pub use crate::packet::PktDirection;
 pub use crate::packet::TransProto;
 pub use crate::task::Task;
 
-pub use crate::ordpacket::OrdPacketParser;
-#[cfg(test)]
-pub use crate::rawpacket::RawPacketParser;
-pub use crate::smtp::SmtpParser;
-#[cfg(test)]
-pub use crate::stream_next::StreamNextParser;
-#[cfg(test)]
-pub use crate::stream_read::StreamReadParser;
-#[cfg(test)]
-pub use crate::stream_readline::StreamReadlineParser;
-#[cfg(test)]
-pub use crate::stream_readline2::StreamReadline2Parser;
-#[cfg(test)]
-pub use crate::stream_readn::StreamReadnParser;
-#[cfg(test)]
-pub use crate::stream_readn2::StreamReadn2Parser;
-
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
 
@@ -60,13 +44,19 @@ use crate::stream_readn::*;
 #[cfg(test)]
 use crate::stream_readn2::*;
 
-pub struct Prolens<P> {
+pub struct Prolens<T, P>
+where
+    T: Packet + Ord + std::fmt::Debug + 'static,
+    P: PtrWrapper<T> + PtrNew<T>,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+{
     config: Config,
     stats: Stats,
+    _phantom: PhantomData<P>, // 添加这个字段来使用 P
 
-    cb_ord_pkt: Option<CbOrdPkt<P>>,
+    cb_ord_pkt: Option<CbOrdPkt<T>>,
     #[cfg(test)]
-    cb_raw_pkt: Option<CbRawPkt<P>>,
+    cb_raw_pkt: Option<CbRawPkt<T>>,
     #[cfg(test)]
     cb_stream_next_byte: Option<CbStreamNext>,
     #[cfg(test)]
@@ -83,11 +73,17 @@ pub struct Prolens<P> {
     cb_smtp_pass: Option<CbPass>,
 }
 
-impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
+impl<T, P> Prolens<T, P>
+where
+    T: Packet + Ord + std::fmt::Debug + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+{
     pub fn new(config: &Config) -> Self {
         Prolens {
             config: config.clone(),
             stats: Stats::new(),
+            _phantom: PhantomData,
 
             cb_ord_pkt: None,
             #[cfg(test)]
@@ -113,28 +109,30 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     //     包到来，但暂时未识别：先new task
     //     然后task run（push 包）
     //     几个包过后已经识别，可以确认parser，这时：new_parser, task_set_parser，task_set_c2s_callback
-    pub fn new_task(&self) -> Box<Task<P>> {
+    pub fn new_task(&self) -> Box<Task<T, P>> {
         self.new_task_ffi(ptr::null_mut())
     }
 
-    pub(crate) fn new_task_ffi(&self, cb_ctx: *mut c_void) -> Box<Task<P>> {
+    pub(crate) fn new_task_ffi(&self, cb_ctx: *mut c_void) -> Box<Task<T, P>> {
         Box::new(Task::new(cb_ctx))
     }
 
-    // 为已存在的 task 设置 parser
     // 这个方法用于在运行了一些数据包并确定了合适的 parser 类型后调用
-    fn task_set_parser<T: Parser<PacketType = P>>(&self, task: &mut Task<P>, parser: T) {
+    fn task_set_parser<Q>(&self, task: &mut Task<T, P>, parser: Q)
+    where
+        Q: Parser<PacketType = T, PtrType = P>,
+    {
         task.init_parser(parser);
     }
 
-    pub fn set_cb_task_c2s<F>(&self, task: &mut Task<P>, callback: F)
+    pub fn set_cb_task_c2s<F>(&self, task: &mut Task<T, P>, callback: F)
     where
         F: StmCbFn + 'static,
     {
         task.set_cb_c2s(callback);
     }
 
-    pub fn set_cb_task_s2c<F>(&self, task: &mut Task<P>, callback: F)
+    pub fn set_cb_task_s2c<F>(&self, task: &mut Task<T, P>, callback: F)
     where
         F: StmCbFn + 'static,
     {
@@ -143,7 +141,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
 
     pub fn set_cb_ord_pkt<F>(&mut self, callback: F)
     where
-        F: OrdPktCbFn<P> + 'static,
+        F: OrdPktCbFn<T> + 'static,
     {
         self.cb_ord_pkt = Some(Rc::new(RefCell::new(callback)));
     }
@@ -151,7 +149,7 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     #[cfg(test)]
     pub fn set_cb_raw_pkt<F>(&mut self, callback: F)
     where
-        F: RawPktCbFn<P> + 'static,
+        F: RawPktCbFn<T> + 'static,
     {
         self.cb_raw_pkt = Some(Rc::new(RefCell::new(callback)));
     }
@@ -221,58 +219,58 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     // None - 表示解析器还在pending状态或没有parser
     // Some(Ok(())) - 表示解析成功完成
     // Some(Err(())) - 表示解析遇到错误
-    pub fn run_task(&mut self, task: &mut Task<P>, pkt: P) -> Option<Result<(), ()>> {
+    pub fn run_task(&mut self, task: &mut Task<T, P>, pkt: T) -> Option<Result<(), ()>> {
         if !task.parser_inited && pkt.l7_proto() != L7Proto::Unknown {
             match pkt.l7_proto() {
                 L7Proto::OrdPacket => {
-                    let mut parser = OrdPacketParser::<P>::new();
+                    let mut parser = OrdPacketParser::<T, P>::new();
                     parser.cb_ord_pkt = self.cb_ord_pkt.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::RawPacket => {
-                    let mut parser = RawPacketParser::<P>::new();
+                    let mut parser = RawPacketParser::<T, P>::new();
                     parser.cb_raw_pkt = self.cb_raw_pkt.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamNext => {
-                    let mut parser = StreamNextParser::<P>::new();
+                    let mut parser = StreamNextParser::<T, P>::new();
                     parser.cb_next_byte = self.cb_stream_next_byte.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamRead => {
-                    let mut parser = StreamReadParser::<P>::new();
+                    let mut parser = StreamReadParser::<T, P>::new();
                     parser.cb_read = self.cb_stream_read.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamReadline => {
-                    let mut parser = StreamReadlineParser::<P>::new();
+                    let mut parser = StreamReadlineParser::<T, P>::new();
                     parser.cb_readline = self.cb_stream_readline.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamReadline2 => {
-                    let mut parser = StreamReadline2Parser::<P>::new();
+                    let mut parser = StreamReadline2Parser::<T, P>::new();
                     parser.cb_readline = self.cb_stream_readline2.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamReadn => {
-                    let mut parser = StreamReadnParser::<P>::new();
+                    let mut parser = StreamReadnParser::<T, P>::new();
                     parser.cb_readn = self.cb_readn.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamReadn2 => {
-                    let mut parser = StreamReadn2Parser::<P>::new();
+                    let mut parser = StreamReadn2Parser::<T, P>::new();
                     parser.cb_readn = self.cb_readn2.take();
                     self.task_set_parser(task, parser);
                 }
                 L7Proto::Smtp => {
-                    let mut parser = SmtpParser::<P>::new();
+                    let mut parser = SmtpParser::<T, P>::new();
                     parser.cb_pass = self.cb_smtp_pass.take();
                     parser.cb_user = self.cb_smtp_user.take();
                     self.task_set_parser(task, parser);
@@ -282,7 +280,11 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         }
 
         self.stats.packet_count += 1;
-        task.run(pkt)
+        let wrapper = PacketWrapper {
+            ptr: P::new(pkt),
+            _phantom: PhantomData,
+        };
+        task.run(wrapper)
     }
 
     pub fn config(&self) -> &Config {
@@ -290,7 +292,12 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     }
 }
 
-impl<P: Packet + Ord + std::fmt::Debug + 'static> Default for Prolens<P> {
+impl<T, P> Default for Prolens<T, P>
+where
+    T: Packet + Ord + std::fmt::Debug + 'static,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+{
     fn default() -> Self {
         let config = Config::default();
         Self::new(&config)
@@ -306,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_protolens_basic() {
-        let mut protolens = Prolens::<MyPacket>::default();
+        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
         let mut task = protolens.new_task();
 
         let pkt = MyPacket::new(L7Proto::Unknown, 1, false);
@@ -315,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_protolens_multiple_tasks() {
-        let mut protolens = Prolens::<MyPacket>::default();
+        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
 
         let mut task1 = protolens.new_task();
         let mut task2 = protolens.new_task();
@@ -332,7 +339,7 @@ mod tests {
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
 
-        let mut protolens = Prolens::<MyPacket>::default();
+        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
         protolens.set_cb_ord_pkt(move |pkt, _cb_ctx: *mut c_void| {
             vec_clone.borrow_mut().push(pkt.seq());
         });
@@ -349,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_task_set_parser() {
-        let mut protolens = Prolens::<MyPacket>::default();
+        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
         let mut task = protolens.new_task();
 
         // 先运行一些数据包
@@ -359,7 +366,7 @@ mod tests {
         protolens.run_task(&mut task, pkt2);
 
         // pkt2之后识别成功，设置 parser
-        let parser = SmtpParser::<MyPacket>::new();
+        let parser = SmtpParser::<MyPacket, Rc<MyPacket>>::new();
         protolens.task_set_parser(&mut task, parser);
 
         // 继续处理数据包
@@ -369,7 +376,7 @@ mod tests {
 
     #[test]
     fn test_task_raw_conversion() {
-        let mut protolens = Prolens::<MyPacket>::default();
+        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
 
         // 设置 OrdPacket 回调（可选）
         let vec = Rc::new(RefCell::new(Vec::new()));
@@ -411,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_task_raw_conversion_ctx() {
-        let mut protolens = Prolens::<MyPacket>::default();
+        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
 
         let ctx = Rc::new(RefCell::new(std::ptr::null_mut::<c_void>()));
         let ctx_clone = Rc::clone(&ctx);
