@@ -4,7 +4,6 @@ mod heap;
 mod packet;
 mod parser;
 mod pktstrm;
-mod pool;
 mod task;
 #[cfg(test)]
 mod test_utils;
@@ -54,13 +53,11 @@ use crate::stream_readline2::*;
 use crate::stream_readn::*;
 #[cfg(test)]
 use crate::stream_readn2::*;
-use crate::task::TaskInner;
 use config::*;
 use heap::*;
 use packet::*;
 use parser::*;
 use pktstrm::*;
-use pool::*;
 
 pub(crate) struct Stats {
     pub(crate) packet_count: usize,
@@ -81,7 +78,6 @@ impl Default for Stats {
 pub struct Prolens<P> {
     _phantom: PhantomData<P>,
     config: Config,
-    pool: Rc<Pool>,
     stats: Stats,
 
     cb_ord_pkt: Option<CbOrdPkt<P>>,
@@ -106,17 +102,9 @@ pub struct Prolens<P> {
 impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     // 每个线程一个protolens
     pub fn new(config: &Config) -> Self {
-        let pool = Rc::new(Pool::new_with_type(
-            config.pool_type,
-            config.pool_size,
-            Self::objs_size(config),
-        ));
-        pool.init();
-
         Prolens {
             _phantom: PhantomData,
             config: config.clone(),
-            pool,
             stats: Stats::new(),
 
             cb_ord_pkt: None,
@@ -143,40 +131,32 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     //     包到来，但暂时未识别：先new task
     //     然后task run（push 包）
     //     几个包过后已经识别，可以确认parser，这时：new_parser, task_set_parser，task_set_c2s_callback
-    pub fn new_task(&self) -> Task<P> {
+    pub fn new_task(&self) -> Box<Task<P>> {
         self.new_task_inner(ptr::null_mut())
     }
 
-    pub(crate) fn new_task_inner(&self, cb_ctx: *mut c_void) -> Task<P> {
-        Task::new(self.pool.alloc(|| TaskInner::new(&self.pool, cb_ctx)))
-    }
-
-    fn new_parser<T: Parser<PacketType = P>>(&self) -> PoolBox<T> {
-        self.pool.alloc(|| {
-            let mut p = T::new();
-            p.set_pool(self.pool.clone());
-            p
-        })
+    pub(crate) fn new_task_inner(&self, cb_ctx: *mut c_void) -> Box<Task<P>> {
+        Box::new(Task::new(cb_ctx))
     }
 
     // 为已存在的 task 设置 parser
     // 这个方法用于在运行了一些数据包并确定了合适的 parser 类型后调用
-    fn task_set_parser<T: Parser<PacketType = P>>(&self, task: &mut Task<P>, parser: PoolBox<T>) {
-        task.as_inner_mut().init_parser(parser);
+    fn task_set_parser<T: Parser<PacketType = P>>(&self, task: &mut Task<P>, parser: T) {
+        task.init_parser(parser);
     }
 
     pub fn set_cb_task_c2s<F>(&self, task: &mut Task<P>, callback: F)
     where
         F: StmCbFn + 'static,
     {
-        task.as_inner_mut().set_cb_c2s(callback);
+        task.set_cb_c2s(callback);
     }
 
     pub fn set_cb_task_s2c<F>(&self, task: &mut Task<P>, callback: F)
     where
         F: StmCbFn + 'static,
     {
-        task.as_inner_mut().set_cb_s2c(callback);
+        task.set_cb_s2c(callback);
     }
 
     pub fn set_cb_ord_pkt<F>(&mut self, callback: F)
@@ -260,57 +240,57 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     // Some(Ok(())) - 表示解析成功完成
     // Some(Err(())) - 表示解析遇到错误
     pub fn run_task(&mut self, task: &mut Task<P>, pkt: P) -> Option<Result<(), ()>> {
-        if !task.as_inner_mut().parser_inited && pkt.l7_proto() != L7Proto::Unknown {
+        if !task.parser_inited && pkt.l7_proto() != L7Proto::Unknown {
             match pkt.l7_proto() {
                 L7Proto::OrdPacket => {
-                    let mut parser = self.new_parser::<OrdPacketParser<P>>();
+                    let mut parser = OrdPacketParser::<P>::new();
                     parser.cb_ord_pkt = self.cb_ord_pkt.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::RawPacket => {
-                    let mut parser = self.new_parser::<RawPacketParser<P>>();
+                    let mut parser = RawPacketParser::<P>::new();
                     parser.cb_raw_pkt = self.cb_raw_pkt.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamNext => {
-                    let mut parser = self.new_parser::<StreamNextParser<P>>();
+                    let mut parser = StreamNextParser::<P>::new();
                     parser.cb_next_byte = self.cb_stream_next_byte.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamRead => {
-                    let mut parser = self.new_parser::<StreamReadParser<P>>();
+                    let mut parser = StreamReadParser::<P>::new();
                     parser.cb_read = self.cb_stream_read.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamReadline => {
-                    let mut parser = self.new_parser::<StreamReadlineParser<P>>();
+                    let mut parser = StreamReadlineParser::<P>::new();
                     parser.cb_readline = self.cb_stream_readline.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamReadline2 => {
-                    let mut parser = self.new_parser::<StreamReadline2Parser<P>>();
+                    let mut parser = StreamReadline2Parser::<P>::new();
                     parser.cb_readline = self.cb_stream_readline2.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamReadn => {
-                    let mut parser = self.new_parser::<StreamReadnParser<P>>();
+                    let mut parser = StreamReadnParser::<P>::new();
                     parser.cb_readn = self.cb_readn.take();
                     self.task_set_parser(task, parser);
                 }
                 #[cfg(test)]
                 L7Proto::StreamReadn2 => {
-                    let mut parser = self.new_parser::<StreamReadn2Parser<P>>();
+                    let mut parser = StreamReadn2Parser::<P>::new();
                     parser.cb_readn = self.cb_readn2.take();
                     self.task_set_parser(task, parser);
                 }
                 L7Proto::Smtp => {
-                    let mut parser = self.new_parser::<SmtpParser<P>>();
+                    let mut parser = SmtpParser::<P>::new();
                     parser.cb_pass = self.cb_smtp_pass.take();
                     parser.cb_user = self.cb_smtp_user.take();
                     self.task_set_parser(task, parser);
@@ -320,48 +300,11 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
         }
 
         self.stats.packet_count += 1;
-        task.as_inner_mut().run(pkt)
+        task.run(pkt)
     }
 
     pub fn config(&self) -> &Config {
         &self.config
-    }
-
-    fn objs_size(_config: &Config) -> Vec<usize> {
-        let mut res = Vec::new();
-
-        let task_size = std::mem::size_of::<TaskInner<P>>();
-        res.push(task_size);
-        let pktstrm_size = std::mem::size_of::<PktStrm<P>>();
-        res.push(pktstrm_size);
-        let heap_size = Heap::<P, MAX_PKT_BUFF>::array_size();
-        res.push(heap_size);
-        let strm_size = PktStrm::<P>::buff_size();
-        res.push(strm_size);
-        dbg!(task_size, pktstrm_size, heap_size, strm_size);
-
-        let pool = Rc::new(Pool::new(1024, vec![1]));
-
-        get_parser_sizes::<P, OrdPacketParser<P>>(&pool, &mut res);
-        get_parser_sizes::<P, SmtpParser<P>>(&pool, &mut res);
-        #[cfg(test)]
-        get_parser_sizes::<P, RawPacketParser<P>>(&pool, &mut res);
-        #[cfg(test)]
-        get_parser_sizes::<P, StreamNextParser<P>>(&pool, &mut res);
-        #[cfg(test)]
-        get_parser_sizes::<P, StreamReadlineParser<P>>(&pool, &mut res);
-        #[cfg(test)]
-        get_parser_sizes::<P, StreamReadline2Parser<P>>(&pool, &mut res);
-        #[cfg(test)]
-        get_parser_sizes::<P, StreamReadnParser<P>>(&pool, &mut res);
-        #[cfg(test)]
-        get_parser_sizes::<P, StreamReadn2Parser<P>>(&pool, &mut res);
-        #[cfg(test)]
-        get_parser_sizes::<P, StreamReadParser<P>>(&pool, &mut res);
-
-        res.sort_unstable();
-        res.dedup();
-        res
     }
 }
 
@@ -372,30 +315,11 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Default for Prolens<P> {
     }
 }
 
-fn get_parser_sizes<P, T>(pool: &Rc<Pool>, res: &mut Vec<usize>)
-where
-    P: Packet + Ord + 'static,
-    T: Parser<PacketType = P>,
-{
-    let parser_size = std::mem::size_of::<T>();
-    res.push(parser_size);
-
-    let mut parser = T::new();
-    parser.set_pool(pool.clone());
-    let c2s_size = parser.c2s_parser_size();
-    let s2c_size = parser.s2c_parser_size();
-    let bdir_size = parser.bdir_parser_size();
-    res.push(c2s_size);
-    res.push(s2c_size);
-    res.push(bdir_size);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::smtp::SmtpParser;
     use crate::test_utils::MyPacket;
-    use crate::test_utils::{CapPacket, PacketRef};
     use std::cell::RefCell;
 
     #[test]
@@ -405,17 +329,6 @@ mod tests {
 
         let pkt = MyPacket::new(L7Proto::Unknown, 1, false);
         protolens.run_task(&mut task, pkt);
-    }
-
-    #[test]
-    fn test_protolens_config() {
-        let config = Config {
-            pool_type: PoolType::Box,
-            pool_size: 20,
-            max_buf_packet: 32,
-        };
-        let protolens = Prolens::<MyPacket>::new(&config);
-        assert_eq!(protolens.config.pool_size, 20);
     }
 
     #[test]
@@ -453,102 +366,6 @@ mod tests {
     }
 
     #[test]
-    fn test_objs_size() {
-        let config = Config {
-            pool_type: PoolType::Box,
-            pool_size: 20,
-            max_buf_packet: 64,
-        };
-
-        let sizes = Prolens::<MyPacket>::objs_size(&config);
-        println!("Object sizes: {:?}", sizes);
-
-        // 验证返回的大小向量长度
-        // 注意：由于去重，实际长度可能小于原来的预期值
-        assert!(!sizes.is_empty(), "Size vector should not be empty");
-
-        // 确保所有大小都大于0且已排序
-        for i in 1..sizes.len() {
-            assert!(sizes[i] > 0, "Size at index {} should be greater than 0", i);
-            assert!(sizes[i] >= sizes[i - 1], "Sizes should be sorted");
-        }
-    }
-
-    #[test]
-    fn test_objs_size_with_packetref() {
-        let config = Config {
-            pool_type: PoolType::Box,
-            pool_size: 20,
-            max_buf_packet: 64,
-        };
-
-        // 使用PacketRef<MyPacket>来初始化Prolens
-        let sizes = Prolens::<PacketRef<MyPacket>>::objs_size(&config);
-        println!("Object sizes with PacketRef: {:?}", sizes);
-
-        // 验证返回的大小向量长度
-        assert!(!sizes.is_empty(), "Size vector should not be empty");
-
-        // 确保所有大小都大于0且已排序
-        for i in 1..sizes.len() {
-            assert!(sizes[i] > 0, "Size at index {} should be greater than 0", i);
-            assert!(sizes[i] >= sizes[i - 1], "Sizes should be sorted");
-        }
-
-        // 添加一些具体的大小验证
-        // PacketRef 只包含一个 Rc<MyPacket>，大小应该显著小于直接使用 MyPacket
-        let packetref_size = std::mem::size_of::<PacketRef<MyPacket>>();
-        let mypacket_size = std::mem::size_of::<MyPacket>();
-        println!("PacketRef<MyPacket> size: {}", packetref_size);
-        println!("MyPacket size: {}", mypacket_size);
-        assert!(
-            packetref_size < mypacket_size,
-            "PacketRef should be smaller than MyPacket"
-        );
-    }
-
-    #[test]
-    fn test_objs_size_with_cappacket_ref() {
-        let config = Config {
-            pool_type: PoolType::Box,
-            pool_size: 20,
-            max_buf_packet: 64,
-        };
-
-        // 使用PacketRef<CapPacket>来初始化Prolens
-        let sizes = Prolens::<PacketRef<CapPacket>>::objs_size(&config);
-        println!("Object sizes with PacketRef<CapPacket>: {:?}", sizes);
-
-        // 验证返回的大小向量长度
-        assert!(!sizes.is_empty(), "Size vector should not be empty");
-
-        // 确保所有大小都大于0且已排序
-        for i in 1..sizes.len() {
-            assert!(sizes[i] > 0, "Size at index {} should be greater than 0", i);
-            assert!(sizes[i] >= sizes[i - 1], "Sizes should be sorted");
-        }
-
-        // 添加具体的大小验证
-        // PacketRef<CapPacket> 只包含一个 Rc<CapPacket>，大小应该显著小于直接使用 CapPacket
-        let packetref_size = std::mem::size_of::<PacketRef<CapPacket>>();
-        let cappacket_size = std::mem::size_of::<CapPacket>();
-        println!("PacketRef<CapPacket> size: {}", packetref_size);
-        println!("CapPacket size: {}", cappacket_size);
-        assert!(
-            packetref_size < cappacket_size,
-            "PacketRef should be smaller than CapPacket"
-        );
-
-        // CapPacket 包含固定大小的数组和其他字段，大小应该比 MyPacket 大很多
-        let mypacket_size = std::mem::size_of::<MyPacket>();
-        println!("MyPacket size: {}", mypacket_size);
-        assert!(
-            cappacket_size > mypacket_size,
-            "CapPacket should be larger than MyPacket"
-        );
-    }
-
-    #[test]
     fn test_task_set_parser() {
         let mut protolens = Prolens::<MyPacket>::default();
         let mut task = protolens.new_task();
@@ -560,7 +377,7 @@ mod tests {
         protolens.run_task(&mut task, pkt2);
 
         // pkt2之后识别成功，设置 parser
-        let parser = protolens.new_parser::<SmtpParser<MyPacket>>();
+        let parser = SmtpParser::<MyPacket>::new();
         protolens.task_set_parser(&mut task, parser);
 
         // 继续处理数据包
@@ -588,12 +405,11 @@ mod tests {
         protolens.run_task(&mut task, pkt2);
 
         // 转换为原始指针
-        let raw_ptr = task.into_raw();
+        let raw_ptr = Box::into_raw(task);
         assert!(!raw_ptr.is_null(), "Raw pointer should not be null");
 
         // 从原始指针恢复
-        let pool = protolens.pool.clone();
-        let mut recovered_task = unsafe { Task::from_raw(raw_ptr, pool) };
+        let mut recovered_task = unsafe { Box::from_raw(raw_ptr) };
 
         // 继续处理新数据包验证功能正常
         let pkt3 = MyPacket::new(L7Proto::OrdPacket, 3, true);
@@ -635,12 +451,11 @@ mod tests {
         protolens.run_task(&mut task, pkt2);
 
         // 转换为原始指针
-        let raw_ptr = task.into_raw();
+        let raw_ptr = Box::into_raw(task);
         assert!(!raw_ptr.is_null(), "Raw pointer should not be null");
 
         // 从原始指针恢复
-        let pool = protolens.pool.clone();
-        let mut recovered_task = unsafe { Task::from_raw(raw_ptr, pool) };
+        let mut recovered_task = unsafe { Box::from_raw(raw_ptr) };
 
         // 继续处理新数据包验证功能正常
         let pkt3 = MyPacket::new(L7Proto::OrdPacket, 3, true);

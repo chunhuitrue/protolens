@@ -3,8 +3,6 @@ use crate::Parser;
 use crate::ParserFuture;
 use crate::PktDirection;
 use crate::PktStrm;
-use crate::Pool;
-use crate::PoolBox;
 use crate::StmCbFn;
 use core::{
     pin::Pin,
@@ -12,59 +10,13 @@ use core::{
 };
 use std::ffi::c_void;
 use std::fmt;
-use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
 
 pub trait PacketBind: Packet + Ord + std::fmt::Debug + 'static {}
 impl<T: Packet + Ord + std::fmt::Debug + 'static> PacketBind for T {}
 
-// 为了不对用户暴露Poolbox<Task>,屏蔽poolbox
-#[repr(transparent)]
-pub struct Task<P: PacketBind>(PoolBox<TaskInner<P>>);
-
-impl<P: PacketBind> Task<P> {
-    pub(crate) fn new(inner: PoolBox<TaskInner<P>>) -> Self {
-        Self(inner)
-    }
-
-    pub(crate) fn as_inner_mut(&mut self) -> &mut PoolBox<TaskInner<P>> {
-        &mut self.0
-    }
-
-    pub(crate) fn into_raw(self) -> *mut Task<P> {
-        self.0.into_raw() as *mut Task<P>
-    }
-
-    pub(crate) unsafe fn from_raw(ptr: *mut Task<P>, pool: Rc<Pool>) -> Self {
-        unsafe { Self(PoolBox::from_raw(ptr as *mut TaskInner<P>, &pool)) }
-    }
-}
-
-impl<P: PacketBind> fmt::Debug for Task<P> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TaskHandle")
-            .field("inner", &self.0)
-            .finish()
-    }
-}
-
-impl<P: PacketBind> Deref for Task<P> {
-    type Target = TaskInner<P>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<P: PacketBind> DerefMut for Task<P> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-pub struct TaskInner<T: PacketBind> {
-    stream_c2s: PoolBox<PktStrm<T>>,
-    stream_s2c: PoolBox<PktStrm<T>>,
+pub struct Task<T: PacketBind> {
+    stream_c2s: PktStrm<T>,
+    stream_s2c: PktStrm<T>,
     c2s_parser: Option<ParserFuture>,
     s2c_parser: Option<ParserFuture>,
     bdir_parser: Option<ParserFuture>,
@@ -75,14 +27,11 @@ pub struct TaskInner<T: PacketBind> {
     cb_ctx: *mut c_void, // 只在c语言api中使用
 }
 
-impl<T: PacketBind> TaskInner<T> {
-    pub(crate) fn new(pool: &Rc<Pool>, cb_ctx: *mut c_void) -> Self {
-        let stream_c2s = pool.alloc(|| PktStrm::new(pool, cb_ctx));
-        let stream_s2c = pool.alloc(|| PktStrm::new(pool, cb_ctx));
-
-        TaskInner {
-            stream_c2s,
-            stream_s2c,
+impl<T: PacketBind> Task<T> {
+    pub(crate) fn new(cb_ctx: *mut c_void) -> Self {
+        Task {
+            stream_c2s: PktStrm::new(cb_ctx),
+            stream_s2c: PktStrm::new(cb_ctx),
             c2s_parser: None,
             s2c_parser: None,
             bdir_parser: None,
@@ -114,9 +63,9 @@ impl<T: PacketBind> TaskInner<T> {
         }
     }
 
-    pub(crate) fn init_parser<P: Parser<PacketType = T>>(&mut self, parser: PoolBox<P>) {
-        let p_stream_c2s: *const PktStrm<T> = &*self.stream_c2s;
-        let p_stream_s2c: *const PktStrm<T> = &*self.stream_s2c;
+    pub(crate) fn init_parser<P: Parser<PacketType = T>>(&mut self, parser: P) {
+        let p_stream_c2s: *const PktStrm<T> = &self.stream_c2s;
+        let p_stream_s2c: *const PktStrm<T> = &self.stream_s2c;
 
         self.c2s_parser = parser.c2s_parser(p_stream_c2s, self.cb_ctx);
         self.s2c_parser = parser.s2c_parser(p_stream_s2c, self.cb_ctx);
@@ -229,28 +178,9 @@ impl<T: PacketBind> TaskInner<T> {
             None
         }
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn parser_state(&self, dir: PktDirection) -> TaskState {
-        match dir {
-            PktDirection::Client2Server => self.c2s_state,
-            PktDirection::Server2Client => self.s2c_state,
-            PktDirection::BiDirection => self.bdir_state,
-            PktDirection::Unknown => TaskState::Error,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn streeam_len(&self, dir: PktDirection) -> usize {
-        match dir {
-            PktDirection::Client2Server => self.stream_c2s.len(),
-            PktDirection::Server2Client => self.stream_s2c.len(),
-            _ => 0,
-        }
-    }
 }
 
-impl<T: Packet + Ord + std::fmt::Debug + 'static> fmt::Debug for TaskInner<T> {
+impl<T: Packet + Ord + std::fmt::Debug + 'static> fmt::Debug for Task<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Task")
             .field("c2s_stream", &self.stream_c2s)

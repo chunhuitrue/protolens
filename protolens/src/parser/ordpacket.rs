@@ -2,11 +2,8 @@ use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
-use crate::pool::Pool;
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::marker::PhantomData;
-use std::ptr;
 use std::rc::Rc;
 
 pub trait OrdPktCbFn<T>: FnMut(T, *mut c_void) {}
@@ -14,18 +11,12 @@ impl<F, T> OrdPktCbFn<T> for F where F: FnMut(T, *mut c_void) {}
 pub(crate) type CbOrdPkt<T> = Rc<RefCell<dyn OrdPktCbFn<T> + 'static>>;
 
 pub struct OrdPacketParser<T: Packet + Ord + 'static> {
-    _phantom: PhantomData<T>,
-    pool: Option<Rc<Pool>>,
     pub(crate) cb_ord_pkt: Option<CbOrdPkt<T>>,
 }
 
 impl<T: Packet + Ord + 'static> OrdPacketParser<T> {
-    pub fn new() -> Self {
-        Self {
-            _phantom: PhantomData,
-            cb_ord_pkt: None,
-            pool: None,
-        }
+    fn new() -> Self {
+        Self { cb_ord_pkt: None }
     }
 
     async fn c2s_parser_inner(
@@ -63,23 +54,8 @@ impl<T: Packet + Ord + 'static> Parser for OrdPacketParser<T> {
         Self::new()
     }
 
-    fn pool(&self) -> &Rc<Pool> {
-        self.pool.as_ref().expect("Pool not set")
-    }
-
-    fn set_pool(&mut self, pool: Rc<Pool>) {
-        self.pool = Some(pool);
-    }
-
-    fn c2s_parser_size(&self) -> usize {
-        let stream_ptr = std::ptr::null();
-
-        let future = Self::c2s_parser_inner(None, stream_ptr, ptr::null_mut());
-        std::mem::size_of_val(&future)
-    }
-
     fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
-        Some(self.pool().alloc_future(Self::c2s_parser_inner(
+        Some(Box::pin(Self::c2s_parser_inner(
             self.cb_ord_pkt.clone(),
             stream,
             cb_ctx,
@@ -254,36 +230,5 @@ mod tests {
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第二个数据包
         ];
         assert_eq!(*vec.borrow(), expected);
-    }
-
-    #[test]
-    fn test_ordpacket_future_sizes() {
-        let pool = Rc::new(Pool::new(4096, vec![4]));
-        let mut parser = OrdPacketParser::<CapPacket>::new();
-        parser.set_pool(pool);
-
-        println!(
-            "Size of stream pointer: {} bytes",
-            std::mem::size_of::<*const PktStrm<CapPacket>>()
-        );
-        println!(
-            "Size of callback: {} bytes",
-            std::mem::size_of::<Option<CbOrdPkt<CapPacket>>>()
-        );
-
-        let c2s_size = parser.c2s_parser_size();
-        let s2c_size = parser.s2c_parser_size();
-        let bdir_size = parser.bdir_parser_size();
-        println!("c2s size: {} bytes", c2s_size);
-        println!("s2c size: {} bytes", s2c_size);
-        println!("bdir size: {} bytes", bdir_size);
-
-        let min_size = std::mem::size_of::<*const PktStrm<CapPacket>>()
-            + std::mem::size_of::<Option<CbOrdPkt<CapPacket>>>();
-
-        assert!(
-            c2s_size >= min_size,
-            "Future size should be at least as large as its components"
-        );
     }
 }

@@ -157,7 +157,7 @@ pub extern "C" fn protolens_task_new(
     let prolens = unsafe { Box::from_raw(prolens) };
     let task = prolens.0.new_task_inner(cb_ctx);
     std::mem::forget(prolens);
-    task.into_raw()
+    Box::into_raw(task)
 }
 
 #[unsafe(no_mangle)]
@@ -168,7 +168,7 @@ pub extern "C" fn protolens_task_free(prolens: *mut FfiProlens, task: *mut Task<
 
     unsafe {
         let prolens = Box::from_raw(prolens);
-        Task::from_raw(task, prolens.0.pool.clone());
+        let _ = Box::from_raw(task);
         std::mem::forget(prolens);
     }
 }
@@ -181,7 +181,7 @@ pub extern "C" fn protolens_task_dbinfo(prolens: *mut FfiProlens, task: *mut Tas
 
     unsafe {
         let prolens = Box::from_raw(prolens);
-        let task = Task::from_raw(task, prolens.0.pool.clone());
+        let task = Box::from_raw(task);
         task.debug_info();
         std::mem::forget(prolens);
         std::mem::forget(task);
@@ -208,7 +208,7 @@ pub extern "C" fn protolens_task_run(
     }
 
     let mut prolens = unsafe { Box::from_raw(prolens) };
-    let mut task = unsafe { Task::from_raw(task, prolens.0.pool.clone()) };
+    let mut task = unsafe { Box::from_raw(task) };
 
     let pkt = FfiPacket {
         packet_ptr: pkt_ptr,
@@ -237,12 +237,12 @@ pub extern "C" fn prolens_set_cb_task_c2s(
     }
 
     let prolens = unsafe { Box::from_raw(prolens) };
-    let mut task = unsafe { Task::from_raw(task, prolens.0.pool.clone()) };
+    let mut task = unsafe { Box::from_raw(task) };
 
     let wrapper = move |data: &[u8], seq: u32, ctx: *const c_void| {
         callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
     };
-    task.as_inner_mut().set_cb_c2s(wrapper);
+    task.set_cb_c2s(wrapper);
     std::mem::forget(prolens);
     std::mem::forget(task);
 }
@@ -258,12 +258,12 @@ pub extern "C" fn prolens_set_cb_task_s2c(
     }
 
     let prolens = unsafe { Box::from_raw(prolens) };
-    let mut task = unsafe { Task::from_raw(task, prolens.0.pool.clone()) };
+    let mut task = unsafe { Box::from_raw(task) };
 
     let wrapper = move |data: &[u8], seq: u32, ctx: *const c_void| {
         callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
     };
-    task.as_inner_mut().set_cb_s2c(wrapper);
+    task.set_cb_s2c(wrapper);
     std::mem::forget(prolens);
     std::mem::forget(task);
 }

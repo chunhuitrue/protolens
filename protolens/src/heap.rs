@@ -1,46 +1,43 @@
 #![allow(unused)]
-
-use crate::pool::{Pool, PoolBox};
 use std::cmp::Ordering;
 use std::mem::MaybeUninit;
-use std::rc::Rc;
 
 /// 基于定长数组的二叉堆实现
 #[derive(Debug)]
-pub struct Heap<T, const N: usize> {
-    data: PoolBox<[MaybeUninit<T>; N]>,
+pub(crate) struct Heap<T, const N: usize> {
+    data: Box<[MaybeUninit<T>; N]>,
     len: usize,
 }
 
 impl<T: Ord, const N: usize> Heap<T, N> {
-    pub fn new_uninit_in_pool(pool: &Rc<Pool>) -> Self {
-        let data = pool.alloc(|| unsafe {
+    pub(crate) fn new() -> Self {
+        let data = Box::new(unsafe {
             std::mem::MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init()
         });
         Heap { data, len: 0 }
     }
 
-    pub fn array_size() -> usize {
+    pub(crate) fn array_size() -> usize {
         std::mem::size_of::<[MaybeUninit<T>; N]>()
     }
 
-    pub fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> usize {
         N
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.len
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.len = 0;
     }
 
-    pub fn push(&mut self, item: T) -> bool {
+    pub(crate) fn push(&mut self, item: T) -> bool {
         if self.len >= N {
             return false;
         }
@@ -50,7 +47,7 @@ impl<T: Ord, const N: usize> Heap<T, N> {
         true
     }
 
-    pub fn peek(&self) -> Option<&T> {
+    pub(crate) fn peek(&self) -> Option<&T> {
         if self.is_empty() {
             None
         } else {
@@ -58,7 +55,7 @@ impl<T: Ord, const N: usize> Heap<T, N> {
         }
     }
 
-    pub fn pop(&mut self) -> Option<T> {
+    pub(crate) fn pop(&mut self) -> Option<T> {
         if self.is_empty() {
             return None;
         }
@@ -134,16 +131,13 @@ mod tests {
 
     #[test]
     fn test_memory_size() {
-        let size = Heap::<PacketWrapper<MyPacket>, 32>::array_size();
-        let pool = Rc::new(Pool::new(4096, vec![size]));
-        let heap = Heap::<PacketWrapper<MyPacket>, 32>::new_uninit_in_pool(&pool);
+        let heap = Heap::<PacketWrapper<MyPacket>, 32>::new();
         assert_eq!(heap.capacity(), 32);
     }
 
     #[test]
     fn test_push_pop() {
-        let pool = Rc::new(Pool::new(4096, vec![10]));
-        let mut heap = Heap::<_, 5>::new_uninit_in_pool(&pool);
+        let mut heap = Heap::<_, 5>::new();
 
         assert!(heap.push(3));
         assert!(heap.push(1));
@@ -163,8 +157,7 @@ mod tests {
 
     #[test]
     fn test_packet_ordering() {
-        let pool = Rc::new(Pool::new(4096, vec![10]));
-        let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
+        let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new();
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -208,8 +201,7 @@ mod tests {
 
     #[test]
     fn test_packet_ordering_with_syn_fin() {
-        let pool = Rc::new(Pool::new(4096, vec![10]));
-        let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new_uninit_in_pool(&pool);
+        let mut heap = Heap::<PacketWrapper<MyPacket>, 5>::new();
 
         let syn_packet = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -262,8 +254,7 @@ mod tests {
 
     #[test]
     fn test_heap_capacity_overflow() {
-        let pool = Rc::new(Pool::new(4096, vec![10]));
-        let mut heap = Heap::<_, 2>::new_uninit_in_pool(&pool);
+        let mut heap = Heap::<_, 2>::new();
 
         assert!(heap.push(1)); // ok, returns true
         assert!(heap.push(2)); // ok, returns true

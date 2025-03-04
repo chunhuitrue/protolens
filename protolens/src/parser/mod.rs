@@ -15,16 +15,13 @@ pub mod stream_readn;
 #[cfg(test)]
 pub mod stream_readn2;
 
-use crate::pool::Pool;
-use crate::pool::PoolBox;
 use crate::Packet;
 use crate::PktStrm;
 use futures::Future;
 use std::ffi::c_void;
 use std::pin::Pin;
-use std::rc::Rc;
 
-pub(crate) type ParserFuture = Pin<PoolBox<dyn Future<Output = Result<(), ()>>>>;
+pub(crate) type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 
 pub(crate) trait Parser {
     type PacketType: Packet + Ord + 'static;
@@ -32,22 +29,6 @@ pub(crate) trait Parser {
     fn new() -> Self
     where
         Self: Sized;
-
-    fn pool(&self) -> &Rc<Pool>;
-
-    fn set_pool(&mut self, pool: Rc<Pool>);
-
-    fn c2s_parser_size(&self) -> usize {
-        0
-    }
-
-    fn s2c_parser_size(&self) -> usize {
-        0
-    }
-
-    fn bdir_parser_size(&self) -> usize {
-        0
-    }
 
     fn c2s_parser(
         &self,

@@ -2,11 +2,9 @@ use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
-use crate::pool::Pool;
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::ptr;
 use std::rc::Rc;
 
 pub trait Readn2CbFn: FnMut(&[u8], u32, *mut c_void) {}
@@ -15,7 +13,6 @@ pub(crate) type CbReadn2 = Rc<RefCell<dyn Readn2CbFn + 'static>>;
 
 pub struct StreamReadn2Parser<T: Packet + Ord + 'static> {
     _phantom: PhantomData<T>,
-    pool: Option<Rc<Pool>>,
     pub(crate) cb_readn: Option<CbReadn2>,
 }
 
@@ -23,7 +20,6 @@ impl<T: Packet + Ord + 'static> StreamReadn2Parser<T> {
     pub(crate) fn new() -> Self {
         Self {
             _phantom: PhantomData,
-            pool: None,
             cb_readn: None,
         }
     }
@@ -66,27 +62,12 @@ impl<T: Packet + Ord + 'static> Parser for StreamReadn2Parser<T> {
         Self::new()
     }
 
-    fn pool(&self) -> &Rc<Pool> {
-        self.pool.as_ref().expect("Pool not set")
-    }
-
-    fn set_pool(&mut self, pool: Rc<Pool>) {
-        self.pool = Some(pool);
-    }
-
-    fn c2s_parser_size(&self) -> usize {
-        let stream_ptr = std::ptr::null();
-
-        let future = Self::c2s_parser_inner(None, 0, stream_ptr, ptr::null_mut());
-        std::mem::size_of_val(&future)
-    }
-
     fn c2s_parser(
         &self,
         stream: *const PktStrm<Self::PacketType>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        Some(self.pool().alloc_future(Self::c2s_parser_inner(
+        Some(Box::pin(Self::c2s_parser_inner(
             self.cb_readn.clone(),
             10,
             stream,

@@ -2,10 +2,10 @@
 
 use crate::capture::CapPacket;
 use crate::capture::PktHeader;
-use crate::recognize::{recognize_pkt, Direction, ProtoID};
+use crate::recognize::{Direction, ProtoID, recognize_pkt};
 use etherparse::{IpHeader, PacketHeaders, TransportHeader};
 use protolens::Prolens;
-use protolens::SmtpParser;
+// use protolens::SmtpParser;
 use protolens::Task;
 use std::cmp::Ordering;
 use std::ffi::c_void;
@@ -223,7 +223,7 @@ pub struct FlowNode {
     client_stat: StreamState,
     server_stat: StreamState,
 
-    parser_task: Option<Task<CapPacket>>,
+    parser_task: Option<Box<Task<CapPacket>>>,
     // 解码出来的元数据
     user: Rc<RefCell<Vec<u8>>>,
     pass: Rc<RefCell<Vec<u8>>>,
