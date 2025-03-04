@@ -4,6 +4,7 @@ mod heap;
 mod packet;
 mod parser;
 mod pktstrm;
+mod stats;
 mod task;
 #[cfg(test)]
 mod test_utils;
@@ -33,14 +34,19 @@ pub use crate::stream_readn2::StreamReadn2Parser;
 
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
 
+use crate::config::*;
+use crate::heap::*;
 use crate::ordpacket::*;
+use crate::packet::*;
+use crate::parser::*;
+use crate::pktstrm::*;
 #[cfg(test)]
 use crate::rawpacket::*;
 use crate::smtp::*;
+use crate::stats::*;
 #[cfg(test)]
 use crate::stream_next::*;
 #[cfg(test)]
@@ -53,30 +59,8 @@ use crate::stream_readline2::*;
 use crate::stream_readn::*;
 #[cfg(test)]
 use crate::stream_readn2::*;
-use config::*;
-use heap::*;
-use packet::*;
-use parser::*;
-use pktstrm::*;
-
-pub(crate) struct Stats {
-    pub(crate) packet_count: usize,
-}
-
-impl Stats {
-    pub(crate) fn new() -> Self {
-        Stats { packet_count: 0 }
-    }
-}
-
-impl Default for Stats {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 pub struct Prolens<P> {
-    _phantom: PhantomData<P>,
     config: Config,
     stats: Stats,
 
@@ -100,10 +84,8 @@ pub struct Prolens<P> {
 }
 
 impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
-    // 每个线程一个protolens
     pub fn new(config: &Config) -> Self {
         Prolens {
-            _phantom: PhantomData,
             config: config.clone(),
             stats: Stats::new(),
 
@@ -132,10 +114,10 @@ impl<P: Packet + Ord + std::fmt::Debug + 'static> Prolens<P> {
     //     然后task run（push 包）
     //     几个包过后已经识别，可以确认parser，这时：new_parser, task_set_parser，task_set_c2s_callback
     pub fn new_task(&self) -> Box<Task<P>> {
-        self.new_task_inner(ptr::null_mut())
+        self.new_task_ffi(ptr::null_mut())
     }
 
-    pub(crate) fn new_task_inner(&self, cb_ctx: *mut c_void) -> Box<Task<P>> {
+    pub(crate) fn new_task_ffi(&self, cb_ctx: *mut c_void) -> Box<Task<P>> {
         Box::new(Task::new(cb_ctx))
     }
 
@@ -442,7 +424,7 @@ mod tests {
             vec_clone.borrow_mut().push(pkt.seq());
         });
 
-        let mut task = protolens.new_task_inner(42 as *mut c_void);
+        let mut task = protolens.new_task_ffi(42 as *mut c_void);
 
         // 使用 OrdPacket 协议类型
         let pkt1 = MyPacket::new(L7Proto::OrdPacket, 1, false);

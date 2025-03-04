@@ -2,8 +2,8 @@ use capture::{CapPacket, Capture};
 use flow::{Flow, FlowNode};
 use protolens::Prolens;
 use std::env;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod capture;

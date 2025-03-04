@@ -155,7 +155,7 @@ pub extern "C" fn protolens_task_new(
     }
 
     let prolens = unsafe { Box::from_raw(prolens) };
-    let task = prolens.0.new_task_inner(cb_ctx);
+    let task = prolens.0.new_task_ffi(cb_ctx);
     std::mem::forget(prolens);
     Box::into_raw(task)
 }
