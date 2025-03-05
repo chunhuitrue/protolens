@@ -1,12 +1,9 @@
-use crate::Packet;
 use crate::PacketWrapper;
 use crate::Parser;
 use crate::ParserFuture;
-use crate::PktDirection;
 use crate::PktStrm;
-use crate::PtrNew;
-use crate::PtrWrapper;
 use crate::StmCbFn;
+use crate::packet::*;
 use core::{
     pin::Pin,
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
@@ -14,13 +11,10 @@ use core::{
 use std::ffi::c_void;
 use std::fmt;
 
-pub trait PacketBind: Packet + Ord + std::fmt::Debug + 'static {}
-impl<T: Packet + Ord + std::fmt::Debug + 'static> PacketBind for T {}
-
 pub struct Task<T, P>
 where
     T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    P: PtrWrapper<T> + PtrNew<T>,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
     stream_c2s: PktStrm<T, P>,
@@ -32,13 +26,13 @@ where
     c2s_state: TaskState,
     s2c_state: TaskState,
     bdir_state: TaskState,
-    cb_ctx: *mut c_void, // 只在c语言api中使用
+    cb_ctx: *mut c_void,
 }
 
 impl<T, P> Task<T, P>
 where
     T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    P: PtrWrapper<T> + PtrNew<T>,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
     pub(crate) fn new(cb_ctx: *mut c_void) -> Self {

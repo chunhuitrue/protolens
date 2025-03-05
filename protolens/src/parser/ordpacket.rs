@@ -1,4 +1,3 @@
-use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
@@ -14,22 +13,22 @@ pub(crate) type CbOrdPkt<T> = Rc<RefCell<dyn OrdPktCbFn<T> + 'static>>;
 
 pub(crate) struct OrdPacketParser<T, P>
 where
-    T: Packet + Ord + 'static,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
 {
-    _phantom: PhantomData<P>,
     pub(crate) cb_ord_pkt: Option<CbOrdPkt<T>>,
+    _phantom: PhantomData<P>,
 }
 
 impl<T, P> OrdPacketParser<T, P>
 where
-    T: Packet + Ord + 'static,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
 {
     fn new() -> Self {
         Self {
-            _phantom: PhantomData,
             cb_ord_pkt: None,
+            _phantom: PhantomData,
         }
     }
 
@@ -57,8 +56,8 @@ where
 
 impl<T, P> Default for OrdPacketParser<T, P>
 where
-    T: Packet + Ord + 'static,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
 {
     fn default() -> Self {
         Self::new()
@@ -67,7 +66,7 @@ where
 
 impl<T, P> Parser for OrdPacketParser<T, P>
 where
-    T: Packet + Ord + 'static,
+    T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T> + 'static,
 {
     type PacketType = T;

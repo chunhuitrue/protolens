@@ -1,4 +1,3 @@
-use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
@@ -15,24 +14,24 @@ pub(crate) type CbStreamRead = Rc<RefCell<dyn StreamReadCbFn + 'static>>;
 
 pub struct StreamReadParser<T, P>
 where
-    T: Packet + Ord + 'static,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
 {
+    pub(crate) cb_read: Option<CbStreamRead>,
     _phantom_t: PhantomData<T>,
     _phantom_p: PhantomData<P>,
-    pub(crate) cb_read: Option<CbStreamRead>,
 }
 
 impl<T, P> StreamReadParser<T, P>
 where
-    T: Packet + Ord + 'static,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
 {
     pub fn new() -> Self {
         Self {
+            cb_read: None,
             _phantom_t: PhantomData,
             _phantom_p: PhantomData,
-            cb_read: None,
         }
     }
 
@@ -72,8 +71,8 @@ where
 
 impl<T, P> Default for StreamReadParser<T, P>
 where
-    T: Packet + Ord + 'static,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
 {
     fn default() -> Self {
         Self::new()
@@ -82,7 +81,7 @@ where
 
 impl<T, P> Parser for StreamReadParser<T, P>
 where
-    T: Packet + Ord + 'static,
+    T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T> + 'static,
 {
     type PacketType = T;

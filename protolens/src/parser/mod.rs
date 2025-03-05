@@ -15,10 +15,10 @@ pub mod stream_readn;
 #[cfg(test)]
 pub mod stream_readn2;
 
+use crate::PacketBind;
+use crate::PktStrm;
 use crate::PtrNew;
 use crate::PtrWrapper;
-use crate::Packet;
-use crate::PktStrm;
 use futures::Future;
 use std::ffi::c_void;
 use std::pin::Pin;
@@ -26,7 +26,7 @@ use std::pin::Pin;
 pub(crate) type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 
 pub(crate) trait Parser {
-    type PacketType: Packet + Ord + 'static;
+    type PacketType: PacketBind;
     type PtrType: PtrWrapper<Self::PacketType> + PtrNew<Self::PacketType>;
 
     fn new() -> Self

@@ -1,4 +1,3 @@
-use crate::Packet;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
@@ -15,22 +14,22 @@ pub(crate) type CbRawPkt<T> = Rc<RefCell<dyn RawPktCbFn<T> + 'static>>;
 
 pub(crate) struct RawPacketParser<T, P>
 where
-    T: Packet + Ord + 'static,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
 {
-    _phantom: PhantomData<P>,
     pub(crate) cb_raw_pkt: Option<CbRawPkt<T>>,
+    _phantom: PhantomData<P>,
 }
 
 impl<T, P> RawPacketParser<T, P>
 where
-    T: Packet + Ord + 'static,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
 {
     pub fn new() -> Self {
         Self {
-            _phantom: PhantomData,
             cb_raw_pkt: None,
+            _phantom: PhantomData,
         }
     }
 
@@ -58,7 +57,7 @@ where
 
 impl<T, P> Default for RawPacketParser<T, P>
 where
-    T: Packet + Ord + 'static,
+    T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T> + 'static,
 {
     fn default() -> Self {
@@ -68,7 +67,7 @@ where
 
 impl<T, P> Parser for RawPacketParser<T, P>
 where
-    T: Packet + Ord + 'static,
+    T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T> + 'static,
 {
     type PacketType = T;

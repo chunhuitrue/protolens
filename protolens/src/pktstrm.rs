@@ -1,12 +1,7 @@
 #![allow(unused)]
-
 use crate::Heap;
-use crate::Packet;
-use crate::PacketWrapper;
-use crate::PtrNew;
-use crate::PtrWrapper;
-use crate::TransProto;
 use crate::config::*;
+use crate::packet::*;
 use futures::Future;
 use futures::future;
 use futures::future::poll_fn;
@@ -30,7 +25,7 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
-    pkt_buff: Heap<PacketWrapper<T, P>, { MAX_PKT_BUFF }>,
+    pkt_buff: Heap<PacketWrapper<T, P>, MAX_PKT_BUFF>,
     read_buff: Box<[u8; MAX_READ_BUFF]>,
     read_buff_len: usize,
     next_seq: u32,

@@ -60,9 +60,11 @@ pub trait Packet: Clone {
     fn payload(&self) -> &[u8];
 }
 
+pub trait PacketBind: Packet + Ord + Debug + 'static {}
+impl<T: Packet + Ord + Debug + 'static> PacketBind for T {}
+
 // 表示可以用作包装器的智能指针
 pub trait PtrWrapper<T: ?Sized>: Clone + Deref<Target = T> {}
-
 impl<T: ?Sized> PtrWrapper<T> for Rc<T> {}
 impl<T: ?Sized> PtrWrapper<T> for Arc<T> {}
 

@@ -20,6 +20,7 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::config::*;
 use crate::heap::*;
@@ -44,15 +45,18 @@ use crate::stream_readn::*;
 #[cfg(test)]
 use crate::stream_readn2::*;
 
+pub type ProlensRc<T> = Prolens<T, Rc<T>>;
+pub type ProlensArc<T> = Prolens<T, Arc<T>>;
+
 pub struct Prolens<T, P>
 where
-    T: Packet + Ord + std::fmt::Debug + 'static,
+    T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
     config: Config,
     stats: Stats,
-    _phantom: PhantomData<P>, // 添加这个字段来使用 P
+    _phantom: PhantomData<P>,
 
     cb_ord_pkt: Option<CbOrdPkt<T>>,
     #[cfg(test)]
@@ -75,7 +79,7 @@ where
 
 impl<T, P> Prolens<T, P>
 where
-    T: Packet + Ord + std::fmt::Debug + 'static,
+    T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T> + 'static,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
@@ -294,7 +298,7 @@ where
 
 impl<T, P> Default for Prolens<T, P>
 where
-    T: Packet + Ord + std::fmt::Debug + 'static,
+    T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T> + 'static,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
@@ -313,7 +317,8 @@ mod tests {
 
     #[test]
     fn test_protolens_basic() {
-        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
+        let mut protolens = ProlensRc::<MyPacket>::default();
+
         let mut task = protolens.new_task();
 
         let pkt = MyPacket::new(L7Proto::Unknown, 1, false);
@@ -322,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_protolens_multiple_tasks() {
-        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
+        let mut protolens = ProlensRc::<MyPacket>::default();
 
         let mut task1 = protolens.new_task();
         let mut task2 = protolens.new_task();
@@ -339,7 +344,7 @@ mod tests {
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
 
-        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
+        let mut protolens = ProlensRc::<MyPacket>::default();
         protolens.set_cb_ord_pkt(move |pkt, _cb_ctx: *mut c_void| {
             vec_clone.borrow_mut().push(pkt.seq());
         });
@@ -356,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_task_set_parser() {
-        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
+        let mut protolens = ProlensRc::<MyPacket>::default();
         let mut task = protolens.new_task();
 
         // 先运行一些数据包
@@ -376,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_task_raw_conversion() {
-        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
+        let mut protolens = ProlensRc::<MyPacket>::default();
 
         // 设置 OrdPacket 回调（可选）
         let vec = Rc::new(RefCell::new(Vec::new()));
