@@ -10,21 +10,11 @@ pub const MAX_PKT_BUFF: usize = if cfg!(feature = "pkt_buff_1024") {
 
 pub const MAX_READ_BUFF: usize = 512;
 
-#[derive(Clone, Debug)]
-pub struct Config {
-    pub max_buf_packet: usize, /* 当前没用。重组过程中，最多缓存的packet */
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config { max_buf_packet: 32 }
-    }
-}
+#[derive(Clone, Debug, Default)]
+pub struct Config {}
 
 impl Config {
-    pub fn new(heap_capacity: usize) -> Self {
-        Config {
-            max_buf_packet: heap_capacity,
-        }
+    pub fn new() -> Self {
+        Config {}
     }
 }
