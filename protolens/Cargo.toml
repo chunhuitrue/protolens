@@ -17,3 +17,10 @@ nom             = "7.1.3"
 [dev-dependencies]
 pcap       = "2.2.0"
 etherparse = "0.13.0"
+
+[features]
+default = ["pkt_buff_128"] 
+pkt_buff_128 = []
+pkt_buff_256 = []
+pkt_buff_512 = []
+pkt_buff_1024 = []
