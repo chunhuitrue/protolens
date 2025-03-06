@@ -318,6 +318,22 @@ impl FlowNode {
 
         if let Some(ref mut task) = self.parser_task {
             prolens.run_task(task, pkt);
+
+            let user_data = self.user.as_ref().borrow();
+            if !user_data.is_empty() {
+                println!(
+                    "self node hold user: {}",
+                    String::from_utf8_lossy(&user_data)
+                );
+            }
+
+            let pass_data = self.pass.as_ref().borrow();
+            if !pass_data.is_empty() {
+                println!(
+                    "self node hold pass: {}",
+                    String::from_utf8_lossy(&pass_data)
+                );
+            }
         }
     }
 
@@ -329,10 +345,10 @@ impl FlowNode {
         // 设置用户名回调
         let mut user_data = self.user.clone();
         let user_callback = move |user: &[u8], seq: u32, _cb_ctx: *mut c_void| {
-            let mut user_guard = user_data.borrow_mut();
+            let mut user_guard = user_data.borrow_mut(); // 捕获flownode上下文
             *user_guard = user.to_vec();
             println!(
-                "get user: {}, seq: {}",
+                "in callback: get user: {}, seq: {}",
                 std::str::from_utf8(user).unwrap(),
                 seq
             );
@@ -341,10 +357,10 @@ impl FlowNode {
         // 设置密码回调
         let mut pass_data = self.pass.clone();
         let pass_callback = move |pass: &[u8], seq: u32, _cb_ctx: *mut c_void| {
-            let mut pass_guard = pass_data.borrow_mut();
+            let mut pass_guard = pass_data.borrow_mut(); // 捕获flownode上下文
             *pass_guard = pass.to_vec();
             println!(
-                "get pass: {}, seq: {}",
+                "in callback: get pass: {}, seq: {}",
                 std::str::from_utf8(pass).unwrap(),
                 seq
             );
