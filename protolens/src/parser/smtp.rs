@@ -381,7 +381,7 @@ mod tests {
     fn test_smtp_command_sequence() {
         // 构造错误的SMTP命令序列包
         let seq1 = 1;
-        let wrong_command = *b"HELO tes\r\n"; // 使用数组而不是Vec
+        let wrong_command = *b"HELO tes\r\n";
         let pkt1 = build_pkt_line(seq1, wrong_command);
         let _ = pkt1.decode();
         pkt1.set_l7_proto(L7Proto::Smtp);

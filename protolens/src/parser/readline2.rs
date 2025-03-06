@@ -258,4 +258,49 @@ mod tests {
         assert_eq!(*lines.borrow(), line_expected);
         assert_eq!(*seqs.borrow(), seq_expected);
     }
+
+    // 验证多个同类型的task执行。当parser被建立时，它从prolens中获取callback的copy，而不是拿走callback。
+    // 因为后续的同类型task还需要copy这些callback
+    #[test]
+    fn test_stream_readline2_multi_task() {
+        // 创建一个包含一行数据的包
+        let seq1 = 1;
+        let payload = [b'H', b'e', b'l', b'l', b'o', b'\n', b'W', b'o', b'r', b'l'];
+        let pkt1 = build_pkt_line(seq1, payload);
+        let _ = pkt1.decode();
+        pkt1.set_l7_proto(L7Proto::Readline2);
+
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let lines_clone = Rc::clone(&lines);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            lines_clone.borrow_mut().clear();
+            lines_clone.borrow_mut().push(line.to_vec());
+            seqs_clone.borrow_mut().clear();
+            seqs_clone.borrow_mut().push(seq);
+            dbg!("in callback");
+        };
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        protolens.set_cb_readline2(callback);
+        let mut task1 = protolens.new_task();
+        let mut task2 = protolens.new_task();
+
+        protolens.run_task(&mut task1, pkt1.clone());
+        dbg!("assert1");
+        // 验证收到的行是否正确
+        let line_expected = vec![b"Hello\n".to_vec()];
+        let seq_expected = vec![1];
+        assert_eq!(*lines.borrow(), line_expected);
+        assert_eq!(*seqs.borrow(), seq_expected);
+
+        protolens.run_task(&mut task2, pkt1);
+        dbg!("assert2");
+        // 验证收到的行是否正确
+        let line_expected = vec![b"Hello\n".to_vec()];
+        let seq_expected = vec![1];
+        assert_eq!(*lines.borrow(), line_expected);
+        assert_eq!(*seqs.borrow(), seq_expected);
+    }
 }
