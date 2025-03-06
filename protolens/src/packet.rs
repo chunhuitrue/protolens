@@ -6,24 +6,26 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 #[repr(C)]
-#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum L7Proto {
-    OrdPacket,
+    OrdPacket = 0,
     Smtp,
+
     #[cfg(test)]
     RawPacket,
     #[cfg(test)]
-    StreamNext,
+    Byte,
     #[cfg(test)]
-    StreamRead,
+    Read,
     #[cfg(test)]
-    StreamReadline,
+    Readline,
     #[cfg(test)]
-    StreamReadline2,
+    Readline2,
     #[cfg(test)]
-    StreamReadn,
+    Readn,
     #[cfg(test)]
-    StreamReadn2,
+    Readn2,
+
     Unknown,
 }
 

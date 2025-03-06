@@ -1,4 +1,5 @@
 mod config;
+mod enum_map;
 mod ffi;
 mod heap;
 mod packet;
@@ -23,27 +24,29 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::config::*;
+use crate::enum_map::EnumMap;
 use crate::heap::*;
 use crate::ordpacket::*;
 use crate::packet::*;
 use crate::parser::*;
 use crate::pktstrm::*;
-#[cfg(test)]
-use crate::rawpacket::*;
 use crate::smtp::*;
 use crate::stats::*;
+
 #[cfg(test)]
-use crate::stream_next::*;
+use crate::byte::*;
 #[cfg(test)]
-use crate::stream_read::*;
+use crate::rawpacket::*;
 #[cfg(test)]
-use crate::stream_readline::*;
+use crate::read::*;
 #[cfg(test)]
-use crate::stream_readline2::*;
+use crate::readline::*;
 #[cfg(test)]
-use crate::stream_readn::*;
+use crate::readline2::*;
 #[cfg(test)]
-use crate::stream_readn2::*;
+use crate::readn::*;
+#[cfg(test)]
+use crate::readn2::*;
 
 pub type ProlensRc<T> = Prolens<T, Rc<T>>;
 pub type ProlensArc<T> = Prolens<T, Arc<T>>;
@@ -56,25 +59,27 @@ where
 {
     config: Config,
     stats: Stats,
+    parsers: EnumMap<Box<dyn ParserFactory<T, P>>>,
     _phantom: PhantomData<P>,
 
     cb_ord_pkt: Option<CbOrdPkt<T>>,
+    cb_smtp_user: Option<CbUser>,
+    cb_smtp_pass: Option<CbPass>,
+
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
     #[cfg(test)]
-    cb_stream_next_byte: Option<CbStreamNext>,
+    cb_byte: Option<CbByte>,
     #[cfg(test)]
-    cb_stream_read: Option<CbStreamRead>,
+    cb_read: Option<CbRead>,
     #[cfg(test)]
-    cb_stream_readline: Option<CbReadline>,
+    cb_readline: Option<CbReadline>,
     #[cfg(test)]
-    cb_stream_readline2: Option<CbReadline2>,
+    cb_readline2: Option<CbReadline2>,
     #[cfg(test)]
     cb_readn: Option<CbReadn>,
     #[cfg(test)]
     cb_readn2: Option<CbReadn2>,
-    cb_smtp_user: Option<CbUser>,
-    cb_smtp_pass: Option<CbPass>,
 }
 
 impl<T, P> Prolens<T, P>
@@ -84,28 +89,63 @@ where
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
     pub fn new(config: &Config) -> Self {
-        Prolens {
+        let mut prolens = Prolens {
             config: config.clone(),
             stats: Stats::new(),
+            parsers: EnumMap::new(),
             _phantom: PhantomData,
 
             cb_ord_pkt: None,
             #[cfg(test)]
             cb_raw_pkt: None,
             #[cfg(test)]
-            cb_stream_next_byte: None,
+            cb_byte: None,
             #[cfg(test)]
-            cb_stream_read: None,
+            cb_read: None,
             #[cfg(test)]
-            cb_stream_readline: None,
+            cb_readline: None,
             #[cfg(test)]
-            cb_stream_readline2: None,
+            cb_readline2: None,
             #[cfg(test)]
             cb_readn: None,
             #[cfg(test)]
             cb_readn2: None,
             cb_smtp_user: None,
             cb_smtp_pass: None,
+        };
+        prolens.regist_parsers();
+        prolens
+    }
+
+    fn regist_parsers(&mut self) {
+        self.parsers.insert(
+            L7Proto::OrdPacket,
+            Box::new(OrdPacketrFactory::<T, P>::new()),
+        );
+
+        self.parsers
+            .insert(L7Proto::Smtp, Box::new(SmtpFactory::<T, P>::new()));
+
+        #[cfg(test)]
+        {
+            self.parsers.insert(
+                L7Proto::RawPacket,
+                Box::new(RawPacketFactory::<T, P>::new()),
+            );
+            self.parsers
+                .insert(L7Proto::Byte, Box::new(ByteFactory::<T, P>::new()));
+            self.parsers
+                .insert(L7Proto::Read, Box::new(ReadFactory::<T, P>::new()));
+            self.parsers
+                .insert(L7Proto::Readline, Box::new(ReadlineFactory::<T, P>::new()));
+            self.parsers.insert(
+                L7Proto::Readline2,
+                Box::new(Readline2Factory::<T, P>::new()),
+            );
+            self.parsers
+                .insert(L7Proto::Readn, Box::new(ReadnFactory::<T, P>::new()));
+            self.parsers
+                .insert(L7Proto::Readn2, Box::new(Readn2Factory::<T, P>::new()));
         }
     }
 
@@ -119,14 +159,6 @@ where
 
     pub(crate) fn new_task_ffi(&self, cb_ctx: *mut c_void) -> Box<Task<T, P>> {
         Box::new(Task::new(cb_ctx))
-    }
-
-    // 这个方法用于在运行了一些数据包并确定了合适的 parser 类型后调用
-    fn task_set_parser<Q>(&self, task: &mut Task<T, P>, parser: Q)
-    where
-        Q: Parser<PacketType = T, PtrType = P>,
-    {
-        task.init_parser(parser);
     }
 
     pub fn set_cb_task_c2s<F>(&self, task: &mut Task<T, P>, callback: F)
@@ -161,17 +193,17 @@ where
     #[cfg(test)]
     pub fn set_cb_stream_next_byte<F>(&mut self, callback: F)
     where
-        F: StreamNextCbFn + 'static,
+        F: ByteCbFn + 'static,
     {
-        self.cb_stream_next_byte = Some(Rc::new(RefCell::new(callback)));
+        self.cb_byte = Some(Rc::new(RefCell::new(callback)));
     }
 
     #[cfg(test)]
     pub fn set_cb_stream_read<F>(&mut self, callback: F)
     where
-        F: StreamReadCbFn + 'static,
+        F: ReadCbFn + 'static,
     {
-        self.cb_stream_read = Some(Rc::new(RefCell::new(callback)));
+        self.cb_read = Some(Rc::new(RefCell::new(callback)));
     }
 
     #[cfg(test)]
@@ -179,7 +211,7 @@ where
     where
         F: ReadLineCbFn + 'static,
     {
-        self.cb_stream_readline = Some(Rc::new(RefCell::new(callback)));
+        self.cb_readline = Some(Rc::new(RefCell::new(callback)));
     }
 
     #[cfg(test)]
@@ -187,7 +219,7 @@ where
     where
         F: ReadLine2CbFn + 'static,
     {
-        self.cb_stream_readline2 = Some(Rc::new(RefCell::new(callback)));
+        self.cb_readline2 = Some(Rc::new(RefCell::new(callback)));
     }
 
     #[cfg(test)]
@@ -220,66 +252,13 @@ where
         self.cb_smtp_pass = Some(Rc::new(RefCell::new(callback)) as CbPass);
     }
 
-    // None - 表示解析器还在pending状态或没有parser
-    // Some(Ok(())) - 表示解析成功完成
-    // Some(Err(())) - 表示解析遇到错误
     pub fn run_task(&mut self, task: &mut Task<T, P>, pkt: T) -> Option<Result<(), ()>> {
         if !task.parser_inited && pkt.l7_proto() != L7Proto::Unknown {
-            match pkt.l7_proto() {
-                L7Proto::OrdPacket => {
-                    let mut parser = OrdPacketParser::<T, P>::new();
-                    parser.cb_ord_pkt = self.cb_ord_pkt.take();
-                    self.task_set_parser(task, parser);
+            let proto = pkt.l7_proto();
+            if self.parsers.contains_key(&proto) {
+                if let Some(factory) = self.parsers.get(&proto) {
+                    task.init_parser(factory.create(self));
                 }
-                #[cfg(test)]
-                L7Proto::RawPacket => {
-                    let mut parser = RawPacketParser::<T, P>::new();
-                    parser.cb_raw_pkt = self.cb_raw_pkt.take();
-                    self.task_set_parser(task, parser);
-                }
-                #[cfg(test)]
-                L7Proto::StreamNext => {
-                    let mut parser = StreamNextParser::<T, P>::new();
-                    parser.cb_next_byte = self.cb_stream_next_byte.take();
-                    self.task_set_parser(task, parser);
-                }
-                #[cfg(test)]
-                L7Proto::StreamRead => {
-                    let mut parser = StreamReadParser::<T, P>::new();
-                    parser.cb_read = self.cb_stream_read.take();
-                    self.task_set_parser(task, parser);
-                }
-                #[cfg(test)]
-                L7Proto::StreamReadline => {
-                    let mut parser = StreamReadlineParser::<T, P>::new();
-                    parser.cb_readline = self.cb_stream_readline.take();
-                    self.task_set_parser(task, parser);
-                }
-                #[cfg(test)]
-                L7Proto::StreamReadline2 => {
-                    let mut parser = StreamReadline2Parser::<T, P>::new();
-                    parser.cb_readline = self.cb_stream_readline2.take();
-                    self.task_set_parser(task, parser);
-                }
-                #[cfg(test)]
-                L7Proto::StreamReadn => {
-                    let mut parser = StreamReadnParser::<T, P>::new();
-                    parser.cb_readn = self.cb_readn.take();
-                    self.task_set_parser(task, parser);
-                }
-                #[cfg(test)]
-                L7Proto::StreamReadn2 => {
-                    let mut parser = StreamReadn2Parser::<T, P>::new();
-                    parser.cb_readn = self.cb_readn2.take();
-                    self.task_set_parser(task, parser);
-                }
-                L7Proto::Smtp => {
-                    let mut parser = SmtpParser::<T, P>::new();
-                    parser.cb_pass = self.cb_smtp_pass.take();
-                    parser.cb_user = self.cb_smtp_user.take();
-                    self.task_set_parser(task, parser);
-                }
-                L7Proto::Unknown => {}
             }
         }
 
@@ -372,7 +351,7 @@ mod tests {
 
         // pkt2之后识别成功，设置 parser
         let parser = SmtpParser::<MyPacket, Rc<MyPacket>>::new();
-        protolens.task_set_parser(&mut task, parser);
+        task.init_parser(Box::new(parser));
 
         // 继续处理数据包
         let pkt3 = MyPacket::new(L7Proto::Unknown, 3, false);

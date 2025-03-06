@@ -1,6 +1,8 @@
 use crate::Parser;
+use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::Prolens;
 use crate::packet::*;
 use nom::{
     IResult, Offset,
@@ -139,10 +141,6 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn new() -> Self {
-        Self::new()
-    }
-
     fn c2s_parser(
         &self,
         stream: *const PktStrm<T, P>,
@@ -279,11 +277,35 @@ fn starts_with_auth_login(input: &[u8]) -> bool {
     upper == b"AUTH LOGIN"
 }
 
+pub(crate) struct SmtpFactory<T, P> {
+    _phantom_t: PhantomData<T>,
+    _phantom_p: PhantomData<P>,
+}
+
+impl<T, P> ParserFactory<T, P> for SmtpFactory<T, P>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
+    fn new() -> Self {
+        Self {
+            _phantom_t: PhantomData,
+            _phantom_p: PhantomData,
+        }
+    }
+
+    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+        let mut parser = Box::new(SmtpParser::new());
+        parser.cb_user = prolens.cb_smtp_user.clone();
+        parser.cb_pass = prolens.cb_smtp_pass.clone();
+        parser
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::*;
-    use crate::*;
     use std::env;
     use std::time::{SystemTime, UNIX_EPOCH};
 

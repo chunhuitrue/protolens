@@ -1,6 +1,8 @@
 use crate::Parser;
+use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::Prolens;
 use crate::packet::*;
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -72,10 +74,6 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn new() -> Self {
-        Self::new()
-    }
-
     fn c2s_parser(
         &self,
         stream: *const PktStrm<T, P>,
@@ -89,11 +87,34 @@ where
     }
 }
 
+pub(crate) struct OrdPacketrFactory<T, P> {
+    _phantom_t: PhantomData<T>,
+    _phantom_p: PhantomData<P>,
+}
+
+impl<T, P> ParserFactory<T, P> for OrdPacketrFactory<T, P>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
+    fn new() -> Self {
+        Self {
+            _phantom_t: PhantomData,
+            _phantom_p: PhantomData,
+        }
+    }
+
+    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+        let mut parser = Box::new(OrdPacketParser::new());
+        parser.cb_ord_pkt = prolens.cb_ord_pkt.clone();
+        parser
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::*;
-    use crate::*;
     use std::env;
     use std::rc::Rc;
     use std::time::{SystemTime, UNIX_EPOCH};

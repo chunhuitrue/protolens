@@ -1,75 +1,67 @@
 use crate::Parser;
+use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::Prolens;
 use crate::packet::*;
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::future::Future;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-pub trait StreamReadCbFn: FnMut(&[u8], usize, u32, *mut c_void) {}
-impl<F: FnMut(&[u8], usize, u32, *mut c_void)> StreamReadCbFn for F {}
-pub(crate) type CbStreamRead = Rc<RefCell<dyn StreamReadCbFn + 'static>>;
+pub trait Readn2CbFn: FnMut(&[u8], u32, *mut c_void) {}
+impl<F: FnMut(&[u8], u32, *mut c_void)> Readn2CbFn for F {}
+pub(crate) type CbReadn2 = Rc<RefCell<dyn Readn2CbFn + 'static>>;
 
-pub struct StreamReadParser<T, P>
+pub struct Readn2Parser<T, P>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    pub(crate) cb_read: Option<CbStreamRead>,
+    pub(crate) cb_readn: Option<CbReadn2>,
     _phantom_t: PhantomData<T>,
     _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> StreamReadParser<T, P>
+impl<T, P> Readn2Parser<T, P>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            cb_read: None,
+            cb_readn: None,
             _phantom_t: PhantomData,
             _phantom_p: PhantomData,
         }
     }
 
-    fn c2s_parser_inner(
-        cb_read: Option<CbStreamRead>,
+    async fn c2s_parser_inner(
+        cb_readn: Option<CbReadn2>,
         read_size: usize,
         stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
-    ) -> impl Future<Output = Result<(), ()>> {
-        let mut read_buff: Vec<u8> = vec![0; read_size];
-
-        async move {
-            let stm: &mut PktStrm<T, P>;
-            unsafe {
-                stm = &mut *(stream as *mut PktStrm<T, P>);
-            }
-
-            while !stm.fin() {
-                match stm.read(&mut read_buff).await {
-                    Ok((read_len, seq)) => {
-                        if read_len > 0 {
-                            if let Some(ref cb) = cb_read {
-                                cb.borrow_mut()(&read_buff[..read_len], read_len, seq, cb_ctx);
-                            }
-                        }
-                        if read_len == 0 {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-            Ok(())
+    ) -> Result<(), ()> {
+        let stm: &mut PktStrm<T, P>;
+        unsafe {
+            stm = &mut *(stream as *mut PktStrm<T, P>);
         }
+
+        while !stm.fin() {
+            match stm.readn2(read_size).await {
+                Ok((bytes, seq)) => {
+                    if let Some(ref cb) = cb_readn {
+                        cb.borrow_mut()(bytes, seq, cb_ctx);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        Ok(())
     }
 }
 
-impl<T, P> Default for StreamReadParser<T, P>
+impl<T, P> Default for Readn2Parser<T, P>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
@@ -79,7 +71,7 @@ where
     }
 }
 
-impl<T, P> Parser for StreamReadParser<T, P>
+impl<T, P> Parser for Readn2Parser<T, P>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T> + 'static,
@@ -87,17 +79,13 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn new() -> Self {
-        Self::new()
-    }
-
     fn c2s_parser(
         &self,
         stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
-            self.cb_read.clone(),
+            self.cb_readn.clone(),
             10,
             stream,
             cb_ctx,
@@ -105,30 +93,53 @@ where
     }
 }
 
+pub(crate) struct Readn2Factory<T, P> {
+    _phantom_t: PhantomData<T>,
+    _phantom_p: PhantomData<P>,
+}
+
+impl<T, P> ParserFactory<T, P> for Readn2Factory<T, P>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
+    fn new() -> Self {
+        Self {
+            _phantom_t: PhantomData,
+            _phantom_p: PhantomData,
+        }
+    }
+
+    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+        let mut parser = Box::new(Readn2Parser::new());
+        parser.cb_readn = prolens.cb_readn2.clone();
+        parser
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::*;
-    use crate::*;
 
     #[test]
-    fn test_stream_read_single_packet() {
+    fn test_stream_readn2_single_packet() {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, true);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::StreamRead);
+        pkt1.set_l7_proto(L7Proto::Readn2);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
         let seq_value = Rc::new(RefCell::new(0u32));
         let seq_clone = Rc::clone(&seq_value);
-        let callback = move |bytes: &[u8], len: usize, seq: u32, _cb_ctx: *mut c_void| {
-            vec_clone.borrow_mut().extend_from_slice(&bytes[..len]);
+        let callback = move |bytes: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().extend_from_slice(bytes);
             *seq_clone.borrow_mut() = seq;
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_stream_read(callback);
+        protolens.set_cb_readn2(callback);
         let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
@@ -139,26 +150,26 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_read_multiple_packets() {
+    fn test_stream_readn2_multiple_packets() {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, false);
         let seq2 = 11;
         let pkt2 = build_pkt(seq2, true);
         let _ = pkt1.decode();
         let _ = pkt2.decode();
-        pkt1.set_l7_proto(L7Proto::StreamRead);
+        pkt1.set_l7_proto(L7Proto::Readn2);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
         let seq_values = Rc::new(RefCell::new(Vec::new()));
         let seq_clone = Rc::clone(&seq_values);
-        let callback = move |bytes: &[u8], len: usize, seq: u32, _cb_ctx: *mut c_void| {
-            vec_clone.borrow_mut().extend_from_slice(&bytes[..len]);
+        let callback = move |bytes: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            vec_clone.borrow_mut().extend_from_slice(bytes);
             seq_clone.borrow_mut().push(seq);
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_stream_read(callback);
+        protolens.set_cb_readn2(callback);
         let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);

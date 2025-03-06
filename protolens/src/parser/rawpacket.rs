@@ -1,4 +1,5 @@
 use crate::Parser;
+use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
@@ -73,10 +74,6 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn new() -> Self {
-        Self::new()
-    }
-
     fn c2s_parser(
         &self,
         stream: *const PktStrm<T, P>,
@@ -87,6 +84,30 @@ where
             stream,
             cb_ctx,
         )))
+    }
+}
+
+pub(crate) struct RawPacketFactory<T, P> {
+    _phantom_t: PhantomData<T>,
+    _phantom_p: PhantomData<P>,
+}
+
+impl<T, P> ParserFactory<T, P> for RawPacketFactory<T, P>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
+    fn new() -> Self {
+        Self {
+            _phantom_t: PhantomData,
+            _phantom_p: PhantomData,
+        }
+    }
+
+    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+        let mut parser = Box::new(RawPacketParser::new());
+        parser.cb_raw_pkt = prolens.cb_raw_pkt.clone();
+        parser
     }
 }
 

@@ -1,6 +1,8 @@
 use crate::Parser;
+use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
+use crate::Prolens;
 use crate::packet::*;
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -11,7 +13,7 @@ pub trait ReadnCbFn: FnMut(Vec<u8>, *mut c_void) {}
 impl<F: FnMut(Vec<u8>, *mut c_void)> ReadnCbFn for F {}
 pub(crate) type CbReadn = Rc<RefCell<dyn ReadnCbFn + 'static>>;
 
-pub struct StreamReadnParser<T, P>
+pub struct ReadnParser<T, P>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
@@ -21,7 +23,7 @@ where
     _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> StreamReadnParser<T, P>
+impl<T, P> ReadnParser<T, P>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
@@ -58,7 +60,7 @@ where
     }
 }
 
-impl<T, P> Default for StreamReadnParser<T, P>
+impl<T, P> Default for ReadnParser<T, P>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
@@ -68,17 +70,13 @@ where
     }
 }
 
-impl<T, P> Parser for StreamReadnParser<T, P>
+impl<T, P> Parser for ReadnParser<T, P>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T> + 'static,
 {
     type PacketType = T;
     type PtrType = P;
-
-    fn new() -> Self {
-        Self::new()
-    }
 
     fn c2s_parser(
         &self,
@@ -94,18 +92,41 @@ where
     }
 }
 
+pub(crate) struct ReadnFactory<T, P> {
+    _phantom_t: PhantomData<T>,
+    _phantom_p: PhantomData<P>,
+}
+
+impl<T, P> ParserFactory<T, P> for ReadnFactory<T, P>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
+    fn new() -> Self {
+        Self {
+            _phantom_t: PhantomData,
+            _phantom_p: PhantomData,
+        }
+    }
+
+    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+        let mut parser = Box::new(ReadnParser::new());
+        parser.cb_readn = prolens.cb_readn.clone();
+        parser
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::*;
-    use crate::*;
 
     #[test]
     fn test_stream_readn_single_packet() {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, true);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::StreamReadn);
+        pkt1.set_l7_proto(L7Proto::Readn);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
@@ -132,7 +153,7 @@ mod tests {
         let pkt2 = build_pkt(seq2, true);
         let _ = pkt1.decode();
         let _ = pkt2.decode();
-        pkt1.set_l7_proto(L7Proto::StreamReadn);
+        pkt1.set_l7_proto(L7Proto::Readn);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
@@ -170,7 +191,7 @@ mod tests {
         let _ = pkt_syn.decode();
         let _ = pkt1.decode();
         let _ = pkt2.decode();
-        pkt_syn.set_l7_proto(L7Proto::StreamReadn);
+        pkt_syn.set_l7_proto(L7Proto::Readn);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);

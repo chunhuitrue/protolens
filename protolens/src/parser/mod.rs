@@ -1,22 +1,24 @@
 pub mod ordpacket;
+pub mod smtp;
+
+#[cfg(test)]
+pub mod byte;
 #[cfg(test)]
 pub mod rawpacket;
-pub mod smtp;
 #[cfg(test)]
-pub mod stream_next;
+pub mod read;
 #[cfg(test)]
-pub mod stream_read;
+pub mod readline;
 #[cfg(test)]
-pub mod stream_readline;
+pub mod readline2;
 #[cfg(test)]
-pub mod stream_readline2;
+pub mod readn;
 #[cfg(test)]
-pub mod stream_readn;
-#[cfg(test)]
-pub mod stream_readn2;
+pub mod readn2;
 
 use crate::PacketBind;
 use crate::PktStrm;
+use crate::Prolens;
 use crate::PtrNew;
 use crate::PtrWrapper;
 use futures::Future;
@@ -28,10 +30,6 @@ pub(crate) type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 pub(crate) trait Parser {
     type PacketType: PacketBind;
     type PtrType: PtrWrapper<Self::PacketType> + PtrNew<Self::PacketType>;
-
-    fn new() -> Self
-    where
-        Self: Sized;
 
     fn c2s_parser(
         &self,
@@ -57,4 +55,15 @@ pub(crate) trait Parser {
     ) -> Option<ParserFuture> {
         None
     }
+}
+
+pub(crate) trait ParserFactory<T, P>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    fn new() -> Self
+    where
+        Self: Sized;
+    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>>;
 }

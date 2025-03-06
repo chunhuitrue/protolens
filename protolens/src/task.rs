@@ -70,10 +70,7 @@ where
         }
     }
 
-    pub(crate) fn init_parser<Q>(&mut self, parser: Q)
-    where
-        Q: Parser<PacketType = T, PtrType = P>,
-    {
+    pub(crate) fn init_parser(&mut self, parser: Box<dyn Parser<PacketType = T, PtrType = P>>) {
         let p_stream_c2s: *const PktStrm<T, P> = &self.stream_c2s;
         let p_stream_s2c: *const PktStrm<T, P> = &self.stream_s2c;
 
