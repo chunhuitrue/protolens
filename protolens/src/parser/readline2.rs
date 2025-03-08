@@ -124,7 +124,7 @@ mod tests {
         // 创建一个包含一行数据的包
         let seq1 = 1;
         let payload = [b'H', b'e', b'l', b'l', b'o', b'\n', b'W', b'o', b'r', b'l'];
-        let pkt1 = build_pkt_line(seq1, payload);
+        let pkt1 = build_pkt_payload(seq1, &payload);
         let _ = pkt1.decode();
         pkt1.set_l7_proto(L7Proto::Readline2);
 
@@ -176,12 +176,12 @@ mod tests {
         // 第一个包包含 "Hello\nWor"
         let seq1 = 1;
         let payload1 = [b'H', b'e', b'l', b'l', b'o', b'\n', b'W', b'o', b'r', b' '];
-        let pkt1 = build_pkt_line(seq1, payload1);
+        let pkt1 = build_pkt_payload(seq1, &payload1);
 
         // 第二个包包含 "ld!\nBye\n"
         let seq2 = 11;
         let payload2 = [b'l', b'd', b'!', b'\n', b'B', b'y', b'e', b'\n', b'x', b'x'];
-        let pkt2 = build_pkt_line(seq2, payload2);
+        let pkt2 = build_pkt_payload(seq2, &payload2);
 
         let _ = pkt1.decode();
         let _ = pkt2.decode();
@@ -223,11 +223,11 @@ mod tests {
         // 创建数据包
         let seq2 = 2; // SYN占一个序列号
         let payload1 = [b'H', b'e', b'l', b'l', b'o', b'\n', b'W', b'o', b'r', b'l'];
-        let pkt1 = build_pkt_line(seq2, payload1);
+        let pkt1 = build_pkt_payload(seq2, &payload1);
 
         let seq3 = 12;
         let payload2 = [b'd', b'!', b'\n', b'B', b'y', b'e', b'\n', b'x', b'x', b'x'];
-        let pkt2 = build_pkt_line(seq3, payload2);
+        let pkt2 = build_pkt_payload(seq3, &payload2);
 
         let _ = pkt_syn.decode();
         let _ = pkt1.decode();
@@ -266,7 +266,7 @@ mod tests {
         // 创建一个包含一行数据的包
         let seq1 = 1;
         let payload = [b'H', b'e', b'l', b'l', b'o', b'\n', b'W', b'o', b'r', b'l'];
-        let pkt1 = build_pkt_line(seq1, payload);
+        let pkt1 = build_pkt_payload(seq1, &payload);
         let _ = pkt1.decode();
         pkt1.set_l7_proto(L7Proto::Readline2);
 

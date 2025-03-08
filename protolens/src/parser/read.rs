@@ -149,7 +149,7 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_stream_read(callback);
+        protolens.set_cb_read(callback);
         let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
@@ -179,7 +179,7 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_stream_read(callback);
+        protolens.set_cb_read(callback);
         let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);

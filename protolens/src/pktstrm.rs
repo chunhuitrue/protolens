@@ -303,6 +303,7 @@ where
         // self.prepare_result(self.read_buff_len)
     }
 
+    // 不带\r\n
     pub(crate) async fn read_clean_line(&mut self) -> Result<(&[u8], u32), ()> {
         let (line, seq) = self.readline2().await?;
         let mut len = line.len();
@@ -319,6 +320,7 @@ where
         result
     }
 
+    // 在read_clean_line基础上，返回str而不是u8
     pub(crate) async fn read_clean_line_str(&mut self) -> Result<(&str, u32), ()> {
         let (line, seq) = self.read_clean_line().await?;
         std::str::from_utf8(line).map(|s| (s, seq)).map_err(|_| ())

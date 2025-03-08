@@ -516,23 +516,24 @@ pub(crate) fn build_pkt_syn(seq: u32) -> CapPacket {
     CapPacket::new(1, result.len(), &result)
 }
 
-pub(crate) fn build_pkt_line(seq: u32, payload: [u8; 10]) -> CapPacket {
+// 接受任意长度的payload数组
+pub(crate) fn build_pkt_payload(seq: u32, payload: &[u8]) -> CapPacket {
     //setup the packet headers
     let mut builder = PacketBuilder::ethernet2(
-        [1, 2, 3, 4, 5, 6], //source mac
-        [7, 8, 9, 10, 11, 12],
-    ) //destionation mac
+        [1, 2, 3, 4, 5, 6],    //source mac
+        [7, 8, 9, 10, 11, 12], //destionation mac
+    )
     .ipv4(
         [192, 168, 1, 1], //source ip
         [192, 168, 1, 2], //desitionation ip
-        20,
-    ) //time to life
+        20,               //time to life
+    )
     .tcp(
         25,   //source port
         4000, //desitnation port
         seq,  //sequence number
-        1024,
-    ) //window size
+        1024, //window size
+    )
     //set additional tcp header fields
     .ns() //set the ns flag
     //supported flags: ns(), fin(), syn(), rst(), psh(), ece(), cwr()
@@ -548,7 +549,7 @@ pub(crate) fn build_pkt_line(seq: u32, payload: [u8; 10]) -> CapPacket {
     let mut result = Vec::<u8>::with_capacity(builder.size(payload.len()));
     //serialize
     //this will automatically set all length fields, checksums and identifiers (ethertype & protocol)
-    builder.write(&mut result, &payload).unwrap();
+    builder.write(&mut result, payload).unwrap();
 
     CapPacket::new(1, result.len(), &result)
 }
@@ -726,10 +727,80 @@ mod tests {
     }
 
     #[test]
+    fn test_build_pkt_payload() {
+        // 测试用例1：使用标准长度的payload
+        let seq1 = 1;
+        let custom_payload = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+        let pkt1 = build_pkt_payload(seq1, &custom_payload);
+        let _ = pkt1.decode();
+
+        // 验证序列号 (通过 trait 方法)
+        assert_eq!(1, crate::Packet::seq(&pkt1));
+        // 验证端口 (通过 trait 方法)
+        assert_eq!(25, crate::Packet::tu_sport(&pkt1));
+        assert_eq!(4000, crate::Packet::tu_dport(&pkt1));
+        // 先获取 header 的引用
+        let header = pkt1.header.borrow();
+        let header_ref = header.as_ref().unwrap();
+        // 验证 IP
+        if let Some(IpHeader::Version4(ipv4, _)) = &header_ref.ip {
+            assert_eq!([192, 168, 1, 1], ipv4.source);
+            assert_eq!([192, 168, 1, 2], ipv4.destination);
+        }
+        // 验证 payload
+        assert_eq!(custom_payload.len(), crate::Packet::payload_len(&pkt1));
+        assert_eq!(&custom_payload, crate::Packet::payload(&pkt1));
+        // 验证标志位
+        assert!(!crate::Packet::syn(&pkt1));
+        assert!(!crate::Packet::fin(&pkt1));
+        // 验证 TCP 标志
+        if let Some(TransportHeader::Tcp(tcp)) = &header_ref.transport {
+            assert!(!tcp.syn);
+            assert!(tcp.ack); // 这个包应该有 ACK 标志
+        }
+
+        // 测试用例2：使用空payload
+        let seq2 = 2;
+        let empty_payload: Vec<u8> = vec![];
+        let pkt2 = build_pkt_payload(seq2, &empty_payload);
+        let _ = pkt2.decode();
+
+        // 验证序列号
+        assert_eq!(2, crate::Packet::seq(&pkt2));
+        // 验证payload为空
+        assert_eq!(0, crate::Packet::payload_len(&pkt2));
+        assert!(crate::Packet::payload(&pkt2).is_empty());
+
+        // 测试用例3：使用大型payload
+        let seq3 = 3;
+        let large_payload: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+        let pkt3 = build_pkt_payload(seq3, &large_payload);
+        let _ = pkt3.decode();
+
+        // 验证序列号
+        assert_eq!(3, crate::Packet::seq(&pkt3));
+        // 验证payload大小
+        assert_eq!(1000, crate::Packet::payload_len(&pkt3));
+        assert_eq!(&large_payload, crate::Packet::payload(&pkt3));
+
+        // 测试用例4：使用不同的序列号
+        let seq4 = 12345;
+        let custom_payload4 = vec![1, 3, 5, 7, 9];
+        let pkt4 = build_pkt_payload(seq4, &custom_payload4);
+        let _ = pkt4.decode();
+
+        // 验证序列号
+        assert_eq!(12345, crate::Packet::seq(&pkt4));
+        // 验证payload
+        assert_eq!(custom_payload4.len(), crate::Packet::payload_len(&pkt4));
+        assert_eq!(&custom_payload4, crate::Packet::payload(&pkt4));
+    }
+
+    #[test]
     fn test_build_pkt_line() {
         let seq1 = 1;
         let custom_payload = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-        let pkt1 = build_pkt_line(seq1, custom_payload);
+        let pkt1 = build_pkt_payload(seq1, &custom_payload);
         let _ = pkt1.decode();
 
         // 验证序列号 (通过 trait 方法)

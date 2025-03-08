@@ -63,61 +63,65 @@ where
             stm = &mut *(stream as *mut PktStrm<T, P>);
         }
 
-        // 验证EHLO命令,如果EHLO命令不正确，则返回错误，无法继续解析
-        let (ehlo_line, _) = stm.readline2().await?;
-        if !starts_with_ehlo(ehlo_line) {
-            dbg!("First line is not EHLO command");
+        // 验证起始HELO/EHLO命令, 如果命令不正确，则返回错误，无法继续解析
+        let (helo_line, _) = stm.readline2().await?;
+        if !starts_with_helo(helo_line) {
+            dbg!("First line is not HELO/EHLO command");
             return Err(());
         }
 
-        // 读取AUTH LOGIN命令
-        let (auth_line, _) = stm.readline2().await?;
-        if !starts_with_auth_login(auth_line) {
-            dbg!("Second line is not AUTH LOGIN command");
+        let (line, _seq) = stm.read_clean_line_str().await?;
+        if line.eq_ignore_ascii_case("STARTTLS") {
+            dbg!("STARTTLS。return error。");
             return Err(());
-        }
+        } else if line.eq_ignore_ascii_case("AUTH LOGIN") {
+            // user
+            let (user, seq) = stm.read_clean_line().await?;
+            if let Some(cb) = cb_user {
+                cb.borrow_mut()(user, seq, cb_ctx);
+            }
 
-        // user
-        let (user, seq) = stm.read_clean_line().await?;
-        if let Some(cb) = cb_user {
-            cb.borrow_mut()(user, seq, cb_ctx);
-        }
-        dbg!(user, seq);
+            // pass
+            let (pass, seq) = stm.read_clean_line().await?;
+            if let Some(cb) = cb_pass.clone() {
+                cb.borrow_mut()(pass, seq, cb_ctx);
+            }
+            dbg!(std::str::from_utf8(pass).expect("need utf8"), seq);
 
-        // pass
-        let (pass, seq) = stm.read_clean_line().await?;
-        if let Some(cb) = cb_pass.clone() {
-            cb.borrow_mut()(pass, seq, cb_ctx);
-        }
-        dbg!(std::str::from_utf8(pass).expect("need utf8"), seq);
-
-        // mail from
-        let (from, seq) = stm.read_clean_line_str().await?;
-        if let Ok((_, ((mail, offset), size))) = mail_from(from) {
-            let mail_seq = seq + offset as u32;
-            dbg!("from", mail, size, mail_seq);
+            // mail from。暂且不管有没有扩展参数
+            let (_from, _seq) = stm.read_clean_line_str().await?;
+            // if let Ok((_, ((mail, offset), size))) = mail_from(from) {
+            //     let mail_seq = seq + offset as u32;
+            //     dbg!("from", mail, size, mail_seq);
+            // } else {
+            //     dbg!("from return err");
+            //     return Err(());
+            // }
+            // mail from callback
+        } else if line.to_ascii_uppercase().starts_with("MAIL FROM:") {
+            // 没有auth，直接到mail from的情况
+            // mail from callback
+            dbg!(line);
         } else {
-            dbg!("from return err");
-            return Err(());
+            // 其他auth情况。AUTH PLAIN，AUTH CRAM-MD5
+            // 清空mail from之前或有或无的命令
+            read_to_from(stm).await?;
         }
 
-        // rcpt to
-        let (rcpt, seq) = stm.read_clean_line_str().await?;
-        if let Ok((_, (mail, offset))) = rcpt_to(rcpt) {
-            let mail_seq = seq + offset as u32;
-            dbg!("rcpt", mail, mail_seq);
-        } else {
-            dbg!("rcpt return err");
-            return Err(());
-        }
-
-        // DATA
-        let (data, seq) = stm.readline2().await?;
-        dbg!(std::str::from_utf8(data).expect("no"), seq);
+        multi_rcpt_to(stm).await?;
 
         // mail head
         let (content_type, bdry) = mail_head(stm).await?;
-        dbg!(content_type, bdry);
+        dbg!(&content_type, bdry);
+
+        match content_type {
+            ContentType::Unknown => {
+                body(stm).await?;
+            }
+            ContentType::Alt => {}
+        }
+
+        let (_quit, _seq) = stm.read_clean_line_str().await?;
 
         Ok(())
     }
@@ -155,7 +159,23 @@ where
     }
 }
 
+async fn read_to_from<T, P>(stm: &mut PktStrm<T, P>) -> Result<(), ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    loop {
+        let (line, _seq) = stm.read_clean_line_str().await?;
+
+        if line.to_ascii_uppercase().starts_with("MAIL FROM:") {
+            // mail from callback
+            return Ok(());
+        }
+    }
+}
+
 // MAIL FROM: <user12345@example123.com> SIZE=10557
+#[allow(dead_code)]
 fn mail_from(input: &str) -> IResult<&str, ((&str, usize), usize)> {
     let original_input = input;
     let (input, _) = tag("MAIL FROM: <")(input)?;
@@ -184,6 +204,28 @@ fn rcpt_to(input: &str) -> IResult<&str, (&str, usize)> {
     Ok((input, (mail, start_pos)))
 }
 
+async fn multi_rcpt_to<T, P>(stm: &mut PktStrm<T, P>) -> Result<(), ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    loop {
+        let (line, seq) = stm.read_clean_line_str().await?;
+
+        if line.eq_ignore_ascii_case("DATA") {
+            break;
+        }
+
+        if let Ok((_, (mail, offset))) = rcpt_to(line) {
+            let mail_seq = seq + offset as u32;
+            dbg!("rcpt", mail, mail_seq);
+        } else {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
 async fn mail_head<T, P>(stm: &mut PktStrm<T, P>) -> Result<(ContentType, String), ()>
 where
     T: PacketBind,
@@ -197,17 +239,16 @@ where
         let (line, _seq) = stm.read_clean_line_str().await?;
 
         // 头结束
-        if line == "\r\n" {
+        if line.is_empty() {
             break;
         }
+        dbg!(line);
 
-        // subject
-        match subject(line) {
-            Ok((_, subject)) => {
-                dbg!(subject);
-            }
-            Err(_err) => {}
-        }
+        // // subject
+        // match subject(line) {
+        //     Ok((_, _subject)) => {}
+        //     Err(_err) => {}
+        // }
 
         // content type
         match content_type(line) {
@@ -229,7 +270,25 @@ where
     Ok((cont_type, boundary))
 }
 
+async fn body<T, P>(stm: &mut PktStrm<T, P>) -> Result<(), ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    loop {
+        let (line, _seq) = stm.read_clean_line_str().await?;
+
+        if line == (".") {
+            break;
+        }
+
+        dbg!(line);
+    }
+    Ok(())
+}
+
 // Subject: biaoti
+#[allow(dead_code)]
 fn subject(input: &str) -> IResult<&str, (&str, usize)> {
     let original_input = input;
     let (input, _) = tag("Subject: ")(input)?;
@@ -261,14 +320,15 @@ fn content_type_ext(input: &str, cont_rady: bool) -> IResult<&str, &str> {
     Ok((input, bdry))
 }
 
-fn starts_with_ehlo(input: &[u8]) -> bool {
+fn starts_with_helo(input: &[u8]) -> bool {
     if input.len() < 4 {
         return false;
     }
     let upper = input[..4].to_ascii_uppercase();
-    upper == b"EHLO"
+    upper == b"EHLO" || upper == b"HELO"
 }
 
+#[allow(dead_code)]
 fn starts_with_auth_login(input: &[u8]) -> bool {
     if input.len() < 10 {
         return false;
@@ -352,15 +412,17 @@ mod tests {
     #[test]
     fn test_starts_with_ehlo() {
         // 正确的情况
-        assert!(starts_with_ehlo(b"EHLO example.com"));
-        assert!(starts_with_ehlo(b"ehlo example.com"));
-        assert!(starts_with_ehlo(b"EhLo example.com"));
+        assert!(starts_with_helo(b"EHLO example.com"));
+        assert!(starts_with_helo(b"ehlo example.com"));
+        assert!(starts_with_helo(b"EhLo example.com"));
+        assert!(starts_with_helo(b"HELO example.com"));
+        assert!(starts_with_helo(b"HelO example.com"));
 
         // 错误的情况
-        assert!(!starts_with_ehlo(b"HELO example.com")); // 错误的命令
-        assert!(!starts_with_ehlo(b"EHL")); // 太短
-        assert!(!starts_with_ehlo(b"")); // 空输入
-        assert!(!starts_with_ehlo(b"MAIL FROM:")); // 完全不同的命令
+        assert!(!starts_with_helo(b"Hel example.com"));
+        assert!(!starts_with_helo(b"EHL"));
+        assert!(!starts_with_helo(b""));
+        assert!(!starts_with_helo(b"MAIL FROM:"));
     }
 
     #[test]
@@ -378,33 +440,308 @@ mod tests {
     }
 
     #[test]
-    fn test_smtp_command_sequence() {
-        // 构造错误的SMTP命令序列包
+    fn test_smtp_helo_ehlo() {
         let seq1 = 1;
         let wrong_command = *b"HELO tes\r\n";
-        let pkt1 = build_pkt_line(seq1, wrong_command);
+        let pkt1 = build_pkt_payload(seq1, &wrong_command);
         let _ = pkt1.decode();
         pkt1.set_l7_proto(L7Proto::Smtp);
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         let mut task = protolens.new_task();
 
-        // 运行解析器，应该会因为不是EHLO命令而失败
         let result = protolens.run_task(&mut task, pkt1);
-        assert_eq!(result, Some(Err(())), "应该返回错误,因为命令不是EHLO");
+        assert_eq!(result, None, "none is ok");
 
-        // 构造正确的SMTP命令序列包作为对比
         let seq2 = 1;
         let correct_commands = *b"EHLO tes\r\n";
-        let pkt2 = build_pkt_line(seq2, correct_commands);
+        let pkt2 = build_pkt_payload(seq2, &correct_commands);
         let _ = pkt2.decode();
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         let mut task = protolens.new_task();
 
-        // 运行解析器，应该成功处理正确的命令序列
         let result = protolens.run_task(&mut task, pkt2);
-        assert_eq!(result, None, "应该返回None,因为解析器还在等待更多数据");
+        assert_eq!(result, None, "none is ok");
+    }
+
+    #[test]
+    fn test_smtp_auth_login() {
+        let lines = [
+            "EHLO client.example.com\r\n",
+            "AUTH LOGIN\r\n",
+            "c2VuZGVyQGV4YW1wbGUuY29t\r\n", // user
+            "cGFzc3dvcmQxMjM=\r\n",         // pass
+            "MAIL FROM: <sender@example.com>\r\n",
+            "RCPT TO: <recipient1@example.com>\r\n",
+            "RCPT TO: <recipient2@example.com>\r\n",
+            "DATA\r\n",
+            "From: sender@example.com\r\n",
+            "To: recipient@example.com\r\n",
+            "Subject: Email Subject\r\n",
+            "Date: Mon, 01 Jan 2023 12:00:00 +0000\r\n",
+            "\r\n",
+            "mail body line1.\r\n",
+            "mail body line2.\r\n",
+            ".\r\n",
+            "QUIT\r\n",
+        ];
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_user_seq = Rc::new(RefCell::new(0u32));
+        let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_pass_seq = Rc::new(RefCell::new(0u32));
+
+        let user_callback = {
+            let user_clone = captured_user.clone();
+            let seq_clone = captured_user_seq.clone();
+            move |user: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut user_guard = user_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *user_guard = user.to_vec();
+                *seq_guard = seq;
+                println!(
+                    "User callback: {}, seq: {}",
+                    std::str::from_utf8(user).unwrap_or("invalid utf8"),
+                    seq
+                );
+            }
+        };
+
+        let pass_callback = {
+            let pass_clone = captured_pass.clone();
+            let seq_clone = captured_pass_seq.clone();
+            move |pass: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut pass_guard = pass_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *pass_guard = pass.to_vec();
+                *seq_guard = seq;
+                println!(
+                    "Pass callback: {}, seq: {}",
+                    std::str::from_utf8(pass).unwrap_or("invalid utf8"),
+                    seq
+                );
+            }
+        };
+
+        protolens.set_cb_smtp_user(user_callback);
+        protolens.set_cb_smtp_pass(pass_callback);
+
+        let mut task = protolens.new_task();
+
+        let mut seq = 1000;
+        for line in lines.iter() {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload(seq, line_bytes);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Smtp);
+
+            protolens.run_task(&mut task, pkt);
+
+            seq += line_bytes.len() as u32;
+        }
+
+        assert_eq!(
+            std::str::from_utf8(&captured_user.borrow()).unwrap(),
+            "c2VuZGVyQGV4YW1wbGUuY29t",
+            "User should match expected value"
+        );
+        assert_eq!(
+            std::str::from_utf8(&captured_pass.borrow()).unwrap(),
+            "cGFzc3dvcmQxMjM=",
+            "Password should match expected value"
+        );
+        assert!(
+            *captured_user_seq.borrow() > 0,
+            "User sequence number should be captured"
+        );
+        assert!(
+            *captured_pass_seq.borrow() > 0,
+            "Password sequence number should be captured"
+        );
+    }
+
+    #[test]
+    fn test_smtp_no_auth() {
+        let lines = [
+            "EHLO client.example.com\r\n",
+            "MAIL FROM: <sender@example.com>\r\n",
+            "RCPT TO: <recipient1@example.com>\r\n",
+            "RCPT TO: <recipient2@example.com>\r\n",
+            "DATA\r\n",
+            "From: sender@example.com\r\n",
+            "To: recipient@example.com\r\n",
+            "Subject: Email Subject\r\n",
+            "Date: Mon, 01 Jan 2023 12:00:00 +0000\r\n",
+            "\r\n",
+            "mail body line1.\r\n",
+            "mail body line2.\r\n",
+            ".\r\n",
+            "QUIT\r\n",
+        ];
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_user_seq = Rc::new(RefCell::new(0u32));
+        let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_pass_seq = Rc::new(RefCell::new(0u32));
+
+        let user_callback = {
+            let user_clone = captured_user.clone();
+            let seq_clone = captured_user_seq.clone();
+            move |user: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut user_guard = user_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *user_guard = user.to_vec();
+                *seq_guard = seq;
+                println!(
+                    "User callback: {}, seq: {}",
+                    std::str::from_utf8(user).unwrap_or("invalid utf8"),
+                    seq
+                );
+            }
+        };
+
+        let pass_callback = {
+            let pass_clone = captured_pass.clone();
+            let seq_clone = captured_pass_seq.clone();
+            move |pass: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut pass_guard = pass_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *pass_guard = pass.to_vec();
+                *seq_guard = seq;
+                println!(
+                    "Pass callback: {}, seq: {}",
+                    std::str::from_utf8(pass).unwrap_or("invalid utf8"),
+                    seq
+                );
+            }
+        };
+
+        protolens.set_cb_smtp_user(user_callback);
+        protolens.set_cb_smtp_pass(pass_callback);
+
+        let mut task = protolens.new_task();
+
+        let mut seq = 1000;
+        for line in lines.iter() {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload(seq, line_bytes);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Smtp);
+
+            protolens.run_task(&mut task, pkt);
+
+            seq += line_bytes.len() as u32;
+        }
+
+        assert_eq!(
+            std::str::from_utf8(&captured_user.borrow()).unwrap(),
+            "",
+            "no user"
+        );
+        assert_eq!(
+            std::str::from_utf8(&captured_pass.borrow()).unwrap(),
+            "",
+            "no pass"
+        );
+        assert!(
+            *captured_user_seq.borrow() == 0,
+            "User sequence number should be 0"
+        );
+        assert!(
+            *captured_pass_seq.borrow() == 0,
+            "Password sequence number should be 0"
+        );
+    }
+
+    #[test]
+    fn test_smtp_tls() {
+        let lines = [
+            "EHLO client.example.com\r\n",
+            "STARTTLS\r\n",
+            "AUTH LOGIN\r\n",
+            "c2VuZGVyQGV4YW1wbGUuY29t\r\n", // user
+            "cGFzc3dvcmQxMjM=\r\n",         // pass
+        ];
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_user_seq = Rc::new(RefCell::new(0u32));
+        let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_pass_seq = Rc::new(RefCell::new(0u32));
+
+        let user_callback = {
+            let user_clone = captured_user.clone();
+            let seq_clone = captured_user_seq.clone();
+            move |user: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut user_guard = user_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *user_guard = user.to_vec();
+                *seq_guard = seq;
+                println!(
+                    "User callback: {}, seq: {}",
+                    std::str::from_utf8(user).unwrap_or("invalid utf8"),
+                    seq
+                );
+            }
+        };
+
+        let pass_callback = {
+            let pass_clone = captured_pass.clone();
+            let seq_clone = captured_pass_seq.clone();
+            move |pass: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut pass_guard = pass_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *pass_guard = pass.to_vec();
+                *seq_guard = seq;
+                println!(
+                    "Pass callback: {}, seq: {}",
+                    std::str::from_utf8(pass).unwrap_or("invalid utf8"),
+                    seq
+                );
+            }
+        };
+
+        protolens.set_cb_smtp_user(user_callback);
+        protolens.set_cb_smtp_pass(pass_callback);
+
+        let mut task = protolens.new_task();
+
+        let mut seq = 1000;
+        for line in lines.iter() {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload(seq, line_bytes);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Smtp);
+
+            protolens.run_task(&mut task, pkt);
+
+            seq += line_bytes.len() as u32;
+        }
+
+        assert_eq!(
+            std::str::from_utf8(&captured_user.borrow()).unwrap(),
+            "",
+            "no user"
+        );
+        assert_eq!(
+            std::str::from_utf8(&captured_pass.borrow()).unwrap(),
+            "",
+            "no pass"
+        );
+        assert!(
+            *captured_user_seq.borrow() == 0,
+            "User sequence number should be 0"
+        );
+        assert!(
+            *captured_pass_seq.borrow() == 0,
+            "Password sequence number should be 0"
+        );
     }
 
     #[test]

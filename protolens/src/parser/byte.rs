@@ -132,7 +132,7 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_stream_next_byte(callback);
+        protolens.set_cb_byte(callback);
         let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
@@ -157,7 +157,7 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_stream_next_byte(callback);
+        protolens.set_cb_byte(callback);
         let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
@@ -181,7 +181,7 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_stream_next_byte(callback);
+        protolens.set_cb_byte(callback);
         let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt);
@@ -218,7 +218,7 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_stream_next_byte(callback);
+        protolens.set_cb_byte(callback);
         let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
@@ -269,7 +269,7 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_stream_next_byte(callback);
+        protolens.set_cb_byte(callback);
         let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt1);
@@ -320,7 +320,7 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_stream_next_byte(callback);
+        protolens.set_cb_byte(callback);
         let mut task = protolens.new_task();
 
         // 乱序发送包：
@@ -383,7 +383,7 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_stream_next_byte(callback);
+        protolens.set_cb_byte(callback);
         let mut task = protolens.new_task();
 
         protolens.run_task(&mut task, pkt_syn);

@@ -191,7 +191,7 @@ where
     }
 
     #[cfg(test)]
-    pub fn set_cb_stream_next_byte<F>(&mut self, callback: F)
+    pub fn set_cb_byte<F>(&mut self, callback: F)
     where
         F: ByteCbFn + 'static,
     {
@@ -199,7 +199,7 @@ where
     }
 
     #[cfg(test)]
-    pub fn set_cb_stream_read<F>(&mut self, callback: F)
+    pub fn set_cb_read<F>(&mut self, callback: F)
     where
         F: ReadCbFn + 'static,
     {
