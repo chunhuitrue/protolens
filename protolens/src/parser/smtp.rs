@@ -16,12 +16,6 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-#[derive(Debug)]
-enum ContentType {
-    Unknown,
-    Alt,
-}
-
 pub trait SmtpCbFn: FnMut(&[u8], u32, *mut c_void) {}
 impl<F: FnMut(&[u8], u32, *mut c_void)> SmtpCbFn for F {}
 pub(crate) type CbUser = Rc<RefCell<dyn SmtpCbFn + 'static>>;
@@ -97,11 +91,8 @@ where
             //     dbg!("from return err");
             //     return Err(());
             // }
-            // mail from callback
         } else if line.to_ascii_uppercase().starts_with("MAIL FROM:") {
             // 没有auth，直接到mail from的情况
-            // mail from callback
-            dbg!(line);
         } else {
             // 其他auth情况。AUTH PLAIN，AUTH CRAM-MD5
             // 清空mail from之前或有或无的命令
@@ -110,18 +101,13 @@ where
 
         multi_rcpt_to(stm).await?;
 
-        // mail head
-        let (content_type, bdry) = mail_head(stm).await?;
-        dbg!(&content_type, bdry);
+        let (_, boundary) = head(stm, "").await?;
 
-        match content_type {
-            ContentType::Unknown => {
-                body(stm).await?;
-            }
-            ContentType::Alt => {}
+        if let Some(bdry) = boundary {
+            mime(stm, &bdry).await?;
+        } else {
+            body(stm).await?;
         }
-
-        let (_quit, _seq) = stm.read_clean_line_str().await?;
 
         Ok(())
     }
@@ -174,6 +160,198 @@ where
     }
 }
 
+async fn multi_rcpt_to<T, P>(stm: &mut PktStrm<T, P>) -> Result<(), ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    loop {
+        let (line, _seq) = stm.read_clean_line_str().await?;
+
+        if line.eq_ignore_ascii_case("DATA") {
+            break;
+        }
+
+        if let Ok((_, (_mail, _offset))) = rcpt_to(line) {
+            // let mail_seq = seq + offset as u32;
+        } else {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
+async fn body<T, P>(stm: &mut PktStrm<T, P>) -> Result<bool, ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    loop {
+        let (line, _seq) = stm.read_clean_line_str().await?;
+        dbg!(line);
+
+        if line == (".") {
+            break;
+        }
+    }
+    Ok(true)
+}
+
+async fn mime<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(), ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    dbg!("mime start");
+    preamble(stm, bdry).await?;
+    loop {
+        match head(stm, bdry).await? {
+            (HeadRet::Head, bdry) => {
+                if let Some(bdry) = bdry {
+                    Box::pin(mime(stm, &bdry)).await?;
+                }
+            }
+            (HeadRet::Bdry, bdry) => {
+                if let Some(bdry) = bdry {
+                    Box::pin(mime(stm, &bdry)).await?;
+                }
+                continue;
+            }
+            (HeadRet::CloseBdry, bdry) => {
+                if let Some(bdry) = bdry {
+                    Box::pin(mime(stm, &bdry)).await?;
+                }
+                break;
+            }
+        }
+        if mime_body(stm, bdry).await? {
+            dbg!("body break");
+            break;
+        }
+    }
+    dbg!("mime end");
+    Ok(())
+}
+
+async fn preamble<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(), ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    dbg!("preamble start.");
+    loop {
+        let (line, _seq) = stm.read_clean_line_str().await?;
+        dbg!(line);
+
+        if line.starts_with("--")
+            && line.len() >= bdry.len() + 2
+            && &line[2..2 + bdry.len()] == bdry
+        {
+            dbg!("preamble end.");
+            break;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+enum HeadRet {
+    Head,      // 常规head结束
+    Bdry,      // 只有head，没空行.读到boundary
+    CloseBdry, // 只有head，没空行.读到结束boundary
+}
+
+async fn head<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(HeadRet, Option<String>), ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    let mut cont_type = false;
+    let mut boundary = String::new();
+
+    dbg!("head start.");
+    loop {
+        let (line, _seq) = stm.read_clean_line_str().await?;
+        dbg!(line);
+
+        if line.is_empty() {
+            let ret_bdry = if boundary.is_empty() {
+                dbg!("head end. none");
+                None
+            } else {
+                dbg!("head end. bdry");
+                Some(boundary)
+            };
+            return Ok((HeadRet::Head, ret_bdry));
+        }
+        if line.starts_with("--")
+            && line.len() >= bdry.len() + 2
+            && &line[2..2 + bdry.len()] == bdry
+        {
+            let ret_bdry = if boundary.is_empty() {
+                None
+            } else {
+                Some(boundary)
+            };
+            if line.len() >= bdry.len() + 4 && &line[2 + bdry.len()..2 + bdry.len() + 2] == "--" {
+                dbg!("head end. close bdry");
+                return Ok((HeadRet::CloseBdry, ret_bdry));
+            }
+            dbg!("head end. bdry");
+            return Ok((HeadRet::Bdry, ret_bdry));
+        }
+
+        // content-type ext
+        // 放在content-type前面是因为。只有content-type结束之后才能作这个判断。
+        // 放在前面，cont_type 肯定为false
+        if cont_type && boundary.is_empty() {
+            match content_type_ext(line) {
+                Ok((_, bdry)) => {
+                    boundary = bdry.to_string();
+                }
+                Err(_err) => {}
+            }
+        }
+        // content-type
+        match content_type(line) {
+            Ok((_input, Some(bdry))) => {
+                cont_type = true;
+                boundary = bdry.to_string();
+            }
+            Ok((_input, None)) => {
+                cont_type = true;
+            }
+            Err(_err) => {}
+        }
+    }
+}
+
+// 返回true。表示最后的boundary
+// 返回false。表示--boundary
+async fn mime_body<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<bool, ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    dbg!("body start.");
+    loop {
+        let (line, _seq) = stm.read_clean_line_str().await?;
+        dbg!(line);
+
+        if line.starts_with("--")
+            && line.len() >= bdry.len() + 2
+            && &line[2..2 + bdry.len()] == bdry
+        {
+            if line.len() >= bdry.len() + 4 && &line[2 + bdry.len()..2 + bdry.len() + 2] == "--" {
+                dbg!("body end close bdry.");
+                return Ok(true);
+            }
+            dbg!("body end  bdry.");
+            return Ok(false);
+        }
+    }
+}
+
 // MAIL FROM: <user12345@example123.com> SIZE=10557
 #[allow(dead_code)]
 fn mail_from(input: &str) -> IResult<&str, ((&str, usize), usize)> {
@@ -204,89 +382,6 @@ fn rcpt_to(input: &str) -> IResult<&str, (&str, usize)> {
     Ok((input, (mail, start_pos)))
 }
 
-async fn multi_rcpt_to<T, P>(stm: &mut PktStrm<T, P>) -> Result<(), ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    loop {
-        let (line, seq) = stm.read_clean_line_str().await?;
-
-        if line.eq_ignore_ascii_case("DATA") {
-            break;
-        }
-
-        if let Ok((_, (mail, offset))) = rcpt_to(line) {
-            let mail_seq = seq + offset as u32;
-            dbg!("rcpt", mail, mail_seq);
-        } else {
-            return Err(());
-        }
-    }
-    Ok(())
-}
-
-async fn mail_head<T, P>(stm: &mut PktStrm<T, P>) -> Result<(ContentType, String), ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    let mut cont_type_ok = false;
-    let mut cont_type = ContentType::Unknown;
-    let mut boundary = String::new();
-
-    loop {
-        let (line, _seq) = stm.read_clean_line_str().await?;
-
-        // 头结束
-        if line.is_empty() {
-            break;
-        }
-        dbg!(line);
-
-        // // subject
-        // match subject(line) {
-        //     Ok((_, _subject)) => {}
-        //     Err(_err) => {}
-        // }
-
-        // content type
-        match content_type(line) {
-            Ok((_, contenttype)) => {
-                cont_type_ok = true;
-                cont_type = contenttype;
-            }
-            Err(_err) => {}
-        }
-
-        // content type ext
-        match content_type_ext(line, cont_type_ok) {
-            Ok((_, bdry)) => {
-                boundary = bdry.to_string();
-            }
-            Err(_err) => {}
-        }
-    }
-    Ok((cont_type, boundary))
-}
-
-async fn body<T, P>(stm: &mut PktStrm<T, P>) -> Result<(), ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    loop {
-        let (line, _seq) = stm.read_clean_line_str().await?;
-
-        if line == (".") {
-            break;
-        }
-
-        dbg!(line);
-    }
-    Ok(())
-}
-
 // Subject: biaoti
 #[allow(dead_code)]
 fn subject(input: &str) -> IResult<&str, (&str, usize)> {
@@ -299,22 +394,29 @@ fn subject(input: &str) -> IResult<&str, (&str, usize)> {
     Ok((input, (subject, start_pos)))
 }
 
-// Content-Type: multipart/alternative;
-fn content_type(input: &str) -> IResult<&str, ContentType> {
+// 如果是content type 且带boundary: Content-Type: multipart/mixed; boundary="abc123"
+// 返回: (input, some(bdry))
+// 如果是content type 不带bdry: Content-Type: multipart/mixed;
+// 返回: (input, None)
+// 如果不是content type 返回err
+fn content_type(input: &str) -> IResult<&str, Option<&str>> {
     let (input, _) = tag("Content-Type: ")(input)?;
-    if input.contains("multipart/alternative;") {
-        Ok((input, (ContentType::Alt)))
+
+    if let Some(start) = input.find("boundary=\"") {
+        let input = &input[start..];
+
+        let (input, _) = tag("boundary=\"")(input)?;
+        let (input, bdry) = take_till(|c| c == '"')(input)?;
+        let (input, _) = tag("\"")(input)?;
+
+        Ok((input, Some(bdry)))
     } else {
-        Ok((input, (ContentType::Unknown)))
+        Ok((input, None))
     }
 }
 
 // \tboundary="----=_001_NextPart572182624333_=----"
-fn content_type_ext(input: &str, cont_rady: bool) -> IResult<&str, &str> {
-    if !cont_rady {
-        return Ok((input, ""));
-    }
-
+fn content_type_ext(input: &str) -> IResult<&str, &str> {
     let (input, _) = tag("\tboundary=\"")(input)?;
     let (input, bdry) = take_till(|c| c == '"')(input)?;
     Ok((input, bdry))
@@ -326,15 +428,6 @@ fn starts_with_helo(input: &[u8]) -> bool {
     }
     let upper = input[..4].to_ascii_uppercase();
     upper == b"EHLO" || upper == b"HELO"
-}
-
-#[allow(dead_code)]
-fn starts_with_auth_login(input: &[u8]) -> bool {
-    if input.len() < 10 {
-        return false;
-    }
-    let upper = input[..10].to_ascii_uppercase();
-    upper == b"AUTH LOGIN"
 }
 
 pub(crate) struct SmtpFactory<T, P> {
@@ -410,6 +503,46 @@ mod tests {
     }
 
     #[test]
+    fn test_content_type() {
+        // 测试用例1: 包含 boundary 的正常情况
+        let input = "Content-Type: multipart/mixed; charset=utf-8; boundary=\"abc123\"";
+        let result = content_type(input);
+        assert!(result.is_ok());
+        let (rest, boundary) = result.unwrap();
+        assert_eq!(boundary, Some("abc123"));
+        assert!(rest.is_empty());
+
+        // 测试用例2: 包含 boundary 且后面还有其他参数
+        let input = "Content-Type: multipart/mixed; boundary=\"xyz789\"; other=value";
+        let result = content_type(input);
+        assert!(result.is_ok());
+        let (rest, boundary) = result.unwrap();
+        assert_eq!(boundary, Some("xyz789"));
+        assert_eq!(rest, "; other=value");
+
+        // 测试用例3: 不包含 boundary 的情况
+        let input = "Content-Type: text/plain; charset=utf-8";
+        let result = content_type(input);
+        assert!(result.is_ok());
+        let (rest, boundary) = result.unwrap();
+        assert_eq!(boundary, None);
+        assert_eq!(rest, "text/plain; charset=utf-8");
+
+        // 测试用例4: 特殊字符的 boundary
+        let input = "Content-Type: multipart/mixed; boundary=\"----=_NextPart_000_0000_01D123456.789ABCDE\"";
+        let result = content_type(input);
+        assert!(result.is_ok());
+        let (rest, boundary) = result.unwrap();
+        assert_eq!(boundary, Some("----=_NextPart_000_0000_01D123456.789ABCDE"));
+        assert!(rest.is_empty());
+
+        // 测试用例5: 错误格式 - 不是以 Content-Type: 开头
+        let input = "Wrong-Type: multipart/mixed; boundary=\"abc123\"";
+        let result = content_type(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_starts_with_ehlo() {
         // 正确的情况
         assert!(starts_with_helo(b"EHLO example.com"));
@@ -423,20 +556,6 @@ mod tests {
         assert!(!starts_with_helo(b"EHL"));
         assert!(!starts_with_helo(b""));
         assert!(!starts_with_helo(b"MAIL FROM:"));
-    }
-
-    #[test]
-    fn test_starts_with_auth_login() {
-        // 正确的情况
-        assert!(starts_with_auth_login(b"AUTH LOGIN"));
-        assert!(starts_with_auth_login(b"auth login"));
-        assert!(starts_with_auth_login(b"Auth Login credentials"));
-
-        // 错误的情况
-        assert!(!starts_with_auth_login(b"AUTH PLAIN")); // 错误的认证方式
-        assert!(!starts_with_auth_login(b"AUTH")); // 不完整
-        assert!(!starts_with_auth_login(b"")); // 空输入
-        assert!(!starts_with_auth_login(b"LOGIN")); // 缺少AUTH前缀
     }
 
     #[test]
@@ -668,6 +787,256 @@ mod tests {
             "cGFzc3dvcmQxMjM=\r\n",         // pass
         ];
 
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_user_seq = Rc::new(RefCell::new(0u32));
+        let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_pass_seq = Rc::new(RefCell::new(0u32));
+
+        let user_callback = {
+            let user_clone = captured_user.clone();
+            let seq_clone = captured_user_seq.clone();
+            move |user: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut user_guard = user_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *user_guard = user.to_vec();
+                *seq_guard = seq;
+                println!(
+                    "User callback: {}, seq: {}",
+                    std::str::from_utf8(user).unwrap_or("invalid utf8"),
+                    seq
+                );
+            }
+        };
+
+        let pass_callback = {
+            let pass_clone = captured_pass.clone();
+            let seq_clone = captured_pass_seq.clone();
+            move |pass: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut pass_guard = pass_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *pass_guard = pass.to_vec();
+                *seq_guard = seq;
+                println!(
+                    "Pass callback: {}, seq: {}",
+                    std::str::from_utf8(pass).unwrap_or("invalid utf8"),
+                    seq
+                );
+            }
+        };
+
+        protolens.set_cb_smtp_user(user_callback);
+        protolens.set_cb_smtp_pass(pass_callback);
+
+        let mut task = protolens.new_task();
+
+        let mut seq = 1000;
+        for line in lines.iter() {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload(seq, line_bytes);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Smtp);
+
+            protolens.run_task(&mut task, pkt);
+
+            seq += line_bytes.len() as u32;
+        }
+
+        assert_eq!(
+            std::str::from_utf8(&captured_user.borrow()).unwrap(),
+            "",
+            "no user"
+        );
+        assert_eq!(
+            std::str::from_utf8(&captured_pass.borrow()).unwrap(),
+            "",
+            "no pass"
+        );
+        assert!(
+            *captured_user_seq.borrow() == 0,
+            "User sequence number should be 0"
+        );
+        assert!(
+            *captured_pass_seq.borrow() == 0,
+            "Password sequence number should be 0"
+        );
+    }
+
+    #[test]
+    fn test_smtp_mime_flat() {
+        let lines = [
+            "EHLO client.example.com\r\n",
+            "MAIL FROM: <sender@example.com>\r\n",
+            "RCPT TO: <recipient1@example.com>\r\n",
+            "RCPT TO: <recipient2@example.com>\r\n",
+            "DATA\r\n",
+            "From: sender@example.com\r\n",
+            "To: recipient@example.com\r\n",
+            "Subject: Email Subject\r\n",
+            "Date: Mon, 01 Jan 2023 12:00:00 +0000\r\n",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_001_NextPart572182624333_=----\"\r\n",
+            "\r\n",
+            "This is the preamble1.\r\n",
+            "This is the preamble2.\r\n",
+            "\r\n",
+            "------=_001_NextPart572182624333_=----\r\n",
+            "\r\n", // head 为空
+            "aGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRk\r\n",
+            "ZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVs\r\n",
+            "\r\n",
+            "------=_001_NextPart572182624333_=----\r\n",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n", // 只有head,带空行
+            "------=_001_NextPart572182624333_=----\r\n",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n", // 只有head,不带空行
+            "------=_001_NextPart572182624333_=----\r\n",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
+            "<html> line 1\r\n",
+            "line 2</html>\r\n",
+            "------=_001_NextPart572182624333_=------\r\n",
+            "This is the epilogue 1.\r\n",
+            "This is the epilogue 2.\r\n",
+            ".\r\n",
+            "QUIT\r\n",
+            "\r\n",
+        ];
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_user_seq = Rc::new(RefCell::new(0u32));
+        let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_pass_seq = Rc::new(RefCell::new(0u32));
+
+        let user_callback = {
+            let user_clone = captured_user.clone();
+            let seq_clone = captured_user_seq.clone();
+            move |user: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut user_guard = user_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *user_guard = user.to_vec();
+                *seq_guard = seq;
+                println!(
+                    "User callback: {}, seq: {}",
+                    std::str::from_utf8(user).unwrap_or("invalid utf8"),
+                    seq
+                );
+            }
+        };
+
+        let pass_callback = {
+            let pass_clone = captured_pass.clone();
+            let seq_clone = captured_pass_seq.clone();
+            move |pass: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut pass_guard = pass_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *pass_guard = pass.to_vec();
+                *seq_guard = seq;
+                println!(
+                    "Pass callback: {}, seq: {}",
+                    std::str::from_utf8(pass).unwrap_or("invalid utf8"),
+                    seq
+                );
+            }
+        };
+
+        protolens.set_cb_smtp_user(user_callback);
+        protolens.set_cb_smtp_pass(pass_callback);
+
+        let mut task = protolens.new_task();
+
+        let mut seq = 1000;
+        for line in lines.iter() {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload(seq, line_bytes);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Smtp);
+
+            protolens.run_task(&mut task, pkt);
+
+            seq += line_bytes.len() as u32;
+        }
+
+        assert_eq!(
+            std::str::from_utf8(&captured_user.borrow()).unwrap(),
+            "",
+            "no user"
+        );
+        assert_eq!(
+            std::str::from_utf8(&captured_pass.borrow()).unwrap(),
+            "",
+            "no pass"
+        );
+        assert!(
+            *captured_user_seq.borrow() == 0,
+            "User sequence number should be 0"
+        );
+        assert!(
+            *captured_pass_seq.borrow() == 0,
+            "Password sequence number should be 0"
+        );
+    }
+
+    #[test]
+    fn test_smtp_mime_nest() {
+        let lines = [
+            "EHLO client.example.com\r\n",
+            "MAIL FROM: <sender@example.com>\r\n",
+            "RCPT TO: <recipient1@example.com>\r\n",
+            "DATA\r\n",
+            "From: \"sender\" <sender@example.in>\r\n",
+            "To: <recipient1@example.com>\r\n",
+            "Subject: SMTP\r\n",
+            "Date: Mon, 5 Oct 2009 11:36:07 +0530\r\n",
+            "MIME-Version: 1.0\r\n",
+            "Content-Type: multipart/mixed;\r\n",
+            "\tboundary=\"----=_NextPart_000_0004_01CA45B0.095693F0\"\r\n",
+            "\r\n",
+            "This is the preamble.\r\n",
+            "\r\n",
+            "------=_NextPart_000_0004_01CA45B0.095693F0\r\n", // 外层
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_NextPart_001_0005_01CA45B0.095693F0\"\r\n",
+            "\r\n",
+            "\r\n",                                            // bdry前缀。目前算空行body
+            "------=_NextPart_001_0005_01CA45B0.095693F0\r\n", // 内层
+            "Content-Type: text/plain;\r\n",
+            "Content-Transfer-Encoding: 7bit\r\n",
+            "\r\n",
+            "I send u smtp pcap file \r\n",
+            "Find the attachment\r\n",
+            "\r\n",
+            "\r\n",
+            "------=_NextPart_001_0005_01CA45B0.095693F0\r\n", // 内层
+            "Content-Type: text/html;\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
+            "<html\r\n",
+            "</html>\r\n",
+            "\r\n",
+            "------=_NextPart_001_0005_01CA45B0.095693F0--\r\n", // 内层结束
+            "\r\n",                                              // bdry的开始
+            "------=_NextPart_000_0004_01CA45B0.095693F0\r\n",   // 外层
+            "Content-Type: text/plain;\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
+            "* Profiling support\r\n",
+            "* Lots of bugfixes\r\n",
+            "\r\n",
+            "------=_NextPart_000_0004_01CA45B0.095693F0--\r\n", // 外层结束
+            "\r\n",
+            ".\r\n",
+            "QUIT\r\n",
+        ];
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
 
         let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));

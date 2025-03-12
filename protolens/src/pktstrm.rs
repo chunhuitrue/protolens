@@ -15,6 +15,11 @@ use std::rc::Rc;
 use std::task::Context;
 use std::task::Poll;
 
+pub(crate) enum ReadRet {
+    Data,     // 正常读到了一部分数据
+    DashBdry, // 读到了 "\r\n--"+boundary
+}
+
 pub trait StmCbFn: FnMut(&[u8], u32, *const c_void) {}
 impl<F> StmCbFn for F where F: FnMut(&[u8], u32, *const c_void) {}
 pub type CbStrm = Rc<RefCell<dyn StmCbFn + 'static>>;
@@ -231,7 +236,6 @@ where
                 }
             }
         }
-
         self.prepare_result(num)
     }
 
@@ -288,19 +292,11 @@ where
                 None => {
                     self.read_buff_len = 0;
                     return Err(());
-                    // if self.read_buff_len == 0 {
-                    //     return Err(());
-                    // } else {
-                    //     println!("none byte.retrun");
-                    //     return self.prepare_result(self.read_buff_len);
-                    // }
                 }
             }
         }
         self.read_buff_len = 0;
         Err(())
-        // println!("out.retrun 2");
-        // self.prepare_result(self.read_buff_len)
     }
 
     // 不带\r\n
@@ -324,6 +320,106 @@ where
     pub(crate) async fn read_clean_line_str(&mut self) -> Result<(&str, u32), ()> {
         let (line, seq) = self.read_clean_line().await?;
         std::str::from_utf8(line).map(|s| (s, seq)).map_err(|_| ())
+    }
+
+    // 读取流中的内容直到遇到 boundary
+    // Data，正常读到了一部分数据
+    // Bdry, 读到了"\r\n--"+boundary。boundary边界
+    // CloseBdry 读到了"\r\n--"+boundary+"--"。结束boundary。
+    pub(crate) async fn read_dash_bdry(&mut self, bdry: &str) -> Result<(ReadRet, &[u8], u32), ()> {
+        // 0: 正常读取
+        // 1: 读到\r
+        // 2: 读到\r\n
+        // 3: 读到\r\n-
+        // 4: 读到\r\n--
+        // 5: 读到\r\n--boundary
+        let mut state = 0;
+        let bdry_bytes = bdry.as_bytes();
+        let mut bdry_index = 0;
+
+        while self.read_buff_len < MAX_READ_BUFF {
+            match poll_fn(|cx| Stream::poll_next(Pin::new(self), cx)).await {
+                Some(byte) => {
+                    match state {
+                        0 => {
+                            // 正常状态
+                            if byte == b'\r' {
+                                state = 1;
+                            }
+                        }
+                        1 => {
+                            // 已读到\r
+                            if byte == b'\n' {
+                                state = 2;
+                            } else {
+                                state = 0;
+                            }
+                        }
+                        2 => {
+                            // 已读到\r\n
+                            if byte == b'-' {
+                                state = 3;
+                            } else {
+                                state = 0;
+                            }
+                        }
+                        3 => {
+                            // 已读到\r\n-
+                            if byte == b'-' {
+                                state = 4;
+                                bdry_index = 0;
+                            } else {
+                                state = 0;
+                            }
+                        }
+                        4 => {
+                            // 已读到\r\n--，开始匹配boundary
+                            if bdry_index < bdry_bytes.len() && byte == bdry_bytes[bdry_index] {
+                                bdry_index += 1;
+                                if bdry_index == bdry_bytes.len() {
+                                    // dash bdry匹配了，返回
+                                    let data_len = self.read_buff_len - (2 + 2 + bdry_bytes.len());
+                                    let seq = self.next_seq - self.read_buff_len as u32;
+                                    let data = &self.read_buff[..data_len];
+                                    self.read_buff_len = 0;
+                                    return Ok((ReadRet::DashBdry, data, seq));
+                                } else {
+                                    state = 4;
+                                }
+                            } else {
+                                state = 0;
+                            }
+                        }
+                        _ => {
+                            // 不应该到达这里
+                            state = 0;
+                        }
+                    }
+
+                    self.read_buff[self.read_buff_len] = byte;
+                    self.read_buff_len += 1;
+                }
+                None => {
+                    // 流结束
+                    if self.read_buff_len > 0 {
+                        let seq = self.next_seq - self.read_buff_len as u32;
+                        let data = &self.read_buff[..self.read_buff_len];
+                        self.read_buff_len = 0;
+                        return Ok((ReadRet::Data, data, seq));
+                    } else {
+                        return Err(());
+                    }
+                }
+            }
+        }
+
+        // 没考虑到bdry跨buff最后边界的情况
+
+        // 缓冲区已满，返回数据
+        let seq = self.next_seq - self.read_buff_len as u32;
+        let data = &self.read_buff[..self.read_buff_len];
+        self.read_buff_len = 0;
+        Ok((ReadRet::Data, data, seq))
     }
 
     // 异步方式获取下一个严格有序的包。包含载荷为0的
@@ -437,24 +533,6 @@ where
         self.next_seq += 1;
         Poll::Ready(Some(byte))
     }
-
-    // fn poll_next(
-    //     mut self: Pin<&mut Self>,
-    //     _cx: &mut Context<'_>,
-    // ) -> std::task::Poll<Option<Self::Item>> {
-    //     if let Some(pkt) = self.peek_ord_data() {
-    //         let index = *self.next_seq.borrow() - pkt.seq();
-    //         if (index as usize) < pkt.payload_len() {
-    //             *self.next_seq.borrow_mut() += 1;
-    //             let byte = pkt.payload()[index as usize];
-    //             return Poll::Ready(Some(byte));
-    //         }
-    //     }
-    //     if self.fin {
-    //         return Poll::Ready(None);
-    //     }
-    //     Poll::Pending
-    // }
 }
 
 impl<T, P> fmt::Debug for PktStrm<T, P>
