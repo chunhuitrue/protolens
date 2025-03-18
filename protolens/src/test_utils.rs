@@ -516,44 +516,6 @@ pub(crate) fn build_pkt_syn(seq: u32) -> CapPacket {
     CapPacket::new(1, result.len(), &result)
 }
 
-// 接受任意长度的payload数组
-pub(crate) fn build_pkt_payload(seq: u32, payload: &[u8]) -> CapPacket {
-    //setup the packet headers
-    let mut builder = PacketBuilder::ethernet2(
-        [1, 2, 3, 4, 5, 6],    //source mac
-        [7, 8, 9, 10, 11, 12], //destionation mac
-    )
-    .ipv4(
-        [192, 168, 1, 1], //source ip
-        [192, 168, 1, 2], //desitionation ip
-        20,               //time to life
-    )
-    .tcp(
-        25,   //source port
-        4000, //desitnation port
-        seq,  //sequence number
-        1024, //window size
-    )
-    //set additional tcp header fields
-    .ns() //set the ns flag
-    //supported flags: ns(), fin(), syn(), rst(), psh(), ece(), cwr()
-    .ack(123) //ack flag + the ack number
-    .urg(23) //urg flag + urgent pointer
-    .options(&[
-        TcpOptionElement::Noop,
-        TcpOptionElement::MaximumSegmentSize(1234),
-    ])
-    .unwrap();
-
-    //get some memory to store the result
-    let mut result = Vec::<u8>::with_capacity(builder.size(payload.len()));
-    //serialize
-    //this will automatically set all length fields, checksums and identifiers (ethertype & protocol)
-    builder.write(&mut result, payload).unwrap();
-
-    CapPacket::new(1, result.len(), &result)
-}
-
 // 带载荷，可以带fin
 pub(crate) fn build_pkt(seq: u32, fin: bool) -> CapPacket {
     //setup the packet headers
@@ -605,6 +567,56 @@ pub(crate) fn build_pkt_fin(seq: u32) -> CapPacket {
 
 pub(crate) fn make_pkt_data(seq: u32) -> CapPacket {
     build_pkt(seq, false)
+}
+
+// 接受任意长度的payload数组
+fn build_pkt_payload_inner(seq: u32, payload: &[u8], fin: bool) -> CapPacket {
+    //setup the packet headers
+    let mut builder = PacketBuilder::ethernet2(
+        [1, 2, 3, 4, 5, 6],    //source mac
+        [7, 8, 9, 10, 11, 12], //destionation mac
+    )
+    .ipv4(
+        [192, 168, 1, 1], //source ip
+        [192, 168, 1, 2], //desitionation ip
+        20,               //time to life
+    )
+    .tcp(
+        25,   //source port
+        4000, //desitnation port
+        seq,  //sequence number
+        1024, //window size
+    )
+    //set additional tcp header fields
+    .ns() //set the ns flag
+    //supported flags: ns(), fin(), syn(), rst(), psh(), ece(), cwr()
+    .ack(123) //ack flag + the ack number
+    .urg(23) //urg flag + urgent pointer
+    .options(&[
+        TcpOptionElement::Noop,
+        TcpOptionElement::MaximumSegmentSize(1234),
+    ])
+    .unwrap();
+    if fin {
+        builder = builder.fin();
+    }
+
+    //get some memory to store the result
+    let mut result = Vec::<u8>::with_capacity(builder.size(payload.len()));
+    //serialize
+    //this will automatically set all length fields, checksums and identifiers (ethertype & protocol)
+    builder.write(&mut result, payload).unwrap();
+
+    CapPacket::new(1, result.len(), &result)
+}
+
+// 接受任意长度的payload数组
+pub(crate) fn build_pkt_payload(seq: u32, payload: &[u8]) -> CapPacket {
+    build_pkt_payload_inner(seq, payload, false)
+}
+
+pub(crate) fn build_pkt_payload_fin(seq: u32, payload: &[u8]) -> CapPacket {
+    build_pkt_payload_inner(seq, payload, true)
 }
 
 #[cfg(test)]

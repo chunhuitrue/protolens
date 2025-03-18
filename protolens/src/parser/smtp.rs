@@ -3,6 +3,7 @@ use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
+use crate::ReadRet;
 use crate::packet::*;
 use nom::{
     IResult, Offset,
@@ -58,7 +59,7 @@ where
         }
 
         // 验证起始HELO/EHLO命令, 如果命令不正确，则返回错误，无法继续解析
-        let (helo_line, _) = stm.readline2().await?;
+        let (helo_line, _) = stm.readline().await?;
         if !starts_with_helo(helo_line) {
             dbg!("First line is not HELO/EHLO command");
             return Err(());
@@ -205,27 +206,19 @@ where
     dbg!("mime start");
     preamble(stm, bdry).await?;
     loop {
-        match head(stm, bdry).await? {
-            (HeadRet::Head, bdry) => {
-                if let Some(bdry) = bdry {
-                    Box::pin(mime(stm, &bdry)).await?;
-                }
-            }
-            (HeadRet::Bdry, bdry) => {
-                if let Some(bdry) = bdry {
-                    Box::pin(mime(stm, &bdry)).await?;
-                }
-                continue;
-            }
-            (HeadRet::CloseBdry, bdry) => {
-                if let Some(bdry) = bdry {
-                    Box::pin(mime(stm, &bdry)).await?;
-                }
-                break;
-            }
+        let (head_ret, new_bdry) = head(stm, bdry).await?;
+        if let Some(new_bdry) = new_bdry {
+            Box::pin(mime(stm, &new_bdry)).await?;
         }
-        if mime_body(stm, bdry).await? {
-            dbg!("body break");
+        match head_ret {
+            HeadRet::Head => {}
+            HeadRet::Bdry => continue,
+            HeadRet::CloseBdry => break,
+        }
+
+        mime_body(stm, bdry).await?;
+        if stm.read_dash().await? {
+            dbg!("mime. read dash break");
             break;
         }
     }
@@ -328,28 +321,31 @@ where
 
 // 返回true。表示最后的boundary
 // 返回false。表示--boundary
-async fn mime_body<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<bool, ()>
+async fn mime_body<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    dbg!("body start.");
+    dbg!("mime body. start.");
     loop {
-        let (line, _seq) = stm.read_clean_line_str().await?;
-        dbg!(line);
+        let (ret, content, _seq) = stm.read_dash_bdry(bdry).await?;
 
-        if line.starts_with("--")
-            && line.len() >= bdry.len() + 2
-            && &line[2..2 + bdry.len()] == bdry
-        {
-            if line.len() >= bdry.len() + 4 && &line[2 + bdry.len()..2 + bdry.len() + 2] == "--" {
-                dbg!("body end close bdry.");
-                return Ok(true);
-            }
-            dbg!("body end  bdry.");
-            return Ok(false);
+        if !content.is_empty() {
+            dbg!(
+                "mime body. content",
+                std::str::from_utf8(content).unwrap_or("invalid utf8")
+            );
+            // if let Some(ref cb) = cb_read {
+            //     cb.borrow_mut()(bytes, seq, cb_ctx);
+            // }
+        }
+
+        if ret == ReadRet::DashBdry {
+            break;
         }
     }
+    dbg!("mime body. end.");
+    Ok(())
 }
 
 // MAIL FROM: <user12345@example123.com> SIZE=10557
@@ -1116,7 +1112,7 @@ mod tests {
     #[test]
     fn test_smtp2_parser() {
         let project_root = env::current_dir().unwrap();
-        let file_path = project_root.join("tests/res/smtp.pcap");
+        let file_path = project_root.join("tests/pcap/smtp.pcap");
         let mut cap = Capture::init(file_path).unwrap();
 
         let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));

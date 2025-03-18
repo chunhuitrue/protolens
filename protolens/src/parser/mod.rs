@@ -2,19 +2,19 @@ pub mod ordpacket;
 pub mod smtp;
 
 #[cfg(test)]
+pub mod bdry;
+#[cfg(test)]
 pub mod byte;
 #[cfg(test)]
 pub mod rawpacket;
 #[cfg(test)]
 pub mod read;
 #[cfg(test)]
+pub mod readdash;
+#[cfg(test)]
 pub mod readline;
 #[cfg(test)]
-pub mod readline2;
-#[cfg(test)]
 pub mod readn;
-#[cfg(test)]
-pub mod readn2;
 
 use crate::PacketBind;
 use crate::PktStrm;

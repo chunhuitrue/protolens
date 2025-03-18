@@ -34,19 +34,19 @@ use crate::smtp::*;
 use crate::stats::*;
 
 #[cfg(test)]
+use crate::bdry::*;
+#[cfg(test)]
 use crate::byte::*;
 #[cfg(test)]
 use crate::rawpacket::*;
 #[cfg(test)]
 use crate::read::*;
 #[cfg(test)]
+use crate::readdash::*;
+#[cfg(test)]
 use crate::readline::*;
 #[cfg(test)]
-use crate::readline2::*;
-#[cfg(test)]
 use crate::readn::*;
-#[cfg(test)]
-use crate::readn2::*;
 
 pub type ProlensRc<T> = Prolens<T, Rc<T>>;
 pub type ProlensArc<T> = Prolens<T, Arc<T>>;
@@ -75,11 +75,11 @@ where
     #[cfg(test)]
     cb_readline: Option<CbReadline>,
     #[cfg(test)]
-    cb_readline2: Option<CbReadline2>,
-    #[cfg(test)]
     cb_readn: Option<CbReadn>,
     #[cfg(test)]
-    cb_readn2: Option<CbReadn2>,
+    cb_readbdry: Option<CbReadBdry>,
+    #[cfg(test)]
+    cb_readdash: Option<CbReadDash>,
 }
 
 impl<T, P> Prolens<T, P>
@@ -105,11 +105,11 @@ where
             #[cfg(test)]
             cb_readline: None,
             #[cfg(test)]
-            cb_readline2: None,
-            #[cfg(test)]
             cb_readn: None,
             #[cfg(test)]
-            cb_readn2: None,
+            cb_readbdry: None,
+            #[cfg(test)]
+            cb_readdash: None,
             cb_smtp_user: None,
             cb_smtp_pass: None,
         };
@@ -138,14 +138,12 @@ where
                 .insert(L7Proto::Read, Box::new(ReadFactory::<T, P>::new()));
             self.parsers
                 .insert(L7Proto::Readline, Box::new(ReadlineFactory::<T, P>::new()));
-            self.parsers.insert(
-                L7Proto::Readline2,
-                Box::new(Readline2Factory::<T, P>::new()),
-            );
             self.parsers
                 .insert(L7Proto::Readn, Box::new(ReadnFactory::<T, P>::new()));
             self.parsers
-                .insert(L7Proto::Readn2, Box::new(Readn2Factory::<T, P>::new()));
+                .insert(L7Proto::ReadBdry, Box::new(ReadBdryFactory::<T, P>::new()));
+            self.parsers
+                .insert(L7Proto::ReadDash, Box::new(ReadDashFactory::<T, P>::new()));
         }
     }
 
@@ -215,14 +213,6 @@ where
     }
 
     #[cfg(test)]
-    pub fn set_cb_readline2<F>(&mut self, callback: F)
-    where
-        F: ReadLine2CbFn + 'static,
-    {
-        self.cb_readline2 = Some(Rc::new(RefCell::new(callback)));
-    }
-
-    #[cfg(test)]
     pub fn set_cb_readn<F>(&mut self, callback: F)
     where
         F: ReadnCbFn + 'static,
@@ -231,11 +221,19 @@ where
     }
 
     #[cfg(test)]
-    pub fn set_cb_readn2<F>(&mut self, callback: F)
+    pub fn set_cb_readbdry<F>(&mut self, callback: F)
     where
-        F: Readn2CbFn + 'static,
+        F: ReadBdryCbFn + 'static,
     {
-        self.cb_readn2 = Some(Rc::new(RefCell::new(callback)));
+        self.cb_readbdry = Some(Rc::new(RefCell::new(callback)));
+    }
+
+    #[cfg(test)]
+    pub fn set_cb_readdash<F>(&mut self, callback: F)
+    where
+        F: ReadDashCbFn + 'static,
+    {
+        self.cb_readdash = Some(Rc::new(RefCell::new(callback)));
     }
 
     pub fn set_cb_smtp_user<F>(&mut self, callback: F)

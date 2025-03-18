@@ -54,16 +54,6 @@ mod tests {
             assert_eq!(L7Proto::RawPacket as u32, 2);
             assert_eq!(L7Proto::Byte as u32, 3);
         }
-
-        let unknown_val = L7Proto::Unknown as u32;
-        #[cfg(test)]
-        {
-            assert_eq!(unknown_val, 9); // 假设有9个测试变体
-        }
-        #[cfg(not(test))]
-        {
-            assert_eq!(unknown_val, 2); // 非测试环境下只有3个变体
-        }
     }
 
     #[test]

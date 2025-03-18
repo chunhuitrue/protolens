@@ -1,4 +1,4 @@
-pub(crate) const MAX_PKT_BUFF: usize = if cfg!(feature = "pkt_buff_1024") {
+pub(crate) const MAX_PKT_HEAP: usize = if cfg!(feature = "pkt_buff_1024") {
     1024
 } else if cfg!(feature = "pkt_buff_512") {
     512

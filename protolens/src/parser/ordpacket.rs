@@ -123,7 +123,7 @@ mod tests {
     fn test_ordpacket_parser() {
         println!("Starting test_ordpacket_parser");
         let project_root = env::current_dir().unwrap();
-        let file_path = project_root.join("tests/res/smtp.pcap");
+        let file_path = project_root.join("tests/pcap/smtp.pcap");
         println!("Opening pcap file: {:?}", file_path);
         let mut cap = Capture::init(file_path).unwrap();
         let count = Rc::new(RefCell::new(0));

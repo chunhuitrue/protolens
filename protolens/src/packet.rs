@@ -20,11 +20,11 @@ pub enum L7Proto {
     #[cfg(test)]
     Readline,
     #[cfg(test)]
-    Readline2,
-    #[cfg(test)]
     Readn,
     #[cfg(test)]
-    Readn2,
+    ReadBdry,
+    #[cfg(test)]
+    ReadDash,
 
     Unknown,
 }
