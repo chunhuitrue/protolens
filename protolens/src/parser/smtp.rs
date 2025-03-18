@@ -8,9 +8,6 @@ use crate::packet::*;
 use nom::{
     IResult, Offset,
     bytes::complete::{tag, take_till, take_while},
-    character::complete::digit1,
-    combinator::map_res,
-    error::context,
 };
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -19,8 +16,10 @@ use std::rc::Rc;
 
 pub trait SmtpCbFn: FnMut(&[u8], u32, *mut c_void) {}
 impl<F: FnMut(&[u8], u32, *mut c_void)> SmtpCbFn for F {}
+
 pub(crate) type CbUser = Rc<RefCell<dyn SmtpCbFn + 'static>>;
 pub(crate) type CbPass = Rc<RefCell<dyn SmtpCbFn + 'static>>;
+pub(crate) type CbMailFrom = Rc<RefCell<dyn SmtpCbFn + 'static>>;
 
 pub struct SmtpParser<T, P>
 where
@@ -29,6 +28,7 @@ where
 {
     pub(crate) cb_user: Option<CbUser>,
     pub(crate) cb_pass: Option<CbPass>,
+    pub(crate) cb_mailfrom: Option<CbMailFrom>,
     _phantom_t: PhantomData<T>,
     _phantom_p: PhantomData<P>,
 }
@@ -42,6 +42,7 @@ where
         Self {
             cb_user: None,
             cb_pass: None,
+            cb_mailfrom: None,
             _phantom_t: PhantomData,
             _phantom_p: PhantomData,
         }
@@ -50,6 +51,7 @@ where
     async fn c2s_parser_inner(
         cb_user: Option<CbUser>,
         cb_pass: Option<CbPass>,
+        cb_mailfrom: Option<CbMailFrom>,
         stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
@@ -65,7 +67,7 @@ where
             return Err(());
         }
 
-        let (line, _seq) = stm.read_clean_line_str().await?;
+        let (line, seq) = stm.read_clean_line_str().await?;
         if line.eq_ignore_ascii_case("STARTTLS") {
             dbg!("STARTTLS。return error。");
             return Err(());
@@ -84,16 +86,24 @@ where
             dbg!(std::str::from_utf8(pass).expect("need utf8"), seq);
 
             // mail from。暂且不管有没有扩展参数
-            let (_from, _seq) = stm.read_clean_line_str().await?;
-            // if let Ok((_, ((mail, offset), size))) = mail_from(from) {
-            //     let mail_seq = seq + offset as u32;
-            //     dbg!("from", mail, size, mail_seq);
-            // } else {
-            //     dbg!("from return err");
-            //     return Err(());
-            // }
+            let (from, seq) = stm.read_clean_line_str().await?;
+
+            if let Ok((_, (mail, offset))) = mail_from(from) {
+                let mail_seq = seq + offset as u32;
+                if let Some(cb) = cb_mailfrom.clone() {
+                    cb.borrow_mut()(mail.as_bytes(), seq, cb_ctx);
+                }
+                dbg!("from", mail, mail_seq);
+            }
         } else if line.to_ascii_uppercase().starts_with("MAIL FROM:") {
             // 没有auth，直接到mail from的情况
+            if let Ok((_, (mail, offset))) = mail_from(line) {
+                let mail_seq = seq + offset as u32;
+                if let Some(cb) = cb_mailfrom.clone() {
+                    cb.borrow_mut()(mail.as_bytes(), seq, cb_ctx);
+                }
+                dbg!("from===", mail, mail_seq);
+            }
         } else {
             // 其他auth情况。AUTH PLAIN，AUTH CRAM-MD5
             // 清空mail from之前或有或无的命令
@@ -140,9 +150,36 @@ where
         Some(Box::pin(Self::c2s_parser_inner(
             self.cb_user.clone(),
             self.cb_pass.clone(),
+            self.cb_mailfrom.clone(),
             stream,
             cb_ctx,
         )))
+    }
+}
+
+pub(crate) struct SmtpFactory<T, P> {
+    _phantom_t: PhantomData<T>,
+    _phantom_p: PhantomData<P>,
+}
+
+impl<T, P> ParserFactory<T, P> for SmtpFactory<T, P>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T> + 'static,
+{
+    fn new() -> Self {
+        Self {
+            _phantom_t: PhantomData,
+            _phantom_p: PhantomData,
+        }
+    }
+
+    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+        let mut parser = Box::new(SmtpParser::new());
+        parser.cb_user = prolens.cb_smtp_user.clone();
+        parser.cb_pass = prolens.cb_smtp_pass.clone();
+        parser.cb_mailfrom = prolens.cb_smtp_mailfrom.clone();
+        parser
     }
 }
 
@@ -349,21 +386,14 @@ where
 }
 
 // MAIL FROM: <user12345@example123.com> SIZE=10557
-#[allow(dead_code)]
-fn mail_from(input: &str) -> IResult<&str, ((&str, usize), usize)> {
+fn mail_from(input: &str) -> IResult<&str, (&str, usize)> {
     let original_input = input;
     let (input, _) = tag("MAIL FROM: <")(input)?;
 
     let start_pos = original_input.offset(input);
     let (input, mail) = take_while(|c| c != '>')(input)?;
 
-    let (input, _) = tag("> SIZE=")(input)?;
-    let (input, size) = context(
-        "invalid SIZE value",
-        map_res(digit1, |s: &str| s.parse::<usize>()),
-    )(input)?;
-
-    Ok((input, ((mail, start_pos), size)))
+    Ok((input, (mail, start_pos)))
 }
 
 // RCPT TO: <user12345@example123.com>
@@ -426,31 +456,6 @@ fn starts_with_helo(input: &[u8]) -> bool {
     upper == b"EHLO" || upper == b"HELO"
 }
 
-pub(crate) struct SmtpFactory<T, P> {
-    _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
-}
-
-impl<T, P> ParserFactory<T, P> for SmtpFactory<T, P>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
-{
-    fn new() -> Self {
-        Self {
-            _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
-        }
-    }
-
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
-        let mut parser = Box::new(SmtpParser::new());
-        parser.cb_user = prolens.cb_smtp_user.clone();
-        parser.cb_pass = prolens.cb_smtp_pass.clone();
-        parser
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,17 +464,24 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn test_mail_from() {
+    fn test_mail_from_with_size() {
+        // 用例1: 带size
         let input = "MAIL FROM: <user12345@example123.com> SIZE=10557";
         let result = mail_from(input);
 
         assert!(result.is_ok());
-        let (_, ((mail, start), size)) = result.unwrap();
-
+        let (_, (mail, start)) = result.unwrap();
         assert_eq!(mail, "user12345@example123.com");
-        assert_eq!(size, 10557);
         assert_eq!(start, 12);
-        println!("mail: '{}' (offset: {})", mail, start);
+
+        // 用例2: 不带size
+        let input = "MAIL FROM: <user12345@example123.com>";
+        let result = mail_from(input);
+
+        assert!(result.is_ok());
+        let (_, (mail, start)) = result.unwrap();
+        assert_eq!(mail, "user12345@example123.com");
+        assert_eq!(start, 12);
     }
 
     #[test]
@@ -608,6 +620,7 @@ mod tests {
         let captured_user_seq = Rc::new(RefCell::new(0u32));
         let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_pass_seq = Rc::new(RefCell::new(0u32));
+        let captured_mailfrom = Rc::new(RefCell::new(Vec::<u8>::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -641,8 +654,17 @@ mod tests {
             }
         };
 
+        let mailfrom_callback = {
+            let mailfrom_clone = captured_mailfrom.clone();
+            move |mailfrom: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut mailfrom_guard = mailfrom_clone.borrow_mut();
+                *mailfrom_guard = mailfrom.to_vec();
+            }
+        };
+
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
+        protolens.set_cb_smtp_mailfrom(mailfrom_callback);
 
         let mut task = protolens.new_task();
 
@@ -660,21 +682,17 @@ mod tests {
 
         assert_eq!(
             std::str::from_utf8(&captured_user.borrow()).unwrap(),
-            "c2VuZGVyQGV4YW1wbGUuY29t",
-            "User should match expected value"
+            "c2VuZGVyQGV4YW1wbGUuY29t"
         );
         assert_eq!(
             std::str::from_utf8(&captured_pass.borrow()).unwrap(),
-            "cGFzc3dvcmQxMjM=",
-            "Password should match expected value"
+            "cGFzc3dvcmQxMjM="
         );
-        assert!(
-            *captured_user_seq.borrow() > 0,
-            "User sequence number should be captured"
-        );
-        assert!(
-            *captured_pass_seq.borrow() > 0,
-            "Password sequence number should be captured"
+        assert!(*captured_user_seq.borrow() > 1000);
+        assert!(*captured_pass_seq.borrow() > 1000);
+        assert_eq!(
+            std::str::from_utf8(&captured_mailfrom.borrow()).unwrap(),
+            "sender@example.com"
         );
     }
 
@@ -701,8 +719,9 @@ mod tests {
 
         let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_user_seq = Rc::new(RefCell::new(0u32));
-        let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_pass_seq = Rc::new(RefCell::new(0u32));
+        let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_mailfrom = Rc::new(RefCell::new(Vec::<u8>::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -736,8 +755,17 @@ mod tests {
             }
         };
 
+        let mailfrom_callback = {
+            let mailfrom_clone = captured_mailfrom.clone();
+            move |mailfrom: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut mailfrom_guard = mailfrom_clone.borrow_mut();
+                *mailfrom_guard = mailfrom.to_vec();
+            }
+        };
+
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
+        protolens.set_cb_smtp_mailfrom(mailfrom_callback);
 
         let mut task = protolens.new_task();
 
@@ -753,23 +781,14 @@ mod tests {
             seq += line_bytes.len() as u32;
         }
 
+        // 没有auth，应该为空
+        assert_eq!(std::str::from_utf8(&captured_user.borrow()).unwrap(), "");
+        assert_eq!(std::str::from_utf8(&captured_pass.borrow()).unwrap(), "");
+        assert!(*captured_user_seq.borrow() == 0);
+        assert!(*captured_pass_seq.borrow() == 0);
         assert_eq!(
-            std::str::from_utf8(&captured_user.borrow()).unwrap(),
-            "",
-            "no user"
-        );
-        assert_eq!(
-            std::str::from_utf8(&captured_pass.borrow()).unwrap(),
-            "",
-            "no pass"
-        );
-        assert!(
-            *captured_user_seq.borrow() == 0,
-            "User sequence number should be 0"
-        );
-        assert!(
-            *captured_pass_seq.borrow() == 0,
-            "Password sequence number should be 0"
+            std::str::from_utf8(&captured_mailfrom.borrow()).unwrap(),
+            "sender@example.com"
         );
     }
 
@@ -839,24 +858,10 @@ mod tests {
             seq += line_bytes.len() as u32;
         }
 
-        assert_eq!(
-            std::str::from_utf8(&captured_user.borrow()).unwrap(),
-            "",
-            "no user"
-        );
-        assert_eq!(
-            std::str::from_utf8(&captured_pass.borrow()).unwrap(),
-            "",
-            "no pass"
-        );
-        assert!(
-            *captured_user_seq.borrow() == 0,
-            "User sequence number should be 0"
-        );
-        assert!(
-            *captured_pass_seq.borrow() == 0,
-            "Password sequence number should be 0"
-        );
+        assert_eq!(std::str::from_utf8(&captured_user.borrow()).unwrap(), "");
+        assert_eq!(std::str::from_utf8(&captured_pass.borrow()).unwrap(), "");
+        assert!(*captured_user_seq.borrow() == 0);
+        assert!(*captured_pass_seq.borrow() == 0);
     }
 
     #[test]
@@ -912,6 +917,7 @@ mod tests {
         let captured_user_seq = Rc::new(RefCell::new(0u32));
         let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_pass_seq = Rc::new(RefCell::new(0u32));
+        let captured_mailfrom = Rc::new(RefCell::new(Vec::<u8>::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -945,8 +951,17 @@ mod tests {
             }
         };
 
+        let mailfrom_callback = {
+            let mailfrom_clone = captured_mailfrom.clone();
+            move |mailfrom: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut mailfrom_guard = mailfrom_clone.borrow_mut();
+                *mailfrom_guard = mailfrom.to_vec();
+            }
+        };
+
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
+        protolens.set_cb_smtp_mailfrom(mailfrom_callback);
 
         let mut task = protolens.new_task();
 
@@ -962,23 +977,13 @@ mod tests {
             seq += line_bytes.len() as u32;
         }
 
+        assert_eq!(std::str::from_utf8(&captured_user.borrow()).unwrap(), "");
+        assert_eq!(std::str::from_utf8(&captured_pass.borrow()).unwrap(), "");
+        assert!(*captured_user_seq.borrow() == 0);
+        assert!(*captured_pass_seq.borrow() == 0);
         assert_eq!(
-            std::str::from_utf8(&captured_user.borrow()).unwrap(),
-            "",
-            "no user"
-        );
-        assert_eq!(
-            std::str::from_utf8(&captured_pass.borrow()).unwrap(),
-            "",
-            "no pass"
-        );
-        assert!(
-            *captured_user_seq.borrow() == 0,
-            "User sequence number should be 0"
-        );
-        assert!(
-            *captured_pass_seq.borrow() == 0,
-            "Password sequence number should be 0"
+            std::str::from_utf8(&captured_mailfrom.borrow()).unwrap(),
+            "sender@example.com"
         );
     }
 
@@ -1039,6 +1044,7 @@ mod tests {
         let captured_user_seq = Rc::new(RefCell::new(0u32));
         let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_pass_seq = Rc::new(RefCell::new(0u32));
+        let captured_mailfrom = Rc::new(RefCell::new(Vec::<u8>::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -1072,8 +1078,17 @@ mod tests {
             }
         };
 
+        let mailfrom_callback = {
+            let mailfrom_clone = captured_mailfrom.clone();
+            move |mailfrom: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut mailfrom_guard = mailfrom_clone.borrow_mut();
+                *mailfrom_guard = mailfrom.to_vec();
+            }
+        };
+
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
+        protolens.set_cb_smtp_mailfrom(mailfrom_callback);
 
         let mut task = protolens.new_task();
 
@@ -1089,23 +1104,13 @@ mod tests {
             seq += line_bytes.len() as u32;
         }
 
+        assert_eq!(std::str::from_utf8(&captured_user.borrow()).unwrap(), "");
+        assert_eq!(std::str::from_utf8(&captured_pass.borrow()).unwrap(), "");
+        assert!(*captured_user_seq.borrow() == 0);
+        assert!(*captured_pass_seq.borrow() == 0);
         assert_eq!(
-            std::str::from_utf8(&captured_user.borrow()).unwrap(),
-            "",
-            "no user"
-        );
-        assert_eq!(
-            std::str::from_utf8(&captured_pass.borrow()).unwrap(),
-            "",
-            "no pass"
-        );
-        assert!(
-            *captured_user_seq.borrow() == 0,
-            "User sequence number should be 0"
-        );
-        assert!(
-            *captured_pass_seq.borrow() == 0,
-            "Password sequence number should be 0"
+            std::str::from_utf8(&captured_mailfrom.borrow()).unwrap(),
+            "sender@example.com"
         );
     }
 
@@ -1119,6 +1124,7 @@ mod tests {
         let captured_user_seq = Rc::new(RefCell::new(0u32));
         let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_pass_seq = Rc::new(RefCell::new(0u32));
+        let captured_mailfrom = Rc::new(RefCell::new(Vec::<u8>::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -1144,11 +1150,21 @@ mod tests {
             }
         };
 
+        let mailfrom_callback = {
+            let mailfrom_clone = captured_mailfrom.clone();
+            move |mailfrom: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut mailfrom_guard = mailfrom_clone.borrow_mut();
+                *mailfrom_guard = mailfrom.to_vec();
+            }
+        };
+
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
+        protolens.set_cb_smtp_mailfrom(mailfrom_callback);
+
         let mut task = protolens.new_task();
-        let mut push_count = 0;
 
         loop {
             let now = SystemTime::now()
@@ -1166,32 +1182,20 @@ mod tests {
             pkt.set_l7_proto(L7Proto::Smtp);
 
             if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
-                push_count += 1;
-                dbg!(push_count, pkt.seq());
                 protolens.run_task(&mut task, pkt);
             }
         }
 
         assert_eq!(
             captured_user.borrow().as_slice(),
-            b"dXNlcjEyMzQ1QGV4YW1wbGUxMjMuY29t",
-            "User should match expected value"
+            b"dXNlcjEyMzQ1QGV4YW1wbGUxMjMuY29t"
         );
+        assert_eq!(*captured_user_seq.borrow(), 1341098188);
+        assert_eq!(captured_pass.borrow().as_slice(), b"MTIzNDU2Nzg=");
+        assert_eq!(*captured_pass_seq.borrow(), 1341098222);
         assert_eq!(
-            *captured_user_seq.borrow(),
-            1341098188,
-            "Sequence number should match packet sequence"
-        );
-
-        assert_eq!(
-            captured_pass.borrow().as_slice(),
-            b"MTIzNDU2Nzg=",
-            "Password should match expected value"
-        );
-        assert_eq!(
-            *captured_pass_seq.borrow(),
-            1341098222,
-            "Password sequence number should match packet sequence"
+            std::str::from_utf8(&captured_mailfrom.borrow()).unwrap(),
+            "user12345@example123.com"
         );
     }
 }

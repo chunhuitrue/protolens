@@ -68,6 +68,7 @@ void prolens_set_cb_task_s2c(FfiProlens *prolens, Task *task, CbStm callback);
 void prolens_set_cb_ord_pkt(FfiProlens *prolens, CbOrdPkt callback);
 void prolens_set_cb_smtp_user(FfiProlens *prolens, CbSmtp callback);
 void prolens_set_cb_smtp_pass(FfiProlens *prolens, CbSmtp callback);
+void prolens_set_cb_smtp_mailfrom(FfiProlens *prolens, CbSmtp callback);
 
 #ifdef __cplusplus
 }

@@ -6,7 +6,7 @@ use crate::packet::PktDirection;
 use crate::packet::TransProto;
 use std::cell::RefCell;
 use std::ffi::c_void;
-use std::rc::Rc;  
+use std::rc::Rc;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -162,7 +162,10 @@ pub extern "C" fn protolens_task_new(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn protolens_task_free(prolens: *mut FfiProlens, task: *mut Task<FfiPacket, Rc<FfiPacket>>) {
+pub extern "C" fn protolens_task_free(
+    prolens: *mut FfiProlens,
+    task: *mut Task<FfiPacket, Rc<FfiPacket>>,
+) {
     if task.is_null() || prolens.is_null() {
         return;
     }
@@ -175,7 +178,10 @@ pub extern "C" fn protolens_task_free(prolens: *mut FfiProlens, task: *mut Task<
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn protolens_task_dbinfo(prolens: *mut FfiProlens, task: *mut Task<FfiPacket, Rc<FfiPacket>>) {
+pub extern "C" fn protolens_task_dbinfo(
+    prolens: *mut FfiProlens,
+    task: *mut Task<FfiPacket, Rc<FfiPacket>>,
+) {
     if task.is_null() || prolens.is_null() {
         return;
     }
@@ -310,4 +316,17 @@ pub extern "C" fn prolens_set_cb_smtp_pass(prolens: *mut FfiProlens, callback: O
         callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
     };
     prolens.0.set_cb_smtp_pass(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_smtp_mailfrom(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_smtp_mailfrom(wrapper);
 }

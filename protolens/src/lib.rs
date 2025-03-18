@@ -65,6 +65,7 @@ where
     cb_ord_pkt: Option<CbOrdPkt<T>>,
     cb_smtp_user: Option<CbUser>,
     cb_smtp_pass: Option<CbPass>,
+    cb_smtp_mailfrom: Option<CbMailFrom>,
 
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
@@ -112,9 +113,14 @@ where
             cb_readdash: None,
             cb_smtp_user: None,
             cb_smtp_pass: None,
+            cb_smtp_mailfrom: None,
         };
         prolens.regist_parsers();
         prolens
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     fn regist_parsers(&mut self) {
@@ -157,6 +163,24 @@ where
 
     pub(crate) fn new_task_ffi(&self, cb_ctx: *mut c_void) -> Box<Task<T, P>> {
         Box::new(Task::new(cb_ctx))
+    }
+
+    pub fn run_task(&mut self, task: &mut Task<T, P>, pkt: T) -> Option<Result<(), ()>> {
+        if !task.parser_inited && pkt.l7_proto() != L7Proto::Unknown {
+            let proto = pkt.l7_proto();
+            if self.parsers.contains_key(&proto) {
+                if let Some(factory) = self.parsers.get(&proto) {
+                    task.init_parser(factory.create(self));
+                }
+            }
+        }
+
+        self.stats.packet_count += 1;
+        let wrapper = PacketWrapper {
+            ptr: P::new(pkt),
+            _phantom: PhantomData,
+        };
+        task.run(wrapper)
     }
 
     pub fn set_cb_task_c2s<F>(&self, task: &mut Task<T, P>, callback: F)
@@ -250,26 +274,11 @@ where
         self.cb_smtp_pass = Some(Rc::new(RefCell::new(callback)) as CbPass);
     }
 
-    pub fn run_task(&mut self, task: &mut Task<T, P>, pkt: T) -> Option<Result<(), ()>> {
-        if !task.parser_inited && pkt.l7_proto() != L7Proto::Unknown {
-            let proto = pkt.l7_proto();
-            if self.parsers.contains_key(&proto) {
-                if let Some(factory) = self.parsers.get(&proto) {
-                    task.init_parser(factory.create(self));
-                }
-            }
-        }
-
-        self.stats.packet_count += 1;
-        let wrapper = PacketWrapper {
-            ptr: P::new(pkt),
-            _phantom: PhantomData,
-        };
-        task.run(wrapper)
-    }
-
-    pub fn config(&self) -> &Config {
-        &self.config
+    pub fn set_cb_smtp_mailfrom<F>(&mut self, callback: F)
+    where
+        F: SmtpCbFn + 'static,
+    {
+        self.cb_smtp_mailfrom = Some(Rc::new(RefCell::new(callback)) as CbMailFrom);
     }
 }
 
