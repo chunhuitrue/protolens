@@ -38,6 +38,8 @@ use crate::bdry::*;
 #[cfg(test)]
 use crate::byte::*;
 #[cfg(test)]
+use crate::octet::*;
+#[cfg(test)]
 use crate::rawpacket::*;
 #[cfg(test)]
 use crate::read::*;
@@ -66,6 +68,11 @@ where
     cb_smtp_user: Option<CbUser>,
     cb_smtp_pass: Option<CbPass>,
     cb_smtp_mailfrom: Option<CbMailFrom>,
+    cb_smtp_rcpt: Option<CbRcpt>,
+    cb_smtp_header: Option<CbHeader>,
+    cb_smtp_body_start: Option<CbBodyEvt>,
+    cb_smtp_body: Option<CbBody>,
+    cb_smtp_body_stop: Option<CbBodyEvt>,
 
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
@@ -81,6 +88,8 @@ where
     cb_readbdry: Option<CbReadBdry>,
     #[cfg(test)]
     cb_readdash: Option<CbReadDash>,
+    #[cfg(test)]
+    cb_readoctet: Option<CbReadOctet>,
 }
 
 impl<T, P> Prolens<T, P>
@@ -111,9 +120,16 @@ where
             cb_readbdry: None,
             #[cfg(test)]
             cb_readdash: None,
+            #[cfg(test)]
+            cb_readoctet: None,
             cb_smtp_user: None,
             cb_smtp_pass: None,
             cb_smtp_mailfrom: None,
+            cb_smtp_rcpt: None,
+            cb_smtp_header: None,
+            cb_smtp_body_start: None,
+            cb_smtp_body: None,
+            cb_smtp_body_stop: None,
         };
         prolens.regist_parsers();
         prolens
@@ -150,6 +166,10 @@ where
                 .insert(L7Proto::ReadBdry, Box::new(ReadBdryFactory::<T, P>::new()));
             self.parsers
                 .insert(L7Proto::ReadDash, Box::new(ReadDashFactory::<T, P>::new()));
+            self.parsers.insert(
+                L7Proto::ReadOctet,
+                Box::new(ReadOctetFactory::<T, P>::new()),
+            );
         }
     }
 
@@ -260,6 +280,14 @@ where
         self.cb_readdash = Some(Rc::new(RefCell::new(callback)));
     }
 
+    #[cfg(test)]
+    pub fn set_cb_readoctet<F>(&mut self, callback: F)
+    where
+        F: ReadOctetCbFn + 'static,
+    {
+        self.cb_readoctet = Some(Rc::new(RefCell::new(callback)));
+    }
+
     pub fn set_cb_smtp_user<F>(&mut self, callback: F)
     where
         F: SmtpCbFn + 'static,
@@ -279,6 +307,41 @@ where
         F: SmtpCbFn + 'static,
     {
         self.cb_smtp_mailfrom = Some(Rc::new(RefCell::new(callback)) as CbMailFrom);
+    }
+
+    pub fn set_cb_smtp_rcpt<F>(&mut self, callback: F)
+    where
+        F: SmtpCbFn + 'static,
+    {
+        self.cb_smtp_rcpt = Some(Rc::new(RefCell::new(callback)) as CbRcpt);
+    }
+
+    pub fn set_cb_smtp_header<F>(&mut self, callback: F)
+    where
+        F: SmtpCbFn + 'static,
+    {
+        self.cb_smtp_header = Some(Rc::new(RefCell::new(callback)) as CbHeader);
+    }
+
+    pub fn set_cb_smtp_body_start<F>(&mut self, callback: F)
+    where
+        F: SmtpCbEvtFn + 'static,
+    {
+        self.cb_smtp_body_start = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
+
+    pub fn set_cb_smtp_body<F>(&mut self, callback: F)
+    where
+        F: SmtpCbFn + 'static,
+    {
+        self.cb_smtp_body = Some(Rc::new(RefCell::new(callback)) as CbBody);
+    }
+
+    pub fn set_cb_smtp_body_stop<F>(&mut self, callback: F)
+    where
+        F: SmtpCbEvtFn + 'static,
+    {
+        self.cb_smtp_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
     }
 }
 

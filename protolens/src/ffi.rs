@@ -291,6 +291,7 @@ pub extern "C" fn prolens_set_cb_ord_pkt(prolens: *mut FfiProlens, callback: Opt
 }
 
 type CbSmtp = extern "C" fn(data: *const u8, len: usize, seq: u32, ctx: *const c_void);
+type CbSmtpBodyEvt = extern "C" fn(ctx: *const c_void);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_smtp_user(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
@@ -329,4 +330,75 @@ pub extern "C" fn prolens_set_cb_smtp_mailfrom(prolens: *mut FfiProlens, callbac
         callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
     };
     prolens.0.set_cb_smtp_mailfrom(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_smtp_rcpt(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_smtp_rcpt(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_smtp_header(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_smtp_header(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_smtp_body_start(
+    prolens: *mut FfiProlens,
+    callback: Option<CbSmtpBodyEvt>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void| {
+        callback.unwrap()(ctx);
+    };
+    prolens.0.set_cb_smtp_body_start(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_smtp_body(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_smtp_body_stop(
+    prolens: *mut FfiProlens,
+    callback: Option<CbSmtpBodyEvt>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void| {
+        callback.unwrap()(ctx);
+    };
+    prolens.0.set_cb_smtp_body_stop(wrapper);
 }

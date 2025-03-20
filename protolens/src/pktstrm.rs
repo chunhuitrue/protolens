@@ -21,7 +21,7 @@ enum FillRet {
     NoPkt, // 当前没有数据包到来，无法填充
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub(crate) enum ReadRet {
     Data,     // 正常读到了一部分数据
     DashBdry, // 读到了 "\r\n--"+boundary，同时也携带数据
@@ -294,12 +294,10 @@ where
                         1 => {
                             // 已读到\r
                             if byte == b'\n' {
-                                dbg!("readline_inner: read ok. state 1 0.");
                                 return self.get_buff_data(ignore);
                             } else if byte == b'\r' {
                                 state = 1;
                             } else {
-                                dbg!("readline_inner: break. state 1 1");
                                 state = 0;
                             }
                         }
@@ -309,12 +307,10 @@ where
                     }
                 }
                 None => {
-                    dbg!("readline_inner: none");
                     return Err(());
                 }
             }
         }
-        dbg!("readline_inner: out for, max buff");
         Err(())
     }
 
@@ -331,6 +327,125 @@ where
     pub(crate) async fn read_clean_line_str(&mut self) -> Result<(&str, u32), ()> {
         let (line, seq) = self.read_clean_line().await?;
         Ok((unsafe { std::str::from_utf8_unchecked(line) }, seq))
+    }
+
+    // 有或者没有octect
+    // 有则读到\r\n--bdry
+    // 没有则读到 --bdry
+    // 但不包括bdry结束的\r\n
+    pub(crate) async fn read_mime_octet(
+        &mut self,
+        bdry: &str,
+    ) -> Result<(ReadRet, &[u8], u32), ()> {
+        // 0: 正常读取
+        // 1: 读到\r
+        // 2: 读到\n
+        // 3: 读到-
+        // 4: 读到第二个-
+        let mut state = 0;
+        let bdry_bytes = bdry.as_bytes();
+        let mut bdry_index = 0;
+        let mut match_len = 0;
+
+        for i in 0..MAX_READ_BUFF {
+            match self.next().await {
+                Some(byte) => {
+                    match state {
+                        0 => {
+                            // 正常状态
+                            if byte == b'\r' {
+                                state = 1;
+                                match_len = 1;
+                            } else if byte == b'-' {
+                                state = 3;
+                                match_len = 1;
+                            }
+                        }
+                        1 => {
+                            // 已读到\r
+                            if byte == b'\n' {
+                                state = 2;
+                                match_len += 1;
+                            } else if byte == b'\r' {
+                                state = 1;
+                                match_len = 1;
+                            } else if byte == b'-' {
+                                state = 3;
+                                match_len = 1;
+                            } else {
+                                state = 0;
+                                match_len = 0;
+                            }
+                        }
+                        2 => {
+                            // 已读到\r\n
+                            if byte == b'-' {
+                                state = 3;
+                                match_len += 1;
+                            } else if byte == b'\r' {
+                                state = 1;
+                                match_len = 1;
+                            } else {
+                                state = 0;
+                                match_len = 0;
+                            }
+                        }
+                        3 => {
+                            // 已读到\r\n- 或者 -
+                            if byte == b'-' {
+                                state = 4;
+                                bdry_index = 0;
+                                match_len += 1;
+                            } else if byte == b'\r' {
+                                state = 1;
+                                match_len = 1;
+                            } else {
+                                state = 0;
+                                match_len = 0;
+                            }
+                        }
+                        4 => {
+                            // 已读到\r\n--或--，开始匹配boundary
+                            if bdry_index < bdry_bytes.len() && byte == bdry_bytes[bdry_index] {
+                                bdry_index += 1;
+                                match_len += 1;
+                                if bdry_index == bdry_bytes.len() {
+                                    // dash bdry匹配了，返回
+                                    let (data, seq) = self.get_buff_data(match_len)?;
+                                    return Ok((ReadRet::DashBdry, data, seq));
+                                }
+                            } else if byte == b'\r' {
+                                state = 1;
+                                match_len = 1;
+                            } else if byte == b'-' {
+                                state = 3;
+                                match_len = 1;
+                            } else {
+                                state = 0;
+                                match_len = 0;
+                            }
+                        }
+                        _ => {
+                            // 不应该到达这里
+                            return Err(());
+                        }
+                    }
+                }
+                None => {
+                    // for 循环buff长度过程中如果返回None，不会是到达buff边界，只能是fin
+                    // 如果读到fin都没读到dash bdry。说明有错。
+                    // 虽然此时buff中仍然有读到的数据。但直接出错，不返回数据
+                    return Err(());
+                }
+            } // end match
+        } // end for
+
+        // 处理可能的情况[++++++\r\n--boun]dary
+        if match_len > 0 {
+            self.buff_next -= match_len; // 把match到的部分bdry留在buff中，下次继续match
+        }
+        let (data, seq) = self.get_buff_data(0)?;
+        Ok((ReadRet::Data, data, seq))
     }
 
     // 读取流中的内容直到遇到 \r\n--boundary 注意没有后面的--，不是close boundary
@@ -362,7 +477,6 @@ where
                         1 => {
                             // 已读到\r
                             if byte == b'\n' {
-                                dbg!("read_dash_bdry state 1 get \r\n.");
                                 state = 2;
                                 tail_len = 2;
                             } else if byte == b'\r' {
@@ -376,15 +490,12 @@ where
                         2 => {
                             // 已读到\r\n
                             if byte == b'-' {
-                                dbg!("read_dash_bdry state 2 -.");
                                 state = 3;
                                 tail_len = 3;
                             } else if byte == b'\r' {
-                                dbg!("read_dash_bdry state 2 break, but byte is \r.", byte);
                                 state = 1;
                                 tail_len = 1;
                             } else {
-                                dbg!("read_dash_bdry state 2 break, ", byte);
                                 state = 0;
                                 tail_len = 0;
                             }
@@ -411,7 +522,6 @@ where
                                 if bdry_index == bdry_bytes.len() {
                                     // dash bdry匹配了，返回
                                     let (data, seq) = self.get_buff_data(tail_len)?;
-                                    dbg!("========== read_dash_bdry: ret bdry");
                                     return Ok((ReadRet::DashBdry, data, seq));
                                 }
                             } else if byte == b'\r' {
@@ -423,14 +533,12 @@ where
                             }
                         }
                         _ => {
-                            dbg!("========== read_dash_bdry: in for err");
                             // 不应该到达这里
                             return Err(());
                         }
                     }
                 }
                 None => {
-                    dbg!("========== read_dash_bdry: None");
                     // for 循环buff长度过程中如果返回None，不会是到达buff边界，只能是fin
                     // 如果读到fin都没读到dash bdry。说明有错。
                     // 虽然此时buff中仍然有读到的数据。但直接出错，不返回数据
@@ -444,7 +552,6 @@ where
             self.buff_next -= tail_len;
         }
         let (data, seq) = self.get_buff_data(0)?;
-        dbg!("========== read_dash_bdry: end for", data.len());
         Ok((ReadRet::Data, data, seq))
     }
 
@@ -534,7 +641,8 @@ where
         let data = &self.buff[self.buff_start..(self.buff_start + data_len - ignore)];
 
         if let Some(ref mut cb) = self.cb_strm {
-            cb.borrow_mut()(data, seq, self.cb_ctx);
+            let raw_data = &self.buff[self.buff_start..(self.buff_start + data_len)];
+            cb.borrow_mut()(raw_data, seq, self.cb_ctx);
         }
 
         let result = Ok((data, seq));
@@ -564,11 +672,9 @@ where
             let payload = pkt.payload();
             let payload_len = payload.len();
             let payload_off = (next_seq - seq) as usize;
-            // dbg!("fill_bottom: get pkt", next_seq, payload_len, payload_off);
 
             let space = MAX_READ_BUFF - (buff_start + buff_len);
             if space == 0 {
-                dbg!("fill_bottom: ret space 0. break");
                 break;
             }
 
@@ -576,7 +682,6 @@ where
             if copy_len == 0 {
                 break;
             }
-            dbg!("fill_bottom: copy len", copy_len);
 
             unsafe {
                 std::ptr::copy_nonoverlapping(
@@ -592,16 +697,8 @@ where
 
         if filled {
             self.buff_len = buff_len;
-            // dbg!(
-            //     "fill_bottom: after filled. ret ok",
-            //     self.buff_start,
-            //     self.buff_len,
-            //     self.buff_next,
-            //     self.next_seq,
-            // );
             FillRet::OK
         } else {
-            dbg!("fill_bottom: ret nopkt");
             FillRet::NoPkt
         }
     }
@@ -619,12 +716,6 @@ where
         // 尽量避免移动，如果后面有空间，只填充后面即可
         // case 2
         if self.buff_start + self.buff_len < MAX_READ_BUFF {
-            // dbg!(
-            //     "fill_buff: case 2",
-            //     self.buff_start,
-            //     self.buff_len,
-            //     self.buff_next
-            // );
             return self.fill_bottom();
         }
 
@@ -639,12 +730,9 @@ where
             }
             self.buff_next -= self.buff_start;
             self.buff_start = 0;
-            dbg!("fill_buff: case 3", self.buff_start);
-
             return self.fill_bottom();
         }
 
-        dbg!("fill_buff: final");
         FillRet::Final // 不应该到达这里，相当于出错
     }
 }
@@ -681,19 +769,12 @@ where
         _cx: &mut Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         if self.buff_next >= self.buff_start + self.buff_len {
-            // dbg!(
-            //     "poll_next: no next data. fill_buff",
-            //     self.buff_start,
-            //     self.buff_len,
-            //     self.buff_next,
-            // );
             match self.fill_buff() {
                 FillRet::OK => {}
                 FillRet::Final => {
                     return Poll::Ready(None);
                 }
                 FillRet::NoPkt => {
-                    dbg!("poll_next. nopkt pending");
                     return Poll::Pending;
                 }
             }

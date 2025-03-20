@@ -6,6 +6,8 @@ pub mod bdry;
 #[cfg(test)]
 pub mod byte;
 #[cfg(test)]
+pub mod octet;
+#[cfg(test)]
 pub mod rawpacket;
 #[cfg(test)]
 pub mod read;

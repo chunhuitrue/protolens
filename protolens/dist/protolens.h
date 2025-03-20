@@ -53,6 +53,7 @@ typedef struct {
 typedef void (*CbStm)(const uint8_t *data, size_t data_len, uint32_t seq, const void *ctx);
 typedef void (*CbOrdPkt)(void *pkt_ptr, const void *ctx);
 typedef void (*CbSmtp)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx);
+typedef void (*CbSmtpBodyEvt)(const void *ctx);
 
 void        prolens_init_vtable(PacketVTable vtable);
 FfiProlens *prolens_new(void);
@@ -69,6 +70,12 @@ void prolens_set_cb_ord_pkt(FfiProlens *prolens, CbOrdPkt callback);
 void prolens_set_cb_smtp_user(FfiProlens *prolens, CbSmtp callback);
 void prolens_set_cb_smtp_pass(FfiProlens *prolens, CbSmtp callback);
 void prolens_set_cb_smtp_mailfrom(FfiProlens *prolens, CbSmtp callback);
+void prolens_set_cb_smtp_rcpt(FfiProlens *prolens, CbSmtp callback);
+void prolens_set_cb_smtp_header(FfiProlens *prolens, CbSmtp callback);
+void prolens_set_cb_smtp_body_start(FfiProlens *prolens, CbSmtpBodyEvt callback);
+void prolens_set_cb_smtp_body(FfiProlens *prolens, CbSmtp callback);
+void prolens_set_cb_smtp_body_stop(FfiProlens *prolens, CbSmtpBodyEvt callback);
+
 
 #ifdef __cplusplus
 }

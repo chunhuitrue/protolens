@@ -25,6 +25,8 @@ pub enum L7Proto {
     ReadBdry,
     #[cfg(test)]
     ReadDash,
+    #[cfg(test)]
+    ReadOctet,
 
     Unknown,
 }

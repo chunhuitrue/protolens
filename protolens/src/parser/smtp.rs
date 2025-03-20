@@ -17,9 +17,27 @@ use std::rc::Rc;
 pub trait SmtpCbFn: FnMut(&[u8], u32, *mut c_void) {}
 impl<F: FnMut(&[u8], u32, *mut c_void)> SmtpCbFn for F {}
 
+pub trait SmtpCbEvtFn: FnMut(*mut c_void) {}
+impl<F: FnMut(*mut c_void)> SmtpCbEvtFn for F {}
+
 pub(crate) type CbUser = Rc<RefCell<dyn SmtpCbFn + 'static>>;
 pub(crate) type CbPass = Rc<RefCell<dyn SmtpCbFn + 'static>>;
 pub(crate) type CbMailFrom = Rc<RefCell<dyn SmtpCbFn + 'static>>;
+pub(crate) type CbRcpt = Rc<RefCell<dyn SmtpCbFn + 'static>>;
+pub(crate) type CbHeader = Rc<RefCell<dyn SmtpCbFn + 'static>>;
+pub(crate) type CbBodyEvt = Rc<RefCell<dyn SmtpCbEvtFn + 'static>>;
+pub(crate) type CbBody = Rc<RefCell<dyn SmtpCbFn + 'static>>;
+
+pub(crate) struct SmtpCallbacks {
+    pub(crate) user: Option<CbUser>,
+    pub(crate) pass: Option<CbPass>,
+    pub(crate) mailfrom: Option<CbMailFrom>,
+    pub(crate) rcpt: Option<CbRcpt>,
+    pub(crate) header: Option<CbHeader>,
+    pub(crate) body_start: Option<CbBodyEvt>,
+    pub(crate) body: Option<CbBody>,
+    pub(crate) body_stop: Option<CbBodyEvt>,
+}
 
 pub struct SmtpParser<T, P>
 where
@@ -29,6 +47,11 @@ where
     pub(crate) cb_user: Option<CbUser>,
     pub(crate) cb_pass: Option<CbPass>,
     pub(crate) cb_mailfrom: Option<CbMailFrom>,
+    pub(crate) cb_rcpt: Option<CbRcpt>,
+    pub(crate) cb_header: Option<CbHeader>,
+    pub(crate) cb_body_start: Option<CbBodyEvt>,
+    pub(crate) cb_body: Option<CbBody>,
+    pub(crate) cb_body_stop: Option<CbBodyEvt>,
     _phantom_t: PhantomData<T>,
     _phantom_p: PhantomData<P>,
 }
@@ -43,16 +66,19 @@ where
             cb_user: None,
             cb_pass: None,
             cb_mailfrom: None,
+            cb_rcpt: None,
+            cb_header: None,
+            cb_body_start: None,
+            cb_body: None,
+            cb_body_stop: None,
             _phantom_t: PhantomData,
             _phantom_p: PhantomData,
         }
     }
 
     async fn c2s_parser_inner(
-        cb_user: Option<CbUser>,
-        cb_pass: Option<CbPass>,
-        cb_mailfrom: Option<CbMailFrom>,
         stream: *const PktStrm<T, P>,
+        cb: SmtpCallbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm: &mut PktStrm<T, P>;
@@ -63,61 +89,65 @@ where
         // 验证起始HELO/EHLO命令, 如果命令不正确，则返回错误，无法继续解析
         let (helo_line, _) = stm.readline().await?;
         if !starts_with_helo(helo_line) {
-            dbg!("First line is not HELO/EHLO command");
             return Err(());
         }
 
         let (line, seq) = stm.read_clean_line_str().await?;
         if line.eq_ignore_ascii_case("STARTTLS") {
-            dbg!("STARTTLS。return error。");
             return Err(());
         } else if line.eq_ignore_ascii_case("AUTH LOGIN") {
             // user
             let (user, seq) = stm.read_clean_line().await?;
-            if let Some(cb) = cb_user {
+            if let Some(cb) = cb.user {
                 cb.borrow_mut()(user, seq, cb_ctx);
             }
 
             // pass
             let (pass, seq) = stm.read_clean_line().await?;
-            if let Some(cb) = cb_pass.clone() {
+            if let Some(cb) = cb.pass.clone() {
                 cb.borrow_mut()(pass, seq, cb_ctx);
             }
-            dbg!(std::str::from_utf8(pass).expect("need utf8"), seq);
 
             // mail from。暂且不管有没有扩展参数
             let (from, seq) = stm.read_clean_line_str().await?;
 
             if let Ok((_, (mail, offset))) = mail_from(from) {
-                let mail_seq = seq + offset as u32;
-                if let Some(cb) = cb_mailfrom.clone() {
-                    cb.borrow_mut()(mail.as_bytes(), seq, cb_ctx);
+                let mailfrom_seq = seq + offset as u32;
+                if let Some(cb) = cb.mailfrom.clone() {
+                    cb.borrow_mut()(mail.as_bytes(), mailfrom_seq, cb_ctx);
                 }
-                dbg!("from", mail, mail_seq);
             }
         } else if line.to_ascii_uppercase().starts_with("MAIL FROM:") {
             // 没有auth，直接到mail from的情况
             if let Ok((_, (mail, offset))) = mail_from(line) {
-                let mail_seq = seq + offset as u32;
-                if let Some(cb) = cb_mailfrom.clone() {
-                    cb.borrow_mut()(mail.as_bytes(), seq, cb_ctx);
+                let mailfrom_seq = seq + offset as u32;
+                if let Some(cb) = cb.mailfrom.clone() {
+                    cb.borrow_mut()(mail.as_bytes(), mailfrom_seq, cb_ctx);
                 }
-                dbg!("from===", mail, mail_seq);
             }
         } else {
             // 其他auth情况。AUTH PLAIN，AUTH CRAM-MD5
             // 清空mail from之前或有或无的命令
-            read_to_from(stm).await?;
+            read_to_from(stm, cb.mailfrom, cb_ctx).await?;
         }
 
-        multi_rcpt_to(stm).await?;
+        multi_rcpt_to(stm, cb.rcpt, cb_ctx).await?;
 
-        let (_, boundary) = head(stm, "").await?;
+        let boundary = header(stm, cb.header.clone(), cb_ctx).await?;
 
         if let Some(bdry) = boundary {
-            mime(stm, &bdry).await?;
+            multi_body(
+                stm,
+                &bdry,
+                cb.header,
+                cb.body_start,
+                cb.body,
+                cb.body_stop,
+                cb_ctx,
+            )
+            .await?;
         } else {
-            body(stm).await?;
+            body(stm, cb.body_start, cb.body, cb.body_stop, cb_ctx).await?;
         }
 
         Ok(())
@@ -147,13 +177,18 @@ where
         stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        Some(Box::pin(Self::c2s_parser_inner(
-            self.cb_user.clone(),
-            self.cb_pass.clone(),
-            self.cb_mailfrom.clone(),
-            stream,
-            cb_ctx,
-        )))
+        let cb = SmtpCallbacks {
+            user: self.cb_user.clone(),
+            pass: self.cb_pass.clone(),
+            mailfrom: self.cb_mailfrom.clone(),
+            rcpt: self.cb_rcpt.clone(),
+            header: self.cb_header.clone(),
+            body_start: self.cb_body_start.clone(),
+            body: self.cb_body.clone(),
+            body_stop: self.cb_body_stop.clone(),
+        };
+
+        Some(Box::pin(Self::c2s_parser_inner(stream, cb, cb_ctx)))
     }
 }
 
@@ -179,39 +214,61 @@ where
         parser.cb_user = prolens.cb_smtp_user.clone();
         parser.cb_pass = prolens.cb_smtp_pass.clone();
         parser.cb_mailfrom = prolens.cb_smtp_mailfrom.clone();
+        parser.cb_rcpt = prolens.cb_smtp_rcpt.clone();
+        parser.cb_header = prolens.cb_smtp_header.clone();
+        parser.cb_body_start = prolens.cb_smtp_body_start.clone();
+        parser.cb_body = prolens.cb_smtp_body.clone();
+        parser.cb_body_stop = prolens.cb_smtp_body_stop.clone();
         parser
     }
 }
 
-async fn read_to_from<T, P>(stm: &mut PktStrm<T, P>) -> Result<(), ()>
+async fn read_to_from<T, P>(
+    stm: &mut PktStrm<T, P>,
+    cb_mailfrom: Option<CbMailFrom>,
+    cb_ctx: *mut c_void,
+) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
     loop {
-        let (line, _seq) = stm.read_clean_line_str().await?;
+        let (line, seq) = stm.read_clean_line_str().await?;
 
         if line.to_ascii_uppercase().starts_with("MAIL FROM:") {
-            // mail from callback
+            if let Ok((_, (mail, offset))) = mail_from(line) {
+                let mailfrom_seq = seq + offset as u32;
+                if let Some(cb) = cb_mailfrom.clone() {
+                    cb.borrow_mut()(mail.as_bytes(), mailfrom_seq, cb_ctx);
+                }
+            }
+
             return Ok(());
         }
     }
 }
 
-async fn multi_rcpt_to<T, P>(stm: &mut PktStrm<T, P>) -> Result<(), ()>
+async fn multi_rcpt_to<T, P>(
+    stm: &mut PktStrm<T, P>,
+    cb_rcpt: Option<CbRcpt>,
+    cb_ctx: *mut c_void,
+) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
     loop {
-        let (line, _seq) = stm.read_clean_line_str().await?;
+        let (line, seq) = stm.read_clean_line_str().await?;
 
         if line.eq_ignore_ascii_case("DATA") {
             break;
         }
 
-        if let Ok((_, (_mail, _offset))) = rcpt_to(line) {
-            // let mail_seq = seq + offset as u32;
+        if let Ok((_, (mail, offset))) = rcpt_to(line) {
+            let mail_seq = seq + offset as u32;
+            if let Some(cb) = cb_rcpt.clone() {
+                cb.borrow_mut()(mail.as_bytes(), mail_seq, cb_ctx);
+            }
         } else {
             return Err(());
         }
@@ -219,47 +276,88 @@ where
     Ok(())
 }
 
-async fn body<T, P>(stm: &mut PktStrm<T, P>) -> Result<bool, ()>
+async fn body<T, P>(
+    stm: &mut PktStrm<T, P>,
+    cb_body_start: Option<CbBodyEvt>,
+    cb_body: Option<CbBody>,
+    cb_body_stop: Option<CbBodyEvt>,
+    cb_ctx: *mut c_void,
+) -> Result<bool, ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
+    dbg!("body start");
+    if let Some(cb) = cb_body_start.clone() {
+        cb.borrow_mut()(cb_ctx);
+    }
     loop {
-        let (line, _seq) = stm.read_clean_line_str().await?;
-        dbg!(line);
+        let (line, seq) = stm.read_clean_line_str().await?;
 
         if line == (".") {
             break;
         }
+
+        dbg!(line);
+        if let Some(cb) = cb_body.clone() {
+            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
+        }
     }
+    if let Some(cb) = cb_body_stop.clone() {
+        cb.borrow_mut()(cb_ctx);
+    }
+    dbg!("body end");
     Ok(true)
 }
 
-async fn mime<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(), ()>
+async fn multi_body<T, P>(
+    stm: &mut PktStrm<T, P>,
+    bdry: &str,
+    cb_header: Option<CbHeader>,
+    cb_body_start: Option<CbBodyEvt>,
+    cb_body: Option<CbBody>,
+    cb_body_stop: Option<CbBodyEvt>,
+    cb_ctx: *mut c_void,
+) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    dbg!("mime start");
     preamble(stm, bdry).await?;
     loop {
-        let (head_ret, new_bdry) = head(stm, bdry).await?;
-        if let Some(new_bdry) = new_bdry {
-            Box::pin(mime(stm, &new_bdry)).await?;
-        }
-        match head_ret {
-            HeadRet::Head => {}
-            HeadRet::Bdry => continue,
-            HeadRet::CloseBdry => break,
+        if let Some(new_bdry) = header(stm, cb_header.clone(), cb_ctx).await? {
+            Box::pin(multi_body(
+                stm,
+                &new_bdry,
+                cb_header.clone(),
+                cb_body_start.clone(),
+                cb_body.clone(),
+                cb_body_stop.clone(),
+                cb_ctx,
+            ))
+            .await?;
         }
 
-        mime_body(stm, bdry).await?;
-        if stm.read_dash().await? {
-            dbg!("mime. read dash break");
+        mime_body(
+            stm,
+            bdry,
+            cb_body_start.clone(),
+            cb_body.clone(),
+            cb_body_stop.clone(),
+            cb_ctx,
+        )
+        .await?;
+
+        let (byte, _seq) = stm.readn(2).await?;
+        if byte.starts_with(b"--") {
+            dbg!("muti_body end");
             break;
+        } else if byte.starts_with(b"\r\n") {
+            continue;
+        } else {
+            return Err(());
         }
     }
-    dbg!("mime end");
     Ok(())
 }
 
@@ -268,30 +366,21 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    dbg!("preamble start.");
-    loop {
-        let (line, _seq) = stm.read_clean_line_str().await?;
-        dbg!(line);
+    mime_body(stm, bdry, None, None, None, std::ptr::null_mut()).await?;
 
-        if line.starts_with("--")
-            && line.len() >= bdry.len() + 2
-            && &line[2..2 + bdry.len()] == bdry
-        {
-            dbg!("preamble end.");
-            break;
-        }
+    let (byte, _seq) = stm.readn(2).await?;
+    if byte.starts_with(b"\r\n") {
+        Ok(())
+    } else {
+        Err(())
     }
-    Ok(())
 }
 
-#[derive(Debug)]
-enum HeadRet {
-    Head,      // 常规head结束
-    Bdry,      // 只有head，没空行.读到boundary
-    CloseBdry, // 只有head，没空行.读到结束boundary
-}
-
-async fn head<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(HeadRet, Option<String>), ()>
+async fn header<T, P>(
+    stm: &mut PktStrm<T, P>,
+    cb_header: Option<CbHeader>,
+    cb_ctx: *mut c_void,
+) -> Result<Option<String>, ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
@@ -299,36 +388,24 @@ where
     let mut cont_type = false;
     let mut boundary = String::new();
 
-    dbg!("head start.");
+    dbg!("header. start");
     loop {
-        let (line, _seq) = stm.read_clean_line_str().await?;
+        let (line, seq) = stm.read_clean_line_str().await?;
+
+        // 空行也回调。调用者知道header结束
+        if let Some(cb) = cb_header.clone() {
+            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
+        }
         dbg!(line);
 
         if line.is_empty() {
             let ret_bdry = if boundary.is_empty() {
-                dbg!("head end. none");
-                None
-            } else {
-                dbg!("head end. bdry");
-                Some(boundary)
-            };
-            return Ok((HeadRet::Head, ret_bdry));
-        }
-        if line.starts_with("--")
-            && line.len() >= bdry.len() + 2
-            && &line[2..2 + bdry.len()] == bdry
-        {
-            let ret_bdry = if boundary.is_empty() {
                 None
             } else {
                 Some(boundary)
             };
-            if line.len() >= bdry.len() + 4 && &line[2 + bdry.len()..2 + bdry.len() + 2] == "--" {
-                dbg!("head end. close bdry");
-                return Ok((HeadRet::CloseBdry, ret_bdry));
-            }
-            dbg!("head end. bdry");
-            return Ok((HeadRet::Bdry, ret_bdry));
+            dbg!("header. end");
+            return Ok(ret_bdry);
         }
 
         // content-type ext
@@ -356,32 +433,37 @@ where
     }
 }
 
-// 返回true。表示最后的boundary
-// 返回false。表示--boundary
-async fn mime_body<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(), ()>
+async fn mime_body<T, P>(
+    stm: &mut PktStrm<T, P>,
+    bdry: &str,
+    cb_body_start: Option<CbBodyEvt>,
+    cb_body: Option<CbBody>,
+    cb_body_stop: Option<CbBodyEvt>,
+    cb_ctx: *mut c_void,
+) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    dbg!("mime body. start.");
+    dbg!("mime body start");
+    if let Some(cb) = cb_body_start.clone() {
+        cb.borrow_mut()(cb_ctx);
+    }
     loop {
-        let (ret, content, _seq) = stm.read_dash_bdry(bdry).await?;
-
-        if !content.is_empty() {
-            dbg!(
-                "mime body. content",
-                std::str::from_utf8(content).unwrap_or("invalid utf8")
-            );
-            // if let Some(ref cb) = cb_read {
-            //     cb.borrow_mut()(bytes, seq, cb_ctx);
-            // }
+        let (ret, content, seq) = stm.read_mime_octet(bdry).await?;
+        dbg!(std::str::from_utf8(content).unwrap_or(""));
+        if let Some(cb) = cb_body.clone() {
+            cb.borrow_mut()(content, seq, cb_ctx);
         }
 
         if ret == ReadRet::DashBdry {
             break;
         }
     }
-    dbg!("mime body. end.");
+    if let Some(cb) = cb_body_stop.clone() {
+        cb.borrow_mut()(cb_ctx);
+    }
+    dbg!("mime body end");
     Ok(())
 }
 
@@ -408,7 +490,6 @@ fn rcpt_to(input: &str) -> IResult<&str, (&str, usize)> {
     Ok((input, (mail, start_pos)))
 }
 
-// Subject: biaoti
 #[allow(dead_code)]
 fn subject(input: &str) -> IResult<&str, (&str, usize)> {
     let original_input = input;
@@ -594,7 +675,7 @@ mod tests {
 
     #[test]
     fn test_smtp_auth_login() {
-        let lines = [
+        let cmd = [
             "EHLO client.example.com\r\n",
             "AUTH LOGIN\r\n",
             "c2VuZGVyQGV4YW1wbGUuY29t\r\n", // user
@@ -603,16 +684,21 @@ mod tests {
             "RCPT TO: <recipient1@example.com>\r\n",
             "RCPT TO: <recipient2@example.com>\r\n",
             "DATA\r\n",
+        ];
+        let header = [
             "From: sender@example.com\r\n",
             "To: recipient@example.com\r\n",
             "Subject: Email Subject\r\n",
             "Date: Mon, 01 Jan 2023 12:00:00 +0000\r\n",
             "\r\n",
-            "mail body line1.\r\n",
-            "mail body line2.\r\n",
-            ".\r\n",
-            "QUIT\r\n",
         ];
+        let body = ["mail body line1.\r\n", "mail body line2.\r\n"];
+        let quit = [".\r\n", "QUIT\r\n"];
+        let lines = cmd
+            .iter()
+            .chain(header.iter())
+            .chain(body.iter())
+            .chain(quit.iter());
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
 
@@ -621,6 +707,10 @@ mod tests {
         let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_pass_seq = Rc::new(RefCell::new(0u32));
         let captured_mailfrom = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_rcpt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_body = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_raw = Rc::new(RefCell::new(Vec::<u8>::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -630,11 +720,6 @@ mod tests {
                 let mut seq_guard = seq_clone.borrow_mut();
                 *user_guard = user.to_vec();
                 *seq_guard = seq;
-                println!(
-                    "User callback: {}, seq: {}",
-                    std::str::from_utf8(user).unwrap_or("invalid utf8"),
-                    seq
-                );
             }
         };
 
@@ -646,11 +731,6 @@ mod tests {
                 let mut seq_guard = seq_clone.borrow_mut();
                 *pass_guard = pass.to_vec();
                 *seq_guard = seq;
-                println!(
-                    "Pass callback: {}, seq: {}",
-                    std::str::from_utf8(pass).unwrap_or("invalid utf8"),
-                    seq
-                );
             }
         };
 
@@ -662,21 +742,59 @@ mod tests {
             }
         };
 
-        protolens.set_cb_smtp_user(user_callback);
-        protolens.set_cb_smtp_pass(pass_callback);
-        protolens.set_cb_smtp_mailfrom(mailfrom_callback);
+        let rcpt_callback = {
+            let rcpt_clone = captured_rcpt.clone();
+            move |rcpt: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut rcpt_guard = rcpt_clone.borrow_mut();
+                rcpt_guard.push(rcpt.to_vec());
+            }
+        };
+
+        let header_callback = {
+            let headers_clone = captured_headers.clone();
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                if header.is_empty() {
+                    dbg!("header cb. header end", header);
+                }
+                let mut headers_guard = headers_clone.borrow_mut();
+                headers_guard.push(header.to_vec());
+            }
+        };
+
+        let body_callback = {
+            let body_clone = captured_body.clone();
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut body_guard = body_clone.borrow_mut();
+                body_guard.push(body.to_vec());
+            }
+        };
+
+        let raw_callback = {
+            let raw_clone = captured_raw.clone();
+            move |data: &[u8], _seq: u32, _cb_ctx: *const c_void| {
+                let mut raw_guard = raw_clone.borrow_mut();
+                raw_guard.extend_from_slice(data);
+            }
+        };
 
         let mut task = protolens.new_task();
 
+        protolens.set_cb_smtp_user(user_callback);
+        protolens.set_cb_smtp_pass(pass_callback);
+        protolens.set_cb_smtp_mailfrom(mailfrom_callback);
+        protolens.set_cb_smtp_rcpt(rcpt_callback);
+        protolens.set_cb_smtp_header(header_callback);
+        protolens.set_cb_smtp_body(body_callback);
+        protolens.set_cb_task_c2s(&mut task, raw_callback);
+
         let mut seq = 1000;
-        for line in lines.iter() {
+        for line in lines {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
             pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
-
             seq += line_bytes.len() as u32;
         }
 
@@ -694,6 +812,51 @@ mod tests {
             std::str::from_utf8(&captured_mailfrom.borrow()).unwrap(),
             "sender@example.com"
         );
+
+        let rcpt_guard = captured_rcpt.borrow();
+        assert_eq!(rcpt_guard.len(), 2);
+        assert_eq!(
+            std::str::from_utf8(&rcpt_guard[0]).unwrap(),
+            "recipient1@example.com"
+        );
+        assert_eq!(
+            std::str::from_utf8(&rcpt_guard[1]).unwrap(),
+            "recipient2@example.com"
+        );
+
+        let headers_guard = captured_headers.borrow();
+        assert_eq!(headers_guard.len(), header.len());
+        for (idx, expected) in header.iter().enumerate() {
+            assert_eq!(
+                std::str::from_utf8(&headers_guard[idx]).unwrap(),
+                expected.trim_end_matches("\r\n")
+            );
+        }
+
+        let body_guard = captured_body.borrow();
+        assert_eq!(body_guard.len(), body.len());
+        for (idx, expected) in body.iter().enumerate() {
+            assert_eq!(
+                std::str::from_utf8(&body_guard[idx]).unwrap(),
+                expected.trim_end_matches("\r\n")
+            );
+        }
+
+        let raw_guard = captured_raw.borrow();
+        let cmd_bytes_len: usize = cmd.iter().map(|line| line.len()).sum();
+        let header_bytes_len: usize = header.iter().map(|line| line.len()).sum();
+        let body_bytes_len: usize = body.iter().map(|line| line.len()).sum();
+        assert_eq!(
+            raw_guard.len(),
+            cmd_bytes_len + header_bytes_len + body_bytes_len + 3 // .\r\n三个字节
+        );
+
+        let raw_str = std::str::from_utf8(&raw_guard).unwrap();
+        assert!(raw_str.contains("EHLO client.example.com\r\n"));
+        assert!(raw_str.contains("Subject: Email Subject\r\n"));
+        assert!(raw_str.contains("mail body line2.\r\n"));
+        assert!(raw_str.contains(".\r\n"));
+        assert!(!raw_str.contains("QUIT\r\n")); // 解码器没有读取后续内容
     }
 
     #[test]
@@ -722,6 +885,7 @@ mod tests {
         let captured_pass_seq = Rc::new(RefCell::new(0u32));
         let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_mailfrom = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_rcpt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -731,11 +895,6 @@ mod tests {
                 let mut seq_guard = seq_clone.borrow_mut();
                 *user_guard = user.to_vec();
                 *seq_guard = seq;
-                println!(
-                    "User callback: {}, seq: {}",
-                    std::str::from_utf8(user).unwrap_or("invalid utf8"),
-                    seq
-                );
             }
         };
 
@@ -747,11 +906,6 @@ mod tests {
                 let mut seq_guard = seq_clone.borrow_mut();
                 *pass_guard = pass.to_vec();
                 *seq_guard = seq;
-                println!(
-                    "Pass callback: {}, seq: {}",
-                    std::str::from_utf8(pass).unwrap_or("invalid utf8"),
-                    seq
-                );
             }
         };
 
@@ -763,9 +917,18 @@ mod tests {
             }
         };
 
+        let rcpt_callback = {
+            let rcpt_clone = captured_rcpt.clone();
+            move |rcpt: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut rcpt_guard = rcpt_clone.borrow_mut();
+                rcpt_guard.push(rcpt.to_vec());
+            }
+        };
+
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
         protolens.set_cb_smtp_mailfrom(mailfrom_callback);
+        protolens.set_cb_smtp_rcpt(rcpt_callback);
 
         let mut task = protolens.new_task();
 
@@ -777,7 +940,6 @@ mod tests {
             pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
-
             seq += line_bytes.len() as u32;
         }
 
@@ -789,6 +951,17 @@ mod tests {
         assert_eq!(
             std::str::from_utf8(&captured_mailfrom.borrow()).unwrap(),
             "sender@example.com"
+        );
+
+        let rcpt_guard = captured_rcpt.borrow();
+        assert_eq!(rcpt_guard.len(), 2);
+        assert_eq!(
+            std::str::from_utf8(&rcpt_guard[0]).unwrap(),
+            "recipient1@example.com"
+        );
+        assert_eq!(
+            std::str::from_utf8(&rcpt_guard[1]).unwrap(),
+            "recipient2@example.com"
         );
     }
 
@@ -817,11 +990,6 @@ mod tests {
                 let mut seq_guard = seq_clone.borrow_mut();
                 *user_guard = user.to_vec();
                 *seq_guard = seq;
-                println!(
-                    "User callback: {}, seq: {}",
-                    std::str::from_utf8(user).unwrap_or("invalid utf8"),
-                    seq
-                );
             }
         };
 
@@ -833,11 +1001,6 @@ mod tests {
                 let mut seq_guard = seq_clone.borrow_mut();
                 *pass_guard = pass.to_vec();
                 *seq_guard = seq;
-                println!(
-                    "Pass callback: {}, seq: {}",
-                    std::str::from_utf8(pass).unwrap_or("invalid utf8"),
-                    seq
-                );
             }
         };
 
@@ -854,7 +1017,6 @@ mod tests {
             pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
-
             seq += line_bytes.len() as u32;
         }
 
@@ -891,18 +1053,14 @@ mod tests {
             "Content-Type: text/html;\r\n",
             "\tcharset=\"GB2312\"\r\n",
             "Content-Transfer-Encoding: quoted-printable\r\n",
-            "\r\n", // 只有head,带空行
-            "------=_001_NextPart572182624333_=----\r\n",
-            "Content-Type: text/html;\r\n",
-            "\tcharset=\"GB2312\"\r\n",
-            "Content-Transfer-Encoding: quoted-printable\r\n", // 只有head,不带空行
+            "\r\n", // 只有head
             "------=_001_NextPart572182624333_=----\r\n",
             "Content-Type: text/html;\r\n",
             "\tcharset=\"GB2312\"\r\n",
             "Content-Transfer-Encoding: quoted-printable\r\n",
             "\r\n",
             "<html> line 1\r\n",
-            "line 2</html>\r\n",
+            "line 2</html>\r\n", // 最后的\r\n不属于body
             "------=_001_NextPart572182624333_=------\r\n",
             "This is the epilogue 1.\r\n",
             "This is the epilogue 2.\r\n",
@@ -918,6 +1076,11 @@ mod tests {
         let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_pass_seq = Rc::new(RefCell::new(0u32));
         let captured_mailfrom = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_rcpt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_raw = Rc::new(RefCell::new(Vec::<u8>::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -959,11 +1122,80 @@ mod tests {
             }
         };
 
+        let rcpt_callback = {
+            let rcpt_clone = captured_rcpt.clone();
+            move |rcpt: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut rcpt_guard = rcpt_clone.borrow_mut();
+                rcpt_guard.push(rcpt.to_vec());
+            }
+        };
+
+        let header_callback = {
+            let headers_clone = captured_headers.clone();
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                dbg!(std::str::from_utf8(header).unwrap_or("err"));
+                if header.is_empty() {
+                    dbg!("header cb. header end");
+                }
+                let mut headers_guard = headers_clone.borrow_mut();
+                headers_guard.push(header.to_vec());
+            }
+        };
+
+        let body_start_callback = {
+            let current_body_clone = current_body.clone();
+            move |_cb_ctx: *mut c_void| {
+                // 创建新的body缓冲区
+                let mut body_guard = current_body_clone.borrow_mut();
+                *body_guard = Vec::new();
+                println!("Body start callback triggered");
+            }
+        };
+
+        let body_callback = {
+            let current_body_clone = current_body.clone();
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                // 将内容追加到当前body
+                let mut body_guard = current_body_clone.borrow_mut();
+                body_guard.extend_from_slice(body);
+                println!("Body callback: {} bytes", body.len());
+            }
+        };
+
+        let body_stop_callback = {
+            let current_body_clone = current_body.clone();
+            let bodies_clone = captured_bodies.clone();
+            move |_cb_ctx: *mut c_void| {
+                // 将当前body添加到bodies列表
+                let body_guard = current_body_clone.borrow();
+                let mut bodies_guard = bodies_clone.borrow_mut();
+                bodies_guard.push(body_guard.clone());
+                println!(
+                    "Body stop callback triggered, body size: {} bytes",
+                    body_guard.len()
+                );
+            }
+        };
+
+        let raw_callback = {
+            let raw_clone = captured_raw.clone();
+            move |data: &[u8], _seq: u32, _cb_ctx: *const c_void| {
+                let mut raw_guard = raw_clone.borrow_mut();
+                raw_guard.extend_from_slice(data);
+            }
+        };
+
+        let mut task = protolens.new_task();
+
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
         protolens.set_cb_smtp_mailfrom(mailfrom_callback);
-
-        let mut task = protolens.new_task();
+        protolens.set_cb_smtp_rcpt(rcpt_callback);
+        protolens.set_cb_smtp_header(header_callback);
+        protolens.set_cb_smtp_body_start(body_start_callback);
+        protolens.set_cb_smtp_body(body_callback);
+        protolens.set_cb_smtp_body_stop(body_stop_callback);
+        protolens.set_cb_task_c2s(&mut task, raw_callback);
 
         let mut seq = 1000;
         for line in lines.iter() {
@@ -985,6 +1217,79 @@ mod tests {
             std::str::from_utf8(&captured_mailfrom.borrow()).unwrap(),
             "sender@example.com"
         );
+
+        let rcpt_guard = captured_rcpt.borrow();
+        assert_eq!(rcpt_guard.len(), 2);
+        assert_eq!(
+            std::str::from_utf8(&rcpt_guard[0]).unwrap(),
+            "recipient1@example.com"
+        );
+        assert_eq!(
+            std::str::from_utf8(&rcpt_guard[1]).unwrap(),
+            "recipient2@example.com"
+        );
+
+        let expected_headers = [
+            // 主题header
+            "From: sender@example.com",
+            "To: recipient@example.com",
+            "Subject: Email Subject",
+            "Date: Mon, 01 Jan 2023 12:00:00 +0000",
+            "Content-Type: multipart/alternative;",
+            "\tboundary=\"----=_001_NextPart572182624333_=----\"",
+            "",
+            // 第一个 part 的 header,空
+            "",
+            // 第二个 part 的 header
+            "Content-Type: text/html;",
+            "\tcharset=\"GB2312\"",
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+            // 第三个 part 的 header
+            "Content-Type: text/html;",
+            "\tcharset=\"GB2312\"",
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+        ];
+
+        let headers_guard = captured_headers.borrow();
+        assert_eq!(headers_guard.len(), expected_headers.len());
+        for (idx, expected) in expected_headers.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&headers_guard[idx]).unwrap(), *expected);
+        }
+
+        let bodies_guard = captured_bodies.borrow();
+        assert_eq!(bodies_guard.len(), 3);
+
+        let body1 = &bodies_guard[0];
+        let body1_str = std::str::from_utf8(body1).unwrap();
+        assert!(body1_str.contains(
+            "aGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRk\r\n"
+        ));
+        assert!(body1_str.contains(
+            "ZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVs\r\n"
+        ));
+
+        let body2 = &bodies_guard[1];
+        assert!(body2.is_empty());
+
+        let body3 = &bodies_guard[2];
+        let body3_str = std::str::from_utf8(body3).unwrap();
+        assert!(body3_str.contains("<html>"));
+        assert!(body3_str.contains("line 1"));
+        assert!(body3_str.contains("line 2</html>"));
+
+        let raw_guard = captured_raw.borrow();
+        let lines_bytes_len: usize = lines.iter().map(|line| line.len()).sum();
+        dbg!(std::str::from_utf8(&raw_guard).unwrap());
+        assert_eq!(raw_guard.len(), lines_bytes_len - 63); // 减去后续没读的\r\n 到最后
+
+        let raw_str = std::str::from_utf8(&raw_guard).unwrap();
+        assert!(raw_str.contains("EHLO client.example.com\r\n"));
+        assert!(raw_str.contains("Content-Type: text/html;\r\n"));
+        assert!(raw_str.contains("<html> line 1\r\n"));
+        assert!(!raw_str.contains("This is the epilogue 2.\r\n"));
+        assert!(!raw_str.contains("QUIT\r\n")); // 解码器没有读取后续内容
     }
 
     #[test]
@@ -1008,7 +1313,7 @@ mod tests {
             "Content-Type: multipart/alternative;\r\n",
             "\tboundary=\"----=_NextPart_001_0005_01CA45B0.095693F0\"\r\n",
             "\r\n",
-            "\r\n",                                            // bdry前缀。目前算空行body
+            "\r\n", // 这个\r\n不属于body。此中情况body为空
             "------=_NextPart_001_0005_01CA45B0.095693F0\r\n", // 内层
             "Content-Type: text/plain;\r\n",
             "Content-Transfer-Encoding: 7bit\r\n",
@@ -1023,7 +1328,7 @@ mod tests {
             "\r\n",
             "<html\r\n",
             "</html>\r\n",
-            "\r\n",
+            "\r\n",                                              // 不属于body
             "------=_NextPart_001_0005_01CA45B0.095693F0--\r\n", // 内层结束
             "\r\n",                                              // bdry的开始
             "------=_NextPart_000_0004_01CA45B0.095693F0\r\n",   // 外层
@@ -1045,6 +1350,10 @@ mod tests {
         let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_pass_seq = Rc::new(RefCell::new(0u32));
         let captured_mailfrom = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_rcpt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -1086,9 +1395,70 @@ mod tests {
             }
         };
 
+        let rcpt_callback = {
+            let rcpt_clone = captured_rcpt.clone();
+            move |rcpt: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut rcpt_guard = rcpt_clone.borrow_mut();
+                rcpt_guard.push(rcpt.to_vec());
+            }
+        };
+
+        let header_callback = {
+            let headers_clone = captured_headers.clone();
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                if header.is_empty() {
+                    dbg!("header cb. header end", header);
+                }
+                let mut headers_guard = headers_clone.borrow_mut();
+                headers_guard.push(header.to_vec());
+            }
+        };
+
+        let body_start_callback = {
+            let current_body_clone = current_body.clone();
+            move |_cb_ctx: *mut c_void| {
+                // 创建新的body缓冲区
+                let mut body_guard = current_body_clone.borrow_mut();
+                *body_guard = Vec::new();
+                println!("Body start callback triggered");
+            }
+        };
+
+        let body_callback = {
+            let current_body_clone = current_body.clone();
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                // 将内容追加到当前body
+                let mut body_guard = current_body_clone.borrow_mut();
+                body_guard.extend_from_slice(body);
+                println!("Body callback: {} bytes", body.len());
+            }
+        };
+
+        // 新增：body_stop回调
+        let body_stop_callback = {
+            let current_body_clone = current_body.clone();
+            let bodies_clone = captured_bodies.clone();
+            move |_cb_ctx: *mut c_void| {
+                // 将当前body添加到bodies列表
+                let body_guard = current_body_clone.borrow();
+                let mut bodies_guard = bodies_clone.borrow_mut();
+                bodies_guard.push(body_guard.clone());
+                println!(
+                    "Body stop callback triggered, body size: {} bytes, content: {}",
+                    body_guard.len(),
+                    std::str::from_utf8(&body_guard).unwrap_or("invalid utf8")
+                );
+            }
+        };
+
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
         protolens.set_cb_smtp_mailfrom(mailfrom_callback);
+        protolens.set_cb_smtp_rcpt(rcpt_callback);
+        protolens.set_cb_smtp_header(header_callback);
+        protolens.set_cb_smtp_body_start(body_start_callback);
+        protolens.set_cb_smtp_body(body_callback);
+        protolens.set_cb_smtp_body_stop(body_stop_callback);
 
         let mut task = protolens.new_task();
 
@@ -1112,6 +1482,74 @@ mod tests {
             std::str::from_utf8(&captured_mailfrom.borrow()).unwrap(),
             "sender@example.com"
         );
+
+        let rcpt_guard = captured_rcpt.borrow();
+        assert_eq!(rcpt_guard.len(), 1);
+        assert_eq!(
+            std::str::from_utf8(&rcpt_guard[0]).unwrap(),
+            "recipient1@example.com"
+        );
+
+        let expected_headers = [
+            // 主邮件头
+            "From: \"sender\" <sender@example.in>",
+            "To: <recipient1@example.com>",
+            "Subject: SMTP",
+            "Date: Mon, 5 Oct 2009 11:36:07 +0530",
+            "MIME-Version: 1.0",
+            "Content-Type: multipart/mixed;",
+            "\tboundary=\"----=_NextPart_000_0004_01CA45B0.095693F0\"",
+            "",
+            // 第一个嵌套部分的头
+            "Content-Type: multipart/alternative;",
+            "\tboundary=\"----=_NextPart_001_0005_01CA45B0.095693F0\"",
+            "",
+            // 第二个嵌套部分的头
+            "Content-Type: text/plain;",
+            "Content-Transfer-Encoding: 7bit",
+            "",
+            // 第三个嵌套部分的头
+            "Content-Type: text/html;",
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+            // 最后一个部分的头
+            "Content-Type: text/plain;",
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+        ];
+
+        let headers_guard = captured_headers.borrow();
+        assert_eq!(headers_guard.len(), expected_headers.len());
+        for (idx, expected) in expected_headers.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&headers_guard[idx]).unwrap(), *expected);
+        }
+
+        let bodies_guard = captured_bodies.borrow();
+        assert_eq!(bodies_guard.len(), 4);
+
+        // 第一个是嵌套内层第一个
+        let body1 = &bodies_guard[0];
+        dbg!(body1.len(), std::str::from_utf8(body1).unwrap());
+        let body1_str = std::str::from_utf8(body1).unwrap();
+        assert!(body1_str.contains("I send u smtp pcap file"));
+        assert!(body1_str.contains("Find the attachment"));
+
+        // 第二个是内层第二个。内层结束
+        let body2 = &bodies_guard[1];
+        let body2_str = std::str::from_utf8(body2).unwrap();
+        assert!(body2_str.contains("<html"));
+        assert!(body2_str.contains("</html>\r\n"));
+
+        // 第三个是外层第一个
+        let body3 = &bodies_guard[2];
+        dbg!(body3.len(), std::str::from_utf8(body3).unwrap());
+        assert!(body3.is_empty() || body3.len() < 5);
+
+        // 第四个是外层第二个。外层结束
+        let bodyr = &bodies_guard[3];
+        let body4_str = std::str::from_utf8(bodyr).unwrap();
+        assert!(body4_str.contains("* Profiling support\r\n"));
+        assert!(body4_str.contains("* Lots of bugfixes\r\n"));
     }
 
     #[test]
@@ -1125,6 +1563,10 @@ mod tests {
         let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_pass_seq = Rc::new(RefCell::new(0u32));
         let captured_mailfrom = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_rcpt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -1158,11 +1600,70 @@ mod tests {
             }
         };
 
+        let rcpt_callback = {
+            let rcpt_clone = captured_rcpt.clone();
+            move |rcpt: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut rcpt_guard = rcpt_clone.borrow_mut();
+                rcpt_guard.push(rcpt.to_vec());
+            }
+        };
+
+        let header_callback = {
+            let headers_clone = captured_headers.clone();
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                if header.is_empty() {
+                    dbg!("header cb. header end", header);
+                }
+                let mut headers_guard = headers_clone.borrow_mut();
+                headers_guard.push(header.to_vec());
+            }
+        };
+
+        let body_start_callback = {
+            let current_body_clone = current_body.clone();
+            move |_cb_ctx: *mut c_void| {
+                // 创建新的body缓冲区
+                let mut body_guard = current_body_clone.borrow_mut();
+                *body_guard = Vec::new();
+                println!("Body start callback triggered");
+            }
+        };
+
+        let body_callback = {
+            let current_body_clone = current_body.clone();
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                // 将内容追加到当前body
+                let mut body_guard = current_body_clone.borrow_mut();
+                body_guard.extend_from_slice(body);
+                println!("Body callback: {} bytes", body.len());
+            }
+        };
+
+        let body_stop_callback = {
+            let current_body_clone = current_body.clone();
+            let bodies_clone = captured_bodies.clone();
+            move |_cb_ctx: *mut c_void| {
+                // 将当前body添加到bodies列表
+                let body_guard = current_body_clone.borrow();
+                let mut bodies_guard = bodies_clone.borrow_mut();
+                bodies_guard.push(body_guard.clone());
+                println!(
+                    "Body stop callback triggered, body size: {} bytes",
+                    body_guard.len()
+                );
+            }
+        };
+
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
 
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
         protolens.set_cb_smtp_mailfrom(mailfrom_callback);
+        protolens.set_cb_smtp_rcpt(rcpt_callback);
+        protolens.set_cb_smtp_header(header_callback);
+        protolens.set_cb_smtp_body_start(body_start_callback);
+        protolens.set_cb_smtp_body(body_callback);
+        protolens.set_cb_smtp_body_stop(body_stop_callback);
 
         let mut task = protolens.new_task();
 
@@ -1197,5 +1698,64 @@ mod tests {
             std::str::from_utf8(&captured_mailfrom.borrow()).unwrap(),
             "user12345@example123.com"
         );
+
+        let rcpt_guard = captured_rcpt.borrow();
+        assert_eq!(rcpt_guard.len(), 1);
+        assert_eq!(
+            std::str::from_utf8(&rcpt_guard[0]).unwrap(),
+            "user12345@example123.com"
+        );
+
+        let expected_headers = [
+            "Date: Mon, 27 Jun 2022 17:01:55 +0800",
+            "From: \"user12345@example123.com\" <user12345@example123.com>",
+            "To: =?GB2312?B?wO60urvU?= <user12345@example123.com>",
+            "Subject: biaoti",
+            "X-Priority: 3",
+            "X-Has-Attach: no",
+            "X-Mailer: Foxmail 7.2.19.158[cn]",
+            "Mime-Version: 1.0",
+            "Message-ID: <202206271701548584972@example123.com>",
+            "Content-Type: multipart/alternative;",
+            "\tboundary=\"----=_001_NextPart572182624333_=----\"",
+            "",
+            "Content-Type: text/plain;",
+            "\tcharset=\"GB2312\"",
+            "Content-Transfer-Encoding: base64",
+            "",
+            "Content-Type: text/html;",
+            "\tcharset=\"GB2312\"",
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+        ];
+
+        let headers_guard = captured_headers.borrow();
+        assert_eq!(headers_guard.len(), expected_headers.len());
+        for (idx, expected) in expected_headers.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&headers_guard[idx]).unwrap(), *expected);
+        }
+
+        let bodies_guard = captured_bodies.borrow();
+        assert_eq!(bodies_guard.len(), 2);
+
+        let body1 = &bodies_guard[0];
+        let body1_str = std::str::from_utf8(body1).unwrap();
+        assert!(body1_str.contains(
+            "aGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRk\r\n"
+        ));
+        assert!(body1_str.contains(
+            "ZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRk\r\n"
+        ));
+        assert!(body1_str.contains("DQo=\r\n"));
+
+        let body2 = &bodies_guard[1];
+        let body2_str = std::str::from_utf8(body2).unwrap();
+        assert!(body2_str.contains(
+            "<html><head><meta http-equiv=3D\"content-type\" content=3D\"text/html; charse=\r\n"
+        ));
+        assert!(body2_str.contains(
+            "nd-color: transparent;\">hello dddddddddddddddddd</span><span style=3D\"line=\r\n"
+        ));
+        assert!(body2_str.contains("y></html>")); // 最后的\r\n不属于body
     }
 }
