@@ -8,7 +8,13 @@ pub(crate) const MAX_PKT_HEAP: usize = if cfg!(feature = "pkt_buff_1024") {
     128
 };
 
-pub(crate) const MAX_READ_BUFF: usize = 512;
+pub(crate) const MAX_READ_BUFF: usize = if cfg!(feature = "read_buff_1024") {
+    1024
+} else if cfg!(feature = "read_buff_256") {
+    256
+} else {
+    512
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct Config {}

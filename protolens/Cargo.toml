@@ -19,8 +19,15 @@ pcap       = "2.2.0"
 etherparse = "0.13.0"
 
 [features]
-default = ["pkt_buff_128"] 
+default = ["pkt_buff_128", "read_buff_512"]
+
+# 缓存pkt的数量
 pkt_buff_128 = []
 pkt_buff_256 = []
 pkt_buff_512 = []
 pkt_buff_1024 = []
+
+# 重组读取数据的buff大小
+read_buff_256 = []
+read_buff_512 = []
+read_buff_1024 = []
