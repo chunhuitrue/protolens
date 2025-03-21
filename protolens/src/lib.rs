@@ -34,8 +34,6 @@ use crate::smtp::*;
 use crate::stats::*;
 
 #[cfg(test)]
-use crate::bdry::*;
-#[cfg(test)]
 use crate::byte::*;
 #[cfg(test)]
 use crate::octet::*;
@@ -43,8 +41,6 @@ use crate::octet::*;
 use crate::rawpacket::*;
 #[cfg(test)]
 use crate::read::*;
-#[cfg(test)]
-use crate::readdash::*;
 #[cfg(test)]
 use crate::readline::*;
 #[cfg(test)]
@@ -85,10 +81,6 @@ where
     #[cfg(test)]
     cb_readn: Option<CbReadn>,
     #[cfg(test)]
-    cb_readbdry: Option<CbReadBdry>,
-    #[cfg(test)]
-    cb_readdash: Option<CbReadDash>,
-    #[cfg(test)]
     cb_readoctet: Option<CbReadOctet>,
 }
 
@@ -116,10 +108,6 @@ where
             cb_readline: None,
             #[cfg(test)]
             cb_readn: None,
-            #[cfg(test)]
-            cb_readbdry: None,
-            #[cfg(test)]
-            cb_readdash: None,
             #[cfg(test)]
             cb_readoctet: None,
             cb_smtp_user: None,
@@ -162,10 +150,6 @@ where
                 .insert(L7Proto::Readline, Box::new(ReadlineFactory::<T, P>::new()));
             self.parsers
                 .insert(L7Proto::Readn, Box::new(ReadnFactory::<T, P>::new()));
-            self.parsers
-                .insert(L7Proto::ReadBdry, Box::new(ReadBdryFactory::<T, P>::new()));
-            self.parsers
-                .insert(L7Proto::ReadDash, Box::new(ReadDashFactory::<T, P>::new()));
             self.parsers.insert(
                 L7Proto::ReadOctet,
                 Box::new(ReadOctetFactory::<T, P>::new()),
@@ -262,22 +246,6 @@ where
         F: ReadnCbFn + 'static,
     {
         self.cb_readn = Some(Rc::new(RefCell::new(callback)));
-    }
-
-    #[cfg(test)]
-    pub fn set_cb_readbdry<F>(&mut self, callback: F)
-    where
-        F: ReadBdryCbFn + 'static,
-    {
-        self.cb_readbdry = Some(Rc::new(RefCell::new(callback)));
-    }
-
-    #[cfg(test)]
-    pub fn set_cb_readdash<F>(&mut self, callback: F)
-    where
-        F: ReadDashCbFn + 'static,
-    {
-        self.cb_readdash = Some(Rc::new(RefCell::new(callback)));
     }
 
     #[cfg(test)]

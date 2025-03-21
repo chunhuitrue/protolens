@@ -426,7 +426,6 @@ where
                             }
                         }
                         _ => {
-                            // 不应该到达这里
                             return Err(());
                         }
                     }
@@ -437,8 +436,8 @@ where
                     // 虽然此时buff中仍然有读到的数据。但直接出错，不返回数据
                     return Err(());
                 }
-            } // end match
-        } // end for
+            }
+        }
 
         // 处理可能的情况[++++++\r\n--boun]dary
         if match_len > 0 {
@@ -446,152 +445,6 @@ where
         }
         let (data, seq) = self.get_buff_data(0)?;
         Ok((ReadRet::Data, data, seq))
-    }
-
-    // 读取流中的内容直到遇到 \r\n--boundary 注意没有后面的--，不是close boundary
-    // Data，正常读到了一部分数据
-    // Bdry, 读到了"\r\n--"+boundary。boundary边界
-    // CloseBdry 读到了"\r\n--"+boundary+"--"。结束boundary。
-    pub(crate) async fn read_dash_bdry(&mut self, bdry: &str) -> Result<(ReadRet, &[u8], u32), ()> {
-        // 0: 正常读取
-        // 1: 读到\r
-        // 2: 读到\r\n
-        // 3: 读到\r\n-
-        // 4: 读到\r\n--
-        let mut state = 0;
-        let bdry_bytes = bdry.as_bytes();
-        let mut bdry_index = 0;
-        let mut tail_len = 0; // 跨越buff结束边界的bdry长度
-
-        for i in 0..MAX_READ_BUFF {
-            match self.next().await {
-                Some(byte) => {
-                    match state {
-                        0 => {
-                            // 正常状态
-                            if byte == b'\r' {
-                                state = 1;
-                                tail_len = 1;
-                            }
-                        }
-                        1 => {
-                            // 已读到\r
-                            if byte == b'\n' {
-                                state = 2;
-                                tail_len = 2;
-                            } else if byte == b'\r' {
-                                state = 1;
-                                tail_len = 1;
-                            } else {
-                                state = 0;
-                                tail_len = 0;
-                            }
-                        }
-                        2 => {
-                            // 已读到\r\n
-                            if byte == b'-' {
-                                state = 3;
-                                tail_len = 3;
-                            } else if byte == b'\r' {
-                                state = 1;
-                                tail_len = 1;
-                            } else {
-                                state = 0;
-                                tail_len = 0;
-                            }
-                        }
-                        3 => {
-                            // 已读到\r\n-
-                            if byte == b'-' {
-                                state = 4;
-                                bdry_index = 0;
-                                tail_len = 4;
-                            } else if byte == b'\r' {
-                                state = 1;
-                                tail_len = 1;
-                            } else {
-                                state = 0;
-                                tail_len = 0;
-                            }
-                        }
-                        4 => {
-                            // 已读到\r\n--，开始匹配boundary
-                            if bdry_index < bdry_bytes.len() && byte == bdry_bytes[bdry_index] {
-                                bdry_index += 1;
-                                tail_len += 1;
-                                if bdry_index == bdry_bytes.len() {
-                                    // dash bdry匹配了，返回
-                                    let (data, seq) = self.get_buff_data(tail_len)?;
-                                    return Ok((ReadRet::DashBdry, data, seq));
-                                }
-                            } else if byte == b'\r' {
-                                state = 1;
-                                tail_len = 1;
-                            } else {
-                                state = 0;
-                                tail_len = 0;
-                            }
-                        }
-                        _ => {
-                            // 不应该到达这里
-                            return Err(());
-                        }
-                    }
-                }
-                None => {
-                    // for 循环buff长度过程中如果返回None，不会是到达buff边界，只能是fin
-                    // 如果读到fin都没读到dash bdry。说明有错。
-                    // 虽然此时buff中仍然有读到的数据。但直接出错，不返回数据
-                    return Err(());
-                }
-            }
-        }
-
-        // 处理可能的情况[++++++++++++++\r\n--boun]dary
-        if tail_len > 0 {
-            self.buff_next -= tail_len;
-        }
-        let (data, seq) = self.get_buff_data(0)?;
-        Ok((ReadRet::Data, data, seq))
-    }
-
-    // 读取并判断close bdry的最后两个--
-    // 如果不是，读出的字符不能消耗，需要留给后续读取
-    pub(crate) async fn read_dash(&mut self) -> Result<bool, ()> {
-        let mut state = 0;
-
-        for i in 0..2 {
-            match self.next().await {
-                Some(byte) => {
-                    match state {
-                        0 => {
-                            // 正常状态
-                            if byte == b'-' {
-                                state = 1;
-                            }
-                        }
-                        1 => {
-                            // 已读到-
-                            if byte == b'-' {
-                                let _ = self.get_buff_data(0);
-                                return Ok(true);
-                            } else {
-                                self.buff_next -= 2;
-                                return Ok(false);
-                            }
-                        }
-                        _ => {
-                            // 不应该到达这里
-                            return Err(());
-                        }
-                    }
-                }
-                None => {
-                    return Err(());
-                }
-            }
-        }
-        Ok(false)
     }
 
     // 异步方式获取下一个严格有序的包。包含载荷为0的

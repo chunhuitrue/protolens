@@ -2,8 +2,6 @@ pub mod ordpacket;
 pub mod smtp;
 
 #[cfg(test)]
-pub mod bdry;
-#[cfg(test)]
 pub mod byte;
 #[cfg(test)]
 pub mod octet;
@@ -11,8 +9,6 @@ pub mod octet;
 pub mod rawpacket;
 #[cfg(test)]
 pub mod read;
-#[cfg(test)]
-pub mod readdash;
 #[cfg(test)]
 pub mod readline;
 #[cfg(test)]

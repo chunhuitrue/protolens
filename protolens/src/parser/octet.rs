@@ -164,36 +164,6 @@ mod tests {
         assert_eq!(seqs_result[0], seq1);
     }
 
-    // 没有octet
-    #[test]
-    fn test_octet_no_content() {
-        let seq1 = 1;
-        let mut payload = b"--".to_vec();
-        payload.extend_from_slice(BDRY.as_bytes());
-        let pkt = build_pkt_payload(seq1, &payload);
-        let _ = pkt.decode();
-        pkt.set_l7_proto(L7Proto::ReadOctet);
-
-        let lines = Rc::new(RefCell::new(Vec::new()));
-        let lines_clone = Rc::clone(&lines);
-        let seqs = Rc::new(RefCell::new(Vec::new()));
-        let seqs_clone = Rc::clone(&seqs);
-        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
-            dbg!("in callback", line);
-            lines_clone.borrow_mut().push(line.to_vec());
-            seqs_clone.borrow_mut().push(seq);
-        };
-
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        protolens.set_cb_readbdry(callback);
-        let mut task = protolens.new_task();
-        protolens.run_task(&mut task, pkt);
-
-        let lines_result = lines.borrow();
-
-        assert_eq!(lines_result.len(), 0);
-    }
-
     // 有内容，而且内容中包含-- \r\n
     #[test]
     fn test_octet_misc_content() {

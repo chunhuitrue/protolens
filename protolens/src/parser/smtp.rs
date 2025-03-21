@@ -1027,6 +1027,88 @@ mod tests {
     }
 
     #[test]
+    fn test_smtp_mime_no_preamble_header_end() {
+        let lines = [
+            "EHLO client.example.com\r\n",
+            "MAIL FROM: <sender@example.com>\r\n",
+            "RCPT TO: <recipient1@example.com>\r\n",
+            "DATA\r\n",
+            "From: sender@example.com\r\n",
+            "To: recipient@example.com\r\n",
+            "Subject: Email Subject\r\n",
+            "Date: Mon, 01 Jan 2023 12:00:00 +0000\r\n",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_001_NextPart572182624333_=----\"\r\n",
+            "\r\n",
+            "------=_001_NextPart572182624333_=----\r\n",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n", // 只有head,跟close bdry
+            "------=_001_NextPart572182624333_=------\r\n",
+            "This is the epilogue 1.\r\n",
+            "This is the epilogue 2.\r\n",
+            ".\r\n",
+            "QUIT\r\n",
+            "\r\n",
+        ];
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+
+        let header_callback = {
+            let headers_clone = captured_headers.clone();
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                dbg!(std::str::from_utf8(header).unwrap_or(""));
+                if header.is_empty() {
+                    dbg!("header cb. header end");
+                }
+                let mut headers_guard = headers_clone.borrow_mut();
+                headers_guard.push(header.to_vec());
+            }
+        };
+
+        let mut task = protolens.new_task();
+
+        protolens.set_cb_smtp_header(header_callback);
+
+        let mut seq = 1000;
+        for line in lines.iter() {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload(seq, line_bytes);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Smtp);
+
+            protolens.run_task(&mut task, pkt);
+
+            seq += line_bytes.len() as u32;
+        }
+
+        let expected_headers = [
+            // 主题header
+            "From: sender@example.com",
+            "To: recipient@example.com",
+            "Subject: Email Subject",
+            "Date: Mon, 01 Jan 2023 12:00:00 +0000",
+            "Content-Type: multipart/alternative;",
+            "\tboundary=\"----=_001_NextPart572182624333_=----\"",
+            "",
+            // 第二个 part 的 header
+            "Content-Type: text/html;",
+            "\tcharset=\"GB2312\"",
+            "Content-Transfer-Encoding: quoted-printable",
+            "",
+        ];
+
+        let headers_guard = captured_headers.borrow();
+        assert_eq!(headers_guard.len(), expected_headers.len());
+        for (idx, expected) in expected_headers.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&headers_guard[idx]).unwrap(), *expected);
+        }
+    }
+
+    #[test]
     fn test_smtp_mime_flat() {
         let lines = [
             "EHLO client.example.com\r\n",
