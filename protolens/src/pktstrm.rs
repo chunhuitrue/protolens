@@ -1,15 +1,12 @@
-#![allow(unused)]
 use crate::Heap;
 use crate::config::*;
 use crate::packet::*;
 use futures::Future;
-use futures::future;
 use futures::future::poll_fn;
 use futures_util::stream::{Stream, StreamExt};
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::fmt;
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::task::Context;
@@ -191,6 +188,7 @@ where
     }
 
     // 严格有序。peek出一个带数据的严格有序的包。否则为none
+    #[allow(dead_code)]
     pub(crate) fn peek_ord_data(&mut self) -> Option<&T> {
         if let Some((pkt, _nex_seq)) = self.peek_ord_data_with_seq() {
             Some(pkt)
@@ -217,6 +215,7 @@ where
     }
 
     // 严格有序。pop一个带数据的严格有序的包。否则为none
+    #[allow(dead_code)]
     pub(crate) fn pop_ord_data(&mut self) -> Option<PacketWrapper<T, P>> {
         if self.fin {
             return None;
@@ -235,14 +234,12 @@ where
         None
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.heap.clear();
-    }
-
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.heap.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -257,9 +254,9 @@ where
             return Err(());
         }
 
-        for i in 0..n {
+        for _ in 0..n {
             match self.next().await {
-                Some(byte) => {}
+                Some(_byte) => {}
                 None => {
                     return Err(());
                 }
@@ -270,6 +267,7 @@ where
 
     // n可以大于MAX_READ_BUFF，但最大返回MAX_READ_BUFF
     // 比如读1M读数据。循环传入剩余总量，但每次返回最大MAX_READ_BUFF
+    #[allow(dead_code)]
     pub(crate) async fn read(&mut self, n: usize) -> Result<(&[u8], u32), ()> {
         let num = std::cmp::min(n, MAX_READ_BUFF);
         self.readn(num).await
@@ -281,7 +279,7 @@ where
         let mut state = 0;
 
         // 一行最多不能超过buff大小
-        for i in 0..MAX_READ_BUFF {
+        for _ in 0..MAX_READ_BUFF {
             match self.next().await {
                 Some(byte) => {
                     match state {
@@ -347,7 +345,7 @@ where
         let mut bdry_index = 0;
         let mut match_len = 0;
 
-        for i in 0..MAX_READ_BUFF {
+        for _ in 0..MAX_READ_BUFF {
             match self.next().await {
                 Some(byte) => {
                     match state {
@@ -474,16 +472,6 @@ where
             }
             Poll::Pending
         })
-    }
-
-    pub fn buff_size() -> usize {
-        std::mem::size_of::<[u8; MAX_READ_BUFF]>()
-    }
-
-    fn call_cb(&mut self, buff: &[u8], seq: u32) {
-        if let Some(ref mut cb) = self.cb_strm {
-            cb.borrow_mut()(buff, seq, self.cb_ctx);
-        }
     }
 
     // 返回试读过的数据, start到next - 1
@@ -658,9 +646,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packet;
-    use crate::packet::*;
     use crate::test_utils::*;
+    use std::marker::PhantomData;
     use std::ptr;
 
     #[test]

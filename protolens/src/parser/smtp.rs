@@ -27,6 +27,7 @@ pub(crate) type CbRcpt = Rc<RefCell<dyn SmtpCbFn + 'static>>;
 pub(crate) type CbHeader = Rc<RefCell<dyn SmtpCbFn + 'static>>;
 pub(crate) type CbBodyEvt = Rc<RefCell<dyn SmtpCbEvtFn + 'static>>;
 pub(crate) type CbBody = Rc<RefCell<dyn SmtpCbFn + 'static>>;
+pub(crate) type CbSrv = Rc<RefCell<dyn SmtpCbFn + 'static>>;
 
 pub(crate) struct SmtpCallbacks {
     pub(crate) user: Option<CbUser>,
@@ -52,6 +53,7 @@ where
     pub(crate) cb_body_start: Option<CbBodyEvt>,
     pub(crate) cb_body: Option<CbBody>,
     pub(crate) cb_body_stop: Option<CbBodyEvt>,
+    pub(crate) cb_srv: Option<CbSrv>,
     _phantom_t: PhantomData<T>,
     _phantom_p: PhantomData<P>,
 }
@@ -71,6 +73,7 @@ where
             cb_body_start: None,
             cb_body: None,
             cb_body_stop: None,
+            cb_srv: None,
             _phantom_t: PhantomData,
             _phantom_p: PhantomData,
         }
@@ -152,6 +155,30 @@ where
 
         Ok(())
     }
+
+    async fn s2c_parser_inner(
+        stream: *const PktStrm<T, P>,
+        cb_srv: Option<CbSrv>,
+        cb_ctx: *mut c_void,
+    ) -> Result<(), ()> {
+        let stm: &mut PktStrm<T, P>;
+        unsafe {
+            stm = &mut *(stream as *mut PktStrm<T, P>);
+        }
+
+        loop {
+            let (line, seq) = stm.read_clean_line_str().await?;
+
+            if let Some(ref cb) = cb_srv {
+                cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
+            }
+
+            if line.starts_with("221") {
+                break;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<T, P> Default for SmtpParser<T, P>
@@ -190,6 +217,18 @@ where
 
         Some(Box::pin(Self::c2s_parser_inner(stream, cb, cb_ctx)))
     }
+
+    fn s2c_parser(
+        &self,
+        stream: *const PktStrm<T, P>,
+        cb_ctx: *mut c_void,
+    ) -> Option<ParserFuture> {
+        Some(Box::pin(Self::s2c_parser_inner(
+            stream,
+            self.cb_srv.clone(),
+            cb_ctx,
+        )))
+    }
 }
 
 pub(crate) struct SmtpFactory<T, P> {
@@ -219,6 +258,7 @@ where
         parser.cb_body_start = prolens.cb_smtp_body_start.clone();
         parser.cb_body = prolens.cb_smtp_body.clone();
         parser.cb_body_stop = prolens.cb_smtp_body_stop.clone();
+        parser.cb_srv = prolens.cb_smtp_srv.clone();
         parser
     }
 }
@@ -451,7 +491,7 @@ where
     }
     loop {
         let (ret, content, seq) = stm.read_mime_octet(bdry).await?;
-        dbg!(std::str::from_utf8(content).unwrap_or(""));
+        // dbg!(std::str::from_utf8(content).unwrap_or(""));
         if let Some(cb) = cb_body.clone() {
             cb.borrow_mut()(content, seq, cb_ctx);
         }
@@ -1649,6 +1689,7 @@ mod tests {
         let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
         let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
         let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_srv = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -1736,7 +1777,17 @@ mod tests {
             }
         };
 
+        let srv_callback = {
+            let srv_clone = captured_srv.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                dbg!("========== in srv callback");
+                let mut srv_guard = srv_clone.borrow_mut();
+                srv_guard.push(line.to_vec());
+            }
+        };
+
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut task = protolens.new_task();
 
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
@@ -1746,8 +1797,7 @@ mod tests {
         protolens.set_cb_smtp_body_start(body_start_callback);
         protolens.set_cb_smtp_body(body_callback);
         protolens.set_cb_smtp_body_stop(body_stop_callback);
-
-        let mut task = protolens.new_task();
+        protolens.set_cb_smtp_srv(srv_callback);
 
         loop {
             let now = SystemTime::now()
@@ -1763,10 +1813,13 @@ mod tests {
                 continue;
             }
             pkt.set_l7_proto(L7Proto::Smtp);
-
             if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
-                protolens.run_task(&mut task, pkt);
+                pkt.set_direction(PktDirection::Client2Server);
+            } else {
+                pkt.set_direction(PktDirection::Server2Client);
             }
+
+            protolens.run_task(&mut task, pkt);
         }
 
         assert_eq!(
@@ -1839,5 +1892,31 @@ mod tests {
             "nd-color: transparent;\">hello dddddddddddddddddd</span><span style=3D\"line=\r\n"
         ));
         assert!(body2_str.contains("y></html>")); // 最后的\r\n不属于body
+
+        let expected_srv = [
+            "220 smtp.qq.com Esmtp QQ QMail Server",
+            "250-smtp.qq.com",
+            "250-PIPELINING",
+            "250-SIZE 73400320",
+            "250-STARTTLS",
+            "250-AUTH LOGIN PLAIN",
+            "250-AUTH=LOGIN",
+            "250-MAILCOMPRESS",
+            "250 8BITMIME",
+            "334 VXNlcm5hbWU6",
+            "334 UGFzc3dvcmQ6",
+            "235 Authentication successful",
+            "250 Ok",
+            "250 Ok",
+            "354 End data with <CR><LF>.<CR><LF>",
+            "250 Ok: queued as ",
+            "221 Bye",
+        ];
+
+        let srv_guard = captured_srv.borrow();
+        assert_eq!(srv_guard.len(), expected_srv.len());
+        for (idx, expected) in expected_srv.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&srv_guard[idx]).unwrap(), *expected);
+        }
     }
 }

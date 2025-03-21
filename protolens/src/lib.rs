@@ -69,6 +69,7 @@ where
     cb_smtp_body_start: Option<CbBodyEvt>,
     cb_smtp_body: Option<CbBody>,
     cb_smtp_body_stop: Option<CbBodyEvt>,
+    cb_smtp_srv: Option<CbSrv>,
 
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
@@ -118,6 +119,7 @@ where
             cb_smtp_body_start: None,
             cb_smtp_body: None,
             cb_smtp_body_stop: None,
+            cb_smtp_srv: None,
         };
         prolens.regist_parsers();
         prolens
@@ -310,6 +312,13 @@ where
         F: SmtpCbEvtFn + 'static,
     {
         self.cb_smtp_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
+
+    pub fn set_cb_smtp_srv<F>(&mut self, callback: F)
+    where
+        F: SmtpCbFn + 'static,
+    {
+        self.cb_smtp_srv = Some(Rc::new(RefCell::new(callback)) as CbSrv);
     }
 }
 

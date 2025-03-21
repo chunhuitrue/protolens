@@ -402,3 +402,16 @@ pub extern "C" fn prolens_set_cb_smtp_body_stop(
     };
     prolens.0.set_cb_smtp_body_stop(wrapper);
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_smtp_srv(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_smtp_srv(wrapper);
+}

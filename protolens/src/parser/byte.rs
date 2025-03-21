@@ -38,8 +38,8 @@ where
     }
 
     async fn c2s_parser_inner(
-        cb_next_byte: Option<CbByte>,
         stream: *const PktStrm<T, P>,
+        cb_next_byte: Option<CbByte>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm: &mut PktStrm<T, P>;
@@ -80,8 +80,8 @@ where
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
-            self.cb_next_byte.clone(),
             stream,
+            self.cb_next_byte.clone(),
             cb_ctx,
         )))
     }

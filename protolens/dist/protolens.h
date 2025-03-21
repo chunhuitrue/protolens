@@ -75,6 +75,7 @@ void prolens_set_cb_smtp_header(FfiProlens *prolens, CbSmtp callback);
 void prolens_set_cb_smtp_body_start(FfiProlens *prolens, CbSmtpBodyEvt callback);
 void prolens_set_cb_smtp_body(FfiProlens *prolens, CbSmtp callback);
 void prolens_set_cb_smtp_body_stop(FfiProlens *prolens, CbSmtpBodyEvt callback);
+void prolens_set_cb_smtp_srv(FfiProlens *prolens, CbSmtp callback);
 
 
 #ifdef __cplusplus

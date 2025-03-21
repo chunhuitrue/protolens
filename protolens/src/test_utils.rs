@@ -154,6 +154,7 @@ pub(crate) struct PktHeader {
     pub(crate) payload_offset: usize,
     pub(crate) payload_len: usize,
     pub(crate) l7_proto: L7Proto,
+    pub(crate) direction: PktDirection,
 }
 
 impl PktHeader {
@@ -234,6 +235,7 @@ impl CapPacket {
                     payload_len: self.data_len
                         - (headers.payload.as_ptr() as usize - self.data.as_ptr() as usize),
                     l7_proto: L7Proto::Unknown,
+                    direction: PktDirection::Client2Server,
                 }));
                 Ok(())
             }
@@ -244,6 +246,12 @@ impl CapPacket {
     pub(crate) fn set_l7_proto(&self, l7_proto: L7Proto) {
         if let Some(header) = self.header.borrow_mut().as_mut() {
             header.l7_proto = l7_proto;
+        }
+    }
+
+    pub(crate) fn set_direction(&self, direction: PktDirection) {
+        if let Some(header) = self.header.borrow_mut().as_mut() {
+            header.direction = direction;
         }
     }
 
@@ -287,7 +295,7 @@ impl CapPacket {
 
 impl Packet for CapPacket {
     fn direction(&self) -> PktDirection {
-        PktDirection::Client2Server
+        self.header.borrow().as_ref().unwrap().direction
     }
 
     fn l7_proto(&self) -> L7Proto {
