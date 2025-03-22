@@ -49,10 +49,11 @@ mod tests {
     fn test_l7proto_values() {
         assert_eq!(L7Proto::OrdPacket as u32, 0);
         assert_eq!(L7Proto::Smtp as u32, 1);
+        assert_eq!(L7Proto::Pop3 as u32, 2);
         #[cfg(test)]
         {
-            assert_eq!(L7Proto::RawPacket as u32, 2);
-            assert_eq!(L7Proto::Byte as u32, 3);
+            assert_eq!(L7Proto::RawPacket as u32, 3);
+            assert_eq!(L7Proto::Byte as u32, 4);
         }
     }
 

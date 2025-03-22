@@ -180,7 +180,7 @@ mod tests {
             }
             pkt.set_l7_proto(L7Proto::OrdPacket);
 
-            if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
+            if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT {
                 push_count += 1;
                 println!("Processing packet {}: seq={}", push_count, pkt.seq());
                 protolens.run_task(&mut task, pkt);

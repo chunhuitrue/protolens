@@ -1,34 +1,28 @@
+use crate::CbBody;
+use crate::CbBodyEvt;
+use crate::CbHeader;
+use crate::CbMailFrom;
+use crate::CbPass;
+use crate::CbRcpt;
+use crate::CbSrv;
+use crate::CbUser;
 use crate::Parser;
 use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
-use crate::ReadRet;
+use crate::body;
+use crate::header;
+use crate::multi_body;
 use crate::packet::*;
 use nom::{
     IResult, Offset,
     bytes::complete::{tag, take_till, take_while},
 };
-use std::cell::RefCell;
 use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::rc::Rc;
 
-pub trait SmtpCbFn: FnMut(&[u8], u32, *mut c_void) {}
-impl<F: FnMut(&[u8], u32, *mut c_void)> SmtpCbFn for F {}
-
-pub trait SmtpCbEvtFn: FnMut(*mut c_void) {}
-impl<F: FnMut(*mut c_void)> SmtpCbEvtFn for F {}
-
-pub(crate) type CbUser = Rc<RefCell<dyn SmtpCbFn + 'static>>;
-pub(crate) type CbPass = Rc<RefCell<dyn SmtpCbFn + 'static>>;
-pub(crate) type CbMailFrom = Rc<RefCell<dyn SmtpCbFn + 'static>>;
-pub(crate) type CbRcpt = Rc<RefCell<dyn SmtpCbFn + 'static>>;
-pub(crate) type CbHeader = Rc<RefCell<dyn SmtpCbFn + 'static>>;
-pub(crate) type CbBodyEvt = Rc<RefCell<dyn SmtpCbEvtFn + 'static>>;
-pub(crate) type CbBody = Rc<RefCell<dyn SmtpCbFn + 'static>>;
-pub(crate) type CbSrv = Rc<RefCell<dyn SmtpCbFn + 'static>>;
-
+#[derive(Clone)]
 pub(crate) struct SmtpCallbacks {
     pub(crate) user: Option<CbUser>,
     pub(crate) pass: Option<CbPass>,
@@ -181,16 +175,6 @@ where
     }
 }
 
-impl<T, P> Default for SmtpParser<T, P>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<T, P> Parser for SmtpParser<T, P>
 where
     T: PacketBind,
@@ -316,197 +300,6 @@ where
     Ok(())
 }
 
-async fn body<T, P>(
-    stm: &mut PktStrm<T, P>,
-    cb_body_start: Option<CbBodyEvt>,
-    cb_body: Option<CbBody>,
-    cb_body_stop: Option<CbBodyEvt>,
-    cb_ctx: *mut c_void,
-) -> Result<bool, ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    dbg!("body start");
-    if let Some(cb) = cb_body_start.clone() {
-        cb.borrow_mut()(cb_ctx);
-    }
-    loop {
-        let (line, seq) = stm.read_clean_line_str().await?;
-
-        if line == (".") {
-            break;
-        }
-
-        dbg!(line);
-        if let Some(cb) = cb_body.clone() {
-            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
-        }
-    }
-    if let Some(cb) = cb_body_stop.clone() {
-        cb.borrow_mut()(cb_ctx);
-    }
-    dbg!("body end");
-    Ok(true)
-}
-
-async fn multi_body<T, P>(
-    stm: &mut PktStrm<T, P>,
-    bdry: &str,
-    cb_header: Option<CbHeader>,
-    cb_body_start: Option<CbBodyEvt>,
-    cb_body: Option<CbBody>,
-    cb_body_stop: Option<CbBodyEvt>,
-    cb_ctx: *mut c_void,
-) -> Result<(), ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    preamble(stm, bdry).await?;
-    loop {
-        if let Some(new_bdry) = header(stm, cb_header.clone(), cb_ctx).await? {
-            Box::pin(multi_body(
-                stm,
-                &new_bdry,
-                cb_header.clone(),
-                cb_body_start.clone(),
-                cb_body.clone(),
-                cb_body_stop.clone(),
-                cb_ctx,
-            ))
-            .await?;
-        }
-
-        mime_body(
-            stm,
-            bdry,
-            cb_body_start.clone(),
-            cb_body.clone(),
-            cb_body_stop.clone(),
-            cb_ctx,
-        )
-        .await?;
-
-        let (byte, _seq) = stm.readn(2).await?;
-        if byte.starts_with(b"--") {
-            dbg!("muti_body end");
-            break;
-        } else if byte.starts_with(b"\r\n") {
-            continue;
-        } else {
-            return Err(());
-        }
-    }
-    Ok(())
-}
-
-async fn preamble<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(), ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    mime_body(stm, bdry, None, None, None, std::ptr::null_mut()).await?;
-
-    let (byte, _seq) = stm.readn(2).await?;
-    if byte.starts_with(b"\r\n") {
-        Ok(())
-    } else {
-        Err(())
-    }
-}
-
-async fn header<T, P>(
-    stm: &mut PktStrm<T, P>,
-    cb_header: Option<CbHeader>,
-    cb_ctx: *mut c_void,
-) -> Result<Option<String>, ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    let mut cont_type = false;
-    let mut boundary = String::new();
-
-    dbg!("header. start");
-    loop {
-        let (line, seq) = stm.read_clean_line_str().await?;
-
-        // 空行也回调。调用者知道header结束
-        if let Some(cb) = cb_header.clone() {
-            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
-        }
-        dbg!(line);
-
-        if line.is_empty() {
-            let ret_bdry = if boundary.is_empty() {
-                None
-            } else {
-                Some(boundary)
-            };
-            dbg!("header. end");
-            return Ok(ret_bdry);
-        }
-
-        // content-type ext
-        // 放在content-type前面是因为。只有content-type结束之后才能作这个判断。
-        // 放在前面，cont_type 肯定为false
-        if cont_type && boundary.is_empty() {
-            match content_type_ext(line) {
-                Ok((_, bdry)) => {
-                    boundary = bdry.to_string();
-                }
-                Err(_err) => {}
-            }
-        }
-        // content-type
-        match content_type(line) {
-            Ok((_input, Some(bdry))) => {
-                cont_type = true;
-                boundary = bdry.to_string();
-            }
-            Ok((_input, None)) => {
-                cont_type = true;
-            }
-            Err(_err) => {}
-        }
-    }
-}
-
-async fn mime_body<T, P>(
-    stm: &mut PktStrm<T, P>,
-    bdry: &str,
-    cb_body_start: Option<CbBodyEvt>,
-    cb_body: Option<CbBody>,
-    cb_body_stop: Option<CbBodyEvt>,
-    cb_ctx: *mut c_void,
-) -> Result<(), ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    dbg!("mime body start");
-    if let Some(cb) = cb_body_start.clone() {
-        cb.borrow_mut()(cb_ctx);
-    }
-    loop {
-        let (ret, content, seq) = stm.read_mime_octet(bdry).await?;
-        // dbg!(std::str::from_utf8(content).unwrap_or(""));
-        if let Some(cb) = cb_body.clone() {
-            cb.borrow_mut()(content, seq, cb_ctx);
-        }
-
-        if ret == ReadRet::DashBdry {
-            break;
-        }
-    }
-    if let Some(cb) = cb_body_stop.clone() {
-        cb.borrow_mut()(cb_ctx);
-    }
-    dbg!("mime body end");
-    Ok(())
-}
-
 // MAIL FROM: <user12345@example123.com> SIZE=10557
 fn mail_from(input: &str) -> IResult<&str, (&str, usize)> {
     let original_input = input;
@@ -541,34 +334,6 @@ fn subject(input: &str) -> IResult<&str, (&str, usize)> {
     Ok((input, (subject, start_pos)))
 }
 
-// 如果是content type 且带boundary: Content-Type: multipart/mixed; boundary="abc123"
-// 返回: (input, some(bdry))
-// 如果是content type 不带bdry: Content-Type: multipart/mixed;
-// 返回: (input, None)
-// 如果不是content type 返回err
-fn content_type(input: &str) -> IResult<&str, Option<&str>> {
-    let (input, _) = tag("Content-Type: ")(input)?;
-
-    if let Some(start) = input.find("boundary=\"") {
-        let input = &input[start..];
-
-        let (input, _) = tag("boundary=\"")(input)?;
-        let (input, bdry) = take_till(|c| c == '"')(input)?;
-        let (input, _) = tag("\"")(input)?;
-
-        Ok((input, Some(bdry)))
-    } else {
-        Ok((input, None))
-    }
-}
-
-// \tboundary="----=_001_NextPart572182624333_=----"
-fn content_type_ext(input: &str) -> IResult<&str, &str> {
-    let (input, _) = tag("\tboundary=\"")(input)?;
-    let (input, bdry) = take_till(|c| c == '"')(input)?;
-    Ok((input, bdry))
-}
-
 fn starts_with_helo(input: &[u8]) -> bool {
     if input.len() < 4 {
         return false;
@@ -581,7 +346,9 @@ fn starts_with_helo(input: &[u8]) -> bool {
 mod tests {
     use super::*;
     use crate::test_utils::*;
+    use std::cell::RefCell;
     use std::env;
+    use std::rc::Rc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -629,46 +396,6 @@ mod tests {
         assert_eq!(subject, "Test email subject");
         assert_eq!(start, 9); // "Subject: " 的长度
         println!("主题: '{}' (起始位置: {})", subject, start);
-    }
-
-    #[test]
-    fn test_content_type() {
-        // 测试用例1: 包含 boundary 的正常情况
-        let input = "Content-Type: multipart/mixed; charset=utf-8; boundary=\"abc123\"";
-        let result = content_type(input);
-        assert!(result.is_ok());
-        let (rest, boundary) = result.unwrap();
-        assert_eq!(boundary, Some("abc123"));
-        assert!(rest.is_empty());
-
-        // 测试用例2: 包含 boundary 且后面还有其他参数
-        let input = "Content-Type: multipart/mixed; boundary=\"xyz789\"; other=value";
-        let result = content_type(input);
-        assert!(result.is_ok());
-        let (rest, boundary) = result.unwrap();
-        assert_eq!(boundary, Some("xyz789"));
-        assert_eq!(rest, "; other=value");
-
-        // 测试用例3: 不包含 boundary 的情况
-        let input = "Content-Type: text/plain; charset=utf-8";
-        let result = content_type(input);
-        assert!(result.is_ok());
-        let (rest, boundary) = result.unwrap();
-        assert_eq!(boundary, None);
-        assert_eq!(rest, "text/plain; charset=utf-8");
-
-        // 测试用例4: 特殊字符的 boundary
-        let input = "Content-Type: multipart/mixed; boundary=\"----=_NextPart_000_0000_01D123456.789ABCDE\"";
-        let result = content_type(input);
-        assert!(result.is_ok());
-        let (rest, boundary) = result.unwrap();
-        assert_eq!(boundary, Some("----=_NextPart_000_0000_01D123456.789ABCDE"));
-        assert!(rest.is_empty());
-
-        // 测试用例5: 错误格式 - 不是以 Content-Type: 开头
-        let input = "Wrong-Type: multipart/mixed; boundary=\"abc123\"";
-        let result = content_type(input);
-        assert!(result.is_err());
     }
 
     #[test]
@@ -876,10 +603,7 @@ mod tests {
         let body_guard = captured_body.borrow();
         assert_eq!(body_guard.len(), body.len());
         for (idx, expected) in body.iter().enumerate() {
-            assert_eq!(
-                std::str::from_utf8(&body_guard[idx]).unwrap(),
-                expected.trim_end_matches("\r\n")
-            );
+            assert_eq!(std::str::from_utf8(&body_guard[idx]).unwrap(), *expected);
         }
 
         let raw_guard = captured_raw.borrow();
@@ -1084,8 +808,8 @@ mod tests {
             "Content-Type: text/html;\r\n",
             "\tcharset=\"GB2312\"\r\n",
             "Content-Transfer-Encoding: quoted-printable\r\n",
-            "\r\n", // 只有head,跟close bdry
-            "------=_001_NextPart572182624333_=------\r\n",
+            "\r\n",                                         // 只有head,跟close bdry
+            "------=_001_NextPart572182624333_=------\r\n", // 最后的\r\n属于epilogue
             "This is the epilogue 1.\r\n",
             "This is the epilogue 2.\r\n",
             ".\r\n",
@@ -1813,7 +1537,7 @@ mod tests {
                 continue;
             }
             pkt.set_l7_proto(L7Proto::Smtp);
-            if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT_NET {
+            if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT {
                 pkt.set_direction(PktDirection::Client2Server);
             } else {
                 pkt.set_direction(PktDirection::Server2Client);

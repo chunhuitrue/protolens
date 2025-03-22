@@ -290,11 +290,11 @@ pub extern "C" fn prolens_set_cb_ord_pkt(prolens: *mut FfiProlens, callback: Opt
     prolens.0.set_cb_ord_pkt(wrapper);
 }
 
-type CbSmtp = extern "C" fn(data: *const u8, len: usize, seq: u32, ctx: *const c_void);
-type CbSmtpBodyEvt = extern "C" fn(ctx: *const c_void);
+type CbData = extern "C" fn(data: *const u8, len: usize, seq: u32, ctx: *const c_void);
+type CbEvt = extern "C" fn(ctx: *const c_void);
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_user(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+pub extern "C" fn prolens_set_cb_smtp_user(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -307,7 +307,7 @@ pub extern "C" fn prolens_set_cb_smtp_user(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_pass(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+pub extern "C" fn prolens_set_cb_smtp_pass(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -320,7 +320,7 @@ pub extern "C" fn prolens_set_cb_smtp_pass(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_mailfrom(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+pub extern "C" fn prolens_set_cb_smtp_mailfrom(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -333,7 +333,7 @@ pub extern "C" fn prolens_set_cb_smtp_mailfrom(prolens: *mut FfiProlens, callbac
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_rcpt(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+pub extern "C" fn prolens_set_cb_smtp_rcpt(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -346,7 +346,7 @@ pub extern "C" fn prolens_set_cb_smtp_rcpt(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_header(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+pub extern "C" fn prolens_set_cb_smtp_header(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -361,7 +361,7 @@ pub extern "C" fn prolens_set_cb_smtp_header(prolens: *mut FfiProlens, callback:
 #[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_smtp_body_start(
     prolens: *mut FfiProlens,
-    callback: Option<CbSmtpBodyEvt>,
+    callback: Option<CbEvt>,
 ) {
     if prolens.is_null() || callback.is_none() {
         return;
@@ -375,7 +375,7 @@ pub extern "C" fn prolens_set_cb_smtp_body_start(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+pub extern "C" fn prolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -388,10 +388,7 @@ pub extern "C" fn prolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_body_stop(
-    prolens: *mut FfiProlens,
-    callback: Option<CbSmtpBodyEvt>,
-) {
+pub extern "C" fn prolens_set_cb_smtp_body_stop(prolens: *mut FfiProlens, callback: Option<CbEvt>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -404,7 +401,7 @@ pub extern "C" fn prolens_set_cb_smtp_body_stop(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_srv(prolens: *mut FfiProlens, callback: Option<CbSmtp>) {
+pub extern "C" fn prolens_set_cb_smtp_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -414,4 +411,72 @@ pub extern "C" fn prolens_set_cb_smtp_srv(prolens: *mut FfiProlens, callback: Op
         callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
     };
     prolens.0.set_cb_smtp_srv(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_pop3_header(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_pop3_header(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_pop3_body_start(
+    prolens: *mut FfiProlens,
+    callback: Option<CbEvt>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void| {
+        callback.unwrap()(ctx);
+    };
+    prolens.0.set_cb_pop3_body_start(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_pop3_body(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_pop3_body(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_pop3_body_stop(prolens: *mut FfiProlens, callback: Option<CbEvt>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void| {
+        callback.unwrap()(ctx);
+    };
+    prolens.0.set_cb_pop3_body_stop(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_pop3_clt(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_pop3_clt(wrapper);
 }

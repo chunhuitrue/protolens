@@ -312,8 +312,14 @@ where
         Err(())
     }
 
+    // 包含\r\n
     pub(crate) async fn readline(&mut self) -> Result<(&[u8], u32), ()> {
         self.readline_inner(0).await
+    }
+
+    pub(crate) async fn readline_str(&mut self) -> Result<(&str, u32), ()> {
+        let (line, seq) = self.readline().await?;
+        Ok((unsafe { std::str::from_utf8_unchecked(line) }, seq))
     }
 
     // 不带\r\n

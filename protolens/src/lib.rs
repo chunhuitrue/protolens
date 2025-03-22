@@ -30,6 +30,7 @@ use crate::ordpacket::*;
 use crate::packet::*;
 use crate::parser::*;
 use crate::pktstrm::*;
+use crate::pop3::*;
 use crate::smtp::*;
 use crate::stats::*;
 
@@ -70,6 +71,11 @@ where
     cb_smtp_body: Option<CbBody>,
     cb_smtp_body_stop: Option<CbBodyEvt>,
     cb_smtp_srv: Option<CbSrv>,
+    cb_pop3_header: Option<CbHeader>,
+    cb_pop3_body_start: Option<CbBodyEvt>,
+    cb_pop3_body: Option<CbBody>,
+    cb_pop3_body_stop: Option<CbBodyEvt>,
+    cb_pop3_clt: Option<CbClt>,
 
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
@@ -120,6 +126,11 @@ where
             cb_smtp_body: None,
             cb_smtp_body_stop: None,
             cb_smtp_srv: None,
+            cb_pop3_header: None,
+            cb_pop3_body_start: None,
+            cb_pop3_body: None,
+            cb_pop3_body_stop: None,
+            cb_pop3_clt: None,
         };
         prolens.regist_parsers();
         prolens
@@ -137,6 +148,8 @@ where
 
         self.parsers
             .insert(L7Proto::Smtp, Box::new(SmtpFactory::<T, P>::new()));
+        self.parsers
+            .insert(L7Proto::Pop3, Box::new(Pop3Factory::<T, P>::new()));
 
         #[cfg(test)]
         {
@@ -260,65 +273,100 @@ where
 
     pub fn set_cb_smtp_user<F>(&mut self, callback: F)
     where
-        F: SmtpCbFn + 'static,
+        F: DataCbFn + 'static,
     {
         self.cb_smtp_user = Some(Rc::new(RefCell::new(callback)));
     }
 
     pub fn set_cb_smtp_pass<F>(&mut self, callback: F)
     where
-        F: SmtpCbFn + 'static,
+        F: DataCbFn + 'static,
     {
         self.cb_smtp_pass = Some(Rc::new(RefCell::new(callback)) as CbPass);
     }
 
     pub fn set_cb_smtp_mailfrom<F>(&mut self, callback: F)
     where
-        F: SmtpCbFn + 'static,
+        F: DataCbFn + 'static,
     {
         self.cb_smtp_mailfrom = Some(Rc::new(RefCell::new(callback)) as CbMailFrom);
     }
 
     pub fn set_cb_smtp_rcpt<F>(&mut self, callback: F)
     where
-        F: SmtpCbFn + 'static,
+        F: DataCbFn + 'static,
     {
         self.cb_smtp_rcpt = Some(Rc::new(RefCell::new(callback)) as CbRcpt);
     }
 
     pub fn set_cb_smtp_header<F>(&mut self, callback: F)
     where
-        F: SmtpCbFn + 'static,
+        F: DataCbFn + 'static,
     {
         self.cb_smtp_header = Some(Rc::new(RefCell::new(callback)) as CbHeader);
     }
 
     pub fn set_cb_smtp_body_start<F>(&mut self, callback: F)
     where
-        F: SmtpCbEvtFn + 'static,
+        F: EvtCbFn + 'static,
     {
         self.cb_smtp_body_start = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
     }
 
     pub fn set_cb_smtp_body<F>(&mut self, callback: F)
     where
-        F: SmtpCbFn + 'static,
+        F: DataCbFn + 'static,
     {
         self.cb_smtp_body = Some(Rc::new(RefCell::new(callback)) as CbBody);
     }
 
     pub fn set_cb_smtp_body_stop<F>(&mut self, callback: F)
     where
-        F: SmtpCbEvtFn + 'static,
+        F: EvtCbFn + 'static,
     {
         self.cb_smtp_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
     }
 
     pub fn set_cb_smtp_srv<F>(&mut self, callback: F)
     where
-        F: SmtpCbFn + 'static,
+        F: DataCbFn + 'static,
     {
         self.cb_smtp_srv = Some(Rc::new(RefCell::new(callback)) as CbSrv);
+    }
+
+    pub fn set_cb_pop3_header<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_pop3_header = Some(Rc::new(RefCell::new(callback)) as CbHeader);
+    }
+
+    pub fn set_cb_pop3_body_start<F>(&mut self, callback: F)
+    where
+        F: EvtCbFn + 'static,
+    {
+        self.cb_pop3_body_start = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
+
+    pub fn set_cb_pop3_body<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_pop3_body = Some(Rc::new(RefCell::new(callback)) as CbBody);
+    }
+
+    pub fn set_cb_pop3_body_stop<F>(&mut self, callback: F)
+    where
+        F: EvtCbFn + 'static,
+    {
+        self.cb_pop3_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
+
+    pub fn set_cb_pop3_clt<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_pop3_clt = Some(Rc::new(RefCell::new(callback)) as CbSrv);
     }
 }
 

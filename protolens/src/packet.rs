@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub enum L7Proto {
     OrdPacket = 0,
     Smtp,
+    Pop3,
 
     #[cfg(test)]
     RawPacket,
