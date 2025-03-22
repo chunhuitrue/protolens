@@ -10,8 +10,9 @@ use crate::packet::*;
 use crate::parser::epilogue;
 use nom::{
     IResult,
-    bytes::complete::tag,
+    bytes::complete::{tag, take_till},
     character::complete::{digit1, multispace1},
+    combinator::map,
     combinator::{map_res, recognize},
     sequence::{preceded, terminated},
 };
@@ -79,7 +80,7 @@ where
                 cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
             }
 
-            if line == "QUIT" {
+            if line == "QUIT" || line == "STLS" {
                 break;
             }
         }
@@ -99,10 +100,15 @@ where
         loop {
             let (line, _seq) = stm.read_clean_line_str().await?;
 
+            if stls_answer(line) {
+                break;
+            }
+
             if retr_answer(line) {
                 mail(stm, cb.clone(), cb_ctx).await?;
             }
         }
+        Ok(())
     }
 }
 
@@ -222,6 +228,21 @@ fn retr_answer(input: &str) -> bool {
     parse_retr_response(input).is_ok()
 }
 
+fn stls_answer(input: &str) -> bool {
+    fn parse_ok_tag(input: &str) -> IResult<&str, &str> {
+        tag("+OK")(input)
+    }
+
+    fn parse_stls_response(input: &str) -> IResult<&str, bool> {
+        map(
+            preceded(parse_ok_tag, take_till(|_| false)),
+            |rest: &str| rest.to_lowercase().contains("tls"),
+        )(input)
+    }
+
+    parse_stls_response(input).is_ok_and(|(_, contains_tls)| contains_tls)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +265,21 @@ mod tests {
         assert!(!retr_answer("+OK 6750 bytes"));
         assert!(!retr_answer("-ERR no such message"));
         assert!(!retr_answer(""));
+    }
+
+    #[test]
+    fn test_stls_answer() {
+        // 有效的STLS响应
+        assert!(stls_answer("+OK Begin TLS negotiation"));
+        assert!(stls_answer("+OK Ready to start TLS"));
+        assert!(stls_answer("+OK TLS"));
+        assert!(stls_answer("+OK Begin tls"));
+
+        // 无效的STLS响应
+        assert!(!stls_answer("+OK"));
+        assert!(!stls_answer("+OK Ready to proceed"));
+        assert!(!stls_answer("-ERR TLS not available"));
+        assert!(!stls_answer(""));
     }
 
     #[test]
