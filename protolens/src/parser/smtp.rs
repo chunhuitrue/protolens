@@ -101,7 +101,7 @@ where
 
             // pass
             let (pass, seq) = stm.read_clean_line().await?;
-            if let Some(cb) = cb.pass.clone() {
+            if let Some(cb) = cb.pass {
                 cb.borrow_mut()(pass, seq, cb_ctx);
             }
 
@@ -110,7 +110,7 @@ where
 
             if let Ok((_, (mail, offset))) = mail_from(from) {
                 let mailfrom_seq = seq + offset as u32;
-                if let Some(cb) = cb.mailfrom.clone() {
+                if let Some(cb) = cb.mailfrom {
                     cb.borrow_mut()(mail.as_bytes(), mailfrom_seq, cb_ctx);
                 }
             }
@@ -118,7 +118,7 @@ where
             // 没有auth，直接到mail from的情况
             if let Ok((_, (mail, offset))) = mail_from(line) {
                 let mailfrom_seq = seq + offset as u32;
-                if let Some(cb) = cb.mailfrom.clone() {
+                if let Some(cb) = cb.mailfrom {
                     cb.borrow_mut()(mail.as_bytes(), mailfrom_seq, cb_ctx);
                 }
             }
@@ -130,21 +130,27 @@ where
 
         multi_rcpt_to(stm, cb.rcpt, cb_ctx).await?;
 
-        let boundary = header(stm, cb.header.clone(), cb_ctx).await?;
-
+        let boundary = header(stm, cb.header.as_ref(), cb_ctx).await?;
         if let Some(bdry) = boundary {
             multi_body(
                 stm,
                 &bdry,
-                cb.header,
-                cb.body_start,
-                cb.body,
-                cb.body_stop,
+                cb.header.as_ref(),
+                cb.body_start.as_ref(),
+                cb.body.as_ref(),
+                cb.body_stop.as_ref(),
                 cb_ctx,
             )
             .await?;
         } else {
-            body(stm, cb.body_start, cb.body, cb.body_stop, cb_ctx).await?;
+            body(
+                stm,
+                cb.body_start.as_ref(),
+                cb.body.as_ref(),
+                cb.body_stop.as_ref(),
+                cb_ctx,
+            )
+            .await?;
         }
 
         Ok(())
@@ -262,7 +268,7 @@ where
         if line.to_ascii_uppercase().starts_with("MAIL FROM:") {
             if let Ok((_, (mail, offset))) = mail_from(line) {
                 let mailfrom_seq = seq + offset as u32;
-                if let Some(cb) = cb_mailfrom.clone() {
+                if let Some(cb) = cb_mailfrom {
                     cb.borrow_mut()(mail.as_bytes(), mailfrom_seq, cb_ctx);
                 }
             }
@@ -290,7 +296,7 @@ where
 
         if let Ok((_, (mail, offset))) = rcpt_to(line) {
             let mail_seq = seq + offset as u32;
-            if let Some(cb) = cb_rcpt.clone() {
+            if let Some(ref cb) = cb_rcpt {
                 cb.borrow_mut()(mail.as_bytes(), mail_seq, cb_ctx);
             }
         } else {

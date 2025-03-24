@@ -81,6 +81,11 @@ void prolens_set_cb_pop3_body_start(FfiProlens *prolens, CbEvt callback);
 void prolens_set_cb_pop3_body(FfiProlens *prolens, CbData callback);
 void prolens_set_cb_pop3_body_stop(FfiProlens *prolens, CbEvt callback);
 void prolens_set_cb_pop3_srv(FfiProlens *prolens, CbData callback);
+void prolens_set_cb_imap_header(FfiProlens *prolens, CbData callback);
+void prolens_set_cb_imap_body_start(FfiProlens *prolens, CbEvt callback);
+void prolens_set_cb_imap_body(FfiProlens *prolens, CbData callback);
+void prolens_set_cb_imap_body_stop(FfiProlens *prolens, CbEvt callback);
+void prolens_set_cb_imap_srv(FfiProlens *prolens, CbData callback);
 
 
 #ifdef __cplusplus

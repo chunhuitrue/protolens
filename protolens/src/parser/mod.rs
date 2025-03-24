@@ -1,3 +1,4 @@
+pub mod imap;
 pub mod ordpacket;
 pub mod pop3;
 pub mod smtp;
@@ -90,9 +91,17 @@ pub(crate) type CbBody = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbSrv = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbClt = Rc<RefCell<dyn DataCbFn + 'static>>;
 
+#[derive(Clone)]
+pub(crate) struct MailCallbacks {
+    pub(crate) header: Option<CbHeader>,
+    pub(crate) body_start: Option<CbBodyEvt>,
+    pub(crate) body: Option<CbBody>,
+    pub(crate) body_stop: Option<CbBodyEvt>,
+}
+
 pub(crate) async fn header<T, P>(
     stm: &mut PktStrm<T, P>,
-    cb_header: Option<CbHeader>,
+    cb_header: Option<&CbHeader>,
     cb_ctx: *mut c_void,
 ) -> Result<Option<String>, ()>
 where
@@ -107,7 +116,7 @@ where
         let (line, seq) = stm.read_clean_line_str().await?;
 
         // 空行也回调。调用者知道header结束
-        if let Some(cb) = cb_header.clone() {
+        if let Some(cb) = cb_header {
             cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
         }
         dbg!(line);
@@ -149,9 +158,9 @@ where
 
 pub(crate) async fn body<T, P>(
     stm: &mut PktStrm<T, P>,
-    cb_body_start: Option<CbBodyEvt>,
-    cb_body: Option<CbBody>,
-    cb_body_stop: Option<CbBodyEvt>,
+    cb_body_start: Option<&CbBodyEvt>,
+    cb_body: Option<&CbBody>,
+    cb_body_stop: Option<&CbBodyEvt>,
     cb_ctx: *mut c_void,
 ) -> Result<bool, ()>
 where
@@ -159,7 +168,7 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
 {
     dbg!("body start");
-    if let Some(cb) = cb_body_start.clone() {
+    if let Some(cb) = cb_body_start {
         cb.borrow_mut()(cb_ctx);
     }
     loop {
@@ -170,11 +179,11 @@ where
         }
 
         dbg!(line);
-        if let Some(cb) = cb_body.clone() {
+        if let Some(cb) = &cb_body {
             cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
         }
     }
-    if let Some(cb) = cb_body_stop.clone() {
+    if let Some(cb) = cb_body_stop {
         cb.borrow_mut()(cb_ctx);
     }
     dbg!("body end");
@@ -184,10 +193,10 @@ where
 pub(crate) async fn multi_body<T, P>(
     stm: &mut PktStrm<T, P>,
     bdry: &str,
-    cb_header: Option<CbHeader>,
-    cb_body_start: Option<CbBodyEvt>,
-    cb_body: Option<CbBody>,
-    cb_body_stop: Option<CbBodyEvt>,
+    cb_header: Option<&CbHeader>,
+    cb_body_start: Option<&CbBodyEvt>,
+    cb_body: Option<&CbBody>,
+    cb_body_stop: Option<&CbBodyEvt>,
     cb_ctx: *mut c_void,
 ) -> Result<(), ()>
 where
@@ -196,28 +205,20 @@ where
 {
     preamble(stm, bdry).await?;
     loop {
-        if let Some(new_bdry) = header(stm, cb_header.clone(), cb_ctx).await? {
+        if let Some(new_bdry) = header(stm, cb_header, cb_ctx).await? {
             Box::pin(multi_body(
                 stm,
                 &new_bdry,
-                cb_header.clone(),
-                cb_body_start.clone(),
-                cb_body.clone(),
-                cb_body_stop.clone(),
+                cb_header,
+                cb_body_start,
+                cb_body,
+                cb_body_stop,
                 cb_ctx,
             ))
             .await?;
         }
 
-        mime_body2(
-            stm,
-            bdry,
-            cb_body_start.clone(),
-            cb_body.clone(),
-            cb_body_stop.clone(),
-            cb_ctx,
-        )
-        .await?;
+        mime_body(stm, bdry, cb_body_start, cb_body, cb_body_stop, cb_ctx).await?;
 
         let (byte, _seq) = stm.readn(2).await?;
         if byte.starts_with(b"--") {
@@ -238,18 +239,18 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
 {
     dbg!("preamble start");
-    mime_body2(stm, bdry, None, None, None, std::ptr::null_mut()).await?;
+    mime_body(stm, bdry, None, None, None, std::ptr::null_mut()).await?;
 
     let (byte, _seq) = stm.readn(2).await?;
     if byte == b"\r\n" { Ok(()) } else { Err(()) }
 }
 
-async fn mime_body2<T, P>(
+async fn mime_body<T, P>(
     stm: &mut PktStrm<T, P>,
     bdry: &str,
-    cb_body_start: Option<CbBodyEvt>,
-    cb_body: Option<CbBody>,
-    cb_body_stop: Option<CbBodyEvt>,
+    cb_body_start: Option<&CbBodyEvt>,
+    cb_body: Option<&CbBody>,
+    cb_body_stop: Option<&CbBodyEvt>,
     cb_ctx: *mut c_void,
 ) -> Result<(), ()>
 where
@@ -257,13 +258,13 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
 {
     dbg!("mime body start");
-    if let Some(cb) = cb_body_start.clone() {
+    if let Some(cb) = cb_body_start {
         cb.borrow_mut()(cb_ctx);
     }
     loop {
         let (ret, content, seq) = stm.read_mime_octet(bdry).await?;
         dbg!(std::str::from_utf8(content).unwrap_or(""));
-        if let Some(cb) = cb_body.clone() {
+        if let Some(cb) = cb_body {
             cb.borrow_mut()(content, seq, cb_ctx);
         }
 
@@ -271,7 +272,7 @@ where
             break;
         }
     }
-    if let Some(cb) = cb_body_stop.clone() {
+    if let Some(cb) = cb_body_stop {
         cb.borrow_mut()(cb_ctx);
     }
     dbg!("mime body end");

@@ -11,6 +11,7 @@ pub enum L7Proto {
     OrdPacket = 0,
     Smtp,
     Pop3,
+    Imap,
 
     #[cfg(test)]
     RawPacket,

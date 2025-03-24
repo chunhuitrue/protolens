@@ -14,6 +14,7 @@ use crate::{L7Proto, Packet, TransProto};
 
 pub(crate) const SMTP_PORT: u16 = 25;
 pub(crate) const POP3_PORT: u16 = 110;
+pub(crate) const IMAP_PORT: u16 = 143;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PacketRef<T>

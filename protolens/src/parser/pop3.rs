@@ -1,3 +1,4 @@
+use crate::MailCallbacks;
 use crate::Parser;
 use crate::ParserFactory;
 use crate::ParserFuture;
@@ -23,14 +24,6 @@ use crate::CbBody;
 use crate::CbBodyEvt;
 use crate::CbClt;
 use crate::CbHeader;
-
-#[derive(Clone)]
-pub(crate) struct Pop3Callbacks {
-    pub(crate) header: Option<CbHeader>,
-    pub(crate) body_start: Option<CbBodyEvt>,
-    pub(crate) body: Option<CbBody>,
-    pub(crate) body_stop: Option<CbBodyEvt>,
-}
 
 pub struct Pop3Parser<T, P>
 where
@@ -89,7 +82,7 @@ where
 
     async fn s2c_parser_inner(
         stream: *const PktStrm<T, P>,
-        cb: Pop3Callbacks,
+        cb: MailCallbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm: &mut PktStrm<T, P>;
@@ -105,7 +98,7 @@ where
             }
 
             if retr_answer(line) {
-                mail(stm, cb.clone(), cb_ctx).await?;
+                pop3_mail(stm, &cb, cb_ctx).await?;
             }
         }
         Ok(())
@@ -137,7 +130,7 @@ where
         stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        let cb = Pop3Callbacks {
+        let cb = MailCallbacks {
             header: self.cb_header.clone(),
             body_start: self.cb_body_start.clone(),
             body: self.cb_body.clone(),
@@ -176,31 +169,38 @@ where
     }
 }
 
-async fn mail<T, P>(
+async fn pop3_mail<T, P>(
     stm: &mut PktStrm<T, P>,
-    cb: Pop3Callbacks,
+    cb: &MailCallbacks,
     cb_ctx: *mut c_void,
 ) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    let boundary = header(stm, cb.header.clone(), cb_ctx).await?;
+    let boundary = header(stm, cb.header.as_ref(), cb_ctx).await?;
     if let Some(bdry) = boundary {
         dbg!("to multi body2");
         multi_body(
             stm,
             &bdry,
-            cb.header,
-            cb.body_start,
-            cb.body,
-            cb.body_stop,
+            cb.header.as_ref(),
+            cb.body_start.as_ref(),
+            cb.body.as_ref(),
+            cb.body_stop.as_ref(),
             cb_ctx,
         )
         .await?;
         epilogue(stm).await?;
     } else {
-        body(stm, cb.body_start, cb.body, cb.body_stop, cb_ctx).await?;
+        body(
+            stm,
+            cb.body_start.as_ref(),
+            cb.body.as_ref(),
+            cb.body_stop.as_ref(),
+            cb_ctx,
+        )
+        .await?;
     }
     Ok(())
 }

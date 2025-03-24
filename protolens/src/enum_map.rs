@@ -52,8 +52,8 @@ mod tests {
         assert_eq!(L7Proto::Pop3 as u32, 2);
         #[cfg(test)]
         {
-            assert_eq!(L7Proto::RawPacket as u32, 3);
-            assert_eq!(L7Proto::Byte as u32, 4);
+            assert_eq!(L7Proto::RawPacket as u32, 4);
+            assert_eq!(L7Proto::Byte as u32, 5);
         }
     }
 

@@ -480,3 +480,71 @@ pub extern "C" fn prolens_set_cb_pop3_clt(prolens: *mut FfiProlens, callback: Op
     };
     prolens.0.set_cb_pop3_clt(wrapper);
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_imap_header(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_imap_header(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_imap_body_start(
+    prolens: *mut FfiProlens,
+    callback: Option<CbEvt>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void| {
+        callback.unwrap()(ctx);
+    };
+    prolens.0.set_cb_imap_body_start(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_imap_body(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_imap_body(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_imap_body_stop(prolens: *mut FfiProlens, callback: Option<CbEvt>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void| {
+        callback.unwrap()(ctx);
+    };
+    prolens.0.set_cb_imap_body_stop(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_imap_clt(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_imap_clt(wrapper);
+}

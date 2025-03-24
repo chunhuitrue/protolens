@@ -40,6 +40,7 @@ where
     buff_start: usize, // 开始的index(绝对值)
     buff_len: usize,
     buff_next: usize, // pool next的待读取的index（绝对值）
+    read_size: usize, // 已经读取的总字节数
 
     next_seq: u32, // 待读取的seq
     fin: bool,
@@ -64,6 +65,7 @@ where
             buff_start: 0,
             buff_len: 0,
             buff_next: 0,
+            read_size: 0,
 
             next_seq: 0,
             fin: false,
@@ -333,6 +335,50 @@ where
         Ok((unsafe { std::str::from_utf8_unchecked(line) }, seq))
     }
 
+    pub(crate) async fn peekline_str(&mut self) -> Result<&str, ()> {
+        // 0: 正常读取
+        // 1: 读到\r
+        let mut state = 0;
+
+        for i in 0..MAX_READ_BUFF {
+            match self.next().await {
+                Some(byte) => {
+                    match state {
+                        0 => {
+                            // 正常状态
+                            if byte == b'\r' {
+                                state = 1;
+                            }
+                        }
+                        1 => {
+                            // 已读到\r
+                            if byte == b'\n' {
+                                let data_len = i + 1;
+                                let data =
+                                    &self.buff[self.buff_start..(self.buff_start + data_len)];
+                                let result = Ok(unsafe { std::str::from_utf8_unchecked(data) });
+                                self.buff_next -= data_len;
+                                self.read_size -= data_len;
+                                return result;
+                            } else if byte == b'\r' {
+                                state = 1;
+                            } else {
+                                state = 0;
+                            }
+                        }
+                        _ => {
+                            return Err(());
+                        }
+                    }
+                }
+                None => {
+                    return Err(());
+                }
+            }
+        }
+        Err(())
+    }
+
     // 有或者没有octect
     // 有则读到\r\n--bdry
     // 没有则读到 --bdry
@@ -449,6 +495,10 @@ where
         }
         let (data, seq) = self.get_buff_data(0)?;
         Ok((ReadRet::Data, data, seq))
+    }
+
+    pub(crate) fn get_read_size(&self) -> usize {
+        self.read_size
     }
 
     // 异步方式获取下一个严格有序的包。包含载荷为0的
@@ -629,6 +679,7 @@ where
 
         let byte = self.buff[self.buff_next];
         self.buff_next += 1;
+        self.read_size += 1;
         Poll::Ready(Some(byte))
     }
 }

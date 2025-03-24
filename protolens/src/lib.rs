@@ -26,6 +26,7 @@ use std::sync::Arc;
 use crate::config::*;
 use crate::enum_map::EnumMap;
 use crate::heap::*;
+use crate::imap::*;
 use crate::ordpacket::*;
 use crate::packet::*;
 use crate::parser::*;
@@ -76,6 +77,11 @@ where
     cb_pop3_body: Option<CbBody>,
     cb_pop3_body_stop: Option<CbBodyEvt>,
     cb_pop3_clt: Option<CbClt>,
+    cb_imap_header: Option<CbHeader>,
+    cb_imap_body_start: Option<CbBodyEvt>,
+    cb_imap_body: Option<CbBody>,
+    cb_imap_body_stop: Option<CbBodyEvt>,
+    cb_imap_clt: Option<CbClt>,
 
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
@@ -131,6 +137,11 @@ where
             cb_pop3_body: None,
             cb_pop3_body_stop: None,
             cb_pop3_clt: None,
+            cb_imap_header: None,
+            cb_imap_body_start: None,
+            cb_imap_body: None,
+            cb_imap_body_stop: None,
+            cb_imap_clt: None,
         };
         prolens.regist_parsers();
         prolens
@@ -145,11 +156,12 @@ where
             L7Proto::OrdPacket,
             Box::new(OrdPacketrFactory::<T, P>::new()),
         );
-
         self.parsers
             .insert(L7Proto::Smtp, Box::new(SmtpFactory::<T, P>::new()));
         self.parsers
             .insert(L7Proto::Pop3, Box::new(Pop3Factory::<T, P>::new()));
+        self.parsers
+            .insert(L7Proto::Imap, Box::new(ImapFactory::<T, P>::new()));
 
         #[cfg(test)]
         {
@@ -367,6 +379,41 @@ where
         F: DataCbFn + 'static,
     {
         self.cb_pop3_clt = Some(Rc::new(RefCell::new(callback)) as CbSrv);
+    }
+
+    pub fn set_cb_imap_header<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_imap_header = Some(Rc::new(RefCell::new(callback)) as CbHeader);
+    }
+
+    pub fn set_cb_imap_body_start<F>(&mut self, callback: F)
+    where
+        F: EvtCbFn + 'static,
+    {
+        self.cb_imap_body_start = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
+
+    pub fn set_cb_imap_body<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_imap_body = Some(Rc::new(RefCell::new(callback)) as CbBody);
+    }
+
+    pub fn set_cb_imap_body_stop<F>(&mut self, callback: F)
+    where
+        F: EvtCbFn + 'static,
+    {
+        self.cb_imap_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
+
+    pub fn set_cb_imap_clt<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_imap_clt = Some(Rc::new(RefCell::new(callback)) as CbSrv);
     }
 }
 
