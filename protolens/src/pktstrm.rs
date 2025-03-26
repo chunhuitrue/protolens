@@ -492,6 +492,7 @@ where
         // 处理可能的情况[++++++\r\n--boun]dary
         if match_len > 0 {
             self.buff_next -= match_len; // 把match到的部分bdry留在buff中，下次继续match
+            self.read_size -= match_len;
         }
         let (data, seq) = self.get_buff_data(0)?;
         Ok((ReadRet::Data, data, seq))

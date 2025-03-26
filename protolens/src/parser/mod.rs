@@ -174,7 +174,7 @@ where
     loop {
         let (line, seq) = stm.readline_str().await?;
 
-        if line == (".\r\n") {
+        if line == ".\r\n" {
             break;
         }
 
@@ -221,10 +221,11 @@ where
         mime_body(stm, bdry, cb_body_start, cb_body, cb_body_stop, cb_ctx).await?;
 
         let (byte, _seq) = stm.readn(2).await?;
-        if byte.starts_with(b"--") {
-            dbg!("muti_body end");
+        if byte == b"--" {
+            dbg!("close bdry break");
             break;
-        } else if byte.starts_with(b"\r\n") {
+        } else if byte == b"\r\n" {
+            dbg!("bdry continue");
             continue;
         } else {
             return Err(());
@@ -264,6 +265,7 @@ where
     loop {
         let (ret, content, seq) = stm.read_mime_octet(bdry).await?;
         dbg!(std::str::from_utf8(content).unwrap_or(""));
+
         if let Some(cb) = cb_body {
             cb.borrow_mut()(content, seq, cb_ctx);
         }

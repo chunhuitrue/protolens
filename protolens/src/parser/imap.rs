@@ -75,6 +75,13 @@ where
             let (is_append, mail_size) = append(line);
             if is_append && append_ok(stm).await? {
                 imap_mail(stm, mail_size, &cb_mail, cb_ctx).await?;
+
+                // command = tag SP (command-any / command-auth / command-nonauth /
+                //           command-select) CRLF
+                let (byte, _seq) = stm.readn(2).await?;
+                if byte != b"\r\n" {
+                    return Err(());
+                }
             }
         }
     }
@@ -190,8 +197,11 @@ where
         .await?;
         imap_epilogue(stm, mail_size, start_size).await?;
     } else {
-        body(
+        let head_size = stm.get_read_size() - start_size;
+        let body_size = mail_size - head_size;
+        size_body(
             stm,
+            body_size,
             cb.body_start.as_ref(),
             cb.body.as_ref(),
             cb.body_stop.as_ref(),
@@ -199,7 +209,41 @@ where
         )
         .await?;
     }
+    dbg!("imap_mail end");
     Ok(())
+}
+
+async fn size_body<T, P>(
+    stm: &mut PktStrm<T, P>,
+    size: usize,
+    cb_body_start: Option<&CbBodyEvt>,
+    cb_body: Option<&CbBody>,
+    cb_body_stop: Option<&CbBodyEvt>,
+    cb_ctx: *mut c_void,
+) -> Result<bool, ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    let mut remain_size = size;
+
+    dbg!("size_body start");
+    if let Some(cb) = cb_body_start {
+        cb.borrow_mut()(cb_ctx);
+    }
+    while remain_size > 0 {
+        let (bytes, seq) = stm.read(remain_size).await?;
+        remain_size -= bytes.len();
+
+        if let Some(cb) = &cb_body {
+            cb.borrow_mut()(bytes, seq, cb_ctx);
+        }
+    }
+    if let Some(cb) = cb_body_stop {
+        cb.borrow_mut()(cb_ctx);
+    }
+    dbg!("size_body end");
+    Ok(true)
 }
 
 async fn imap_epilogue<T, P>(
@@ -211,11 +255,10 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    let remain_size = mail_size - (stm.get_read_size() - start_size);
+    let remain_size = mail_size.saturating_sub(stm.get_read_size() - start_size);
     if remain_size != 0 {
         stm.readn(remain_size).await?;
     }
-    stm.readn(2).await?; // 最后的\r\n
     Ok(())
 }
 
@@ -258,6 +301,7 @@ fn append(input: &str) -> (bool, usize) {
 
     // 组合解析器：命令ID + 空格 + APPEND
     fn is_append_command(input: &str) -> bool {
+        // dbg!(input);
         tuple((command_id, space1, append_command))(input).is_ok()
     }
 
@@ -320,7 +364,117 @@ mod tests {
     }
 
     #[test]
-    fn test_imap_parser() {
+    fn test_imap_size_body() {
+        let lines = [
+            "C59 APPEND \"Drafts\" \"26-Jul-2022 17:49:09 +0800\" {72}\r\n",
+            "From: sender@example.com\r\n",
+            "To: recipient@example.com\r\n",
+            "\r\n",
+            "mail body line.\r\n",
+            "\r\n",
+        ];
+
+        let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_clt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+
+        let header_callback = {
+            let headers_clone = captured_headers.clone();
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                if header.is_empty() {
+                    dbg!("header cb. header end", header);
+                }
+                let mut headers_guard = headers_clone.borrow_mut();
+                headers_guard.push(header.to_vec());
+            }
+        };
+
+        let body_start_callback = {
+            let current_body_clone = current_body.clone();
+            move |_cb_ctx: *mut c_void| {
+                // 创建新的body缓冲区
+                let mut body_guard = current_body_clone.borrow_mut();
+                *body_guard = Vec::new();
+                println!("Body start callback triggered");
+            }
+        };
+
+        let body_callback = {
+            let current_body_clone = current_body.clone();
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                // 将内容追加到当前body
+                let mut body_guard = current_body_clone.borrow_mut();
+                body_guard.extend_from_slice(body);
+                println!("Body callback: {} bytes", body.len());
+            }
+        };
+
+        let body_stop_callback = {
+            let current_body_clone = current_body.clone();
+            let bodies_clone = captured_bodies.clone();
+            move |_cb_ctx: *mut c_void| {
+                // 将当前body添加到bodies列表
+                let body_guard = current_body_clone.borrow();
+                let mut bodies_guard = bodies_clone.borrow_mut();
+                bodies_guard.push(body_guard.clone());
+                println!(
+                    "Body stop callback triggered, body size: {} bytes",
+                    body_guard.len()
+                );
+            }
+        };
+
+        let clt_callback = {
+            let clt_clone = captured_clt.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                // dbg!("in clt callback", std::str::from_utf8(line).unwrap());
+                let mut clt_guard = clt_clone.borrow_mut();
+                clt_guard.push(line.to_vec());
+            }
+        };
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut task = protolens.new_task();
+
+        protolens.set_cb_imap_header(header_callback);
+        protolens.set_cb_imap_body_start(body_start_callback);
+        protolens.set_cb_imap_body(body_callback);
+        protolens.set_cb_imap_body_stop(body_stop_callback);
+        protolens.set_cb_imap_clt(clt_callback);
+
+        let mut seq = 1000;
+        for line in lines.iter() {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload(seq, line_bytes);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Imap);
+            pkt.set_direction(PktDirection::Client2Server);
+
+            protolens.run_task(&mut task, pkt);
+
+            seq += line_bytes.len() as u32;
+        }
+
+        let expected_headers = ["From: sender@example.com", "To: recipient@example.com", ""];
+
+        let headers_guard = captured_headers.borrow();
+        assert_eq!(headers_guard.len(), expected_headers.len());
+        for (idx, expected) in expected_headers.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&headers_guard[idx]).unwrap(), *expected);
+        }
+
+        let bodies_guard = captured_bodies.borrow();
+        assert_eq!(bodies_guard.len(), 1);
+
+        let body = &bodies_guard[0];
+        let body_str = std::str::from_utf8(body).unwrap();
+        dbg!(body_str);
+        assert!(body_str.contains("mail body line.\r\n"));
+    }
+
+    #[test]
+    fn test_imap_append_pcap() {
         let project_root = env::current_dir().unwrap();
         let file_path = project_root.join("tests/pcap/imap_append.pcap");
         let mut cap = Capture::init(file_path).unwrap();
@@ -475,5 +629,104 @@ mod tests {
             "C59 APPEND \"Drafts\" (\\Seen) \"26-Jul-2022 17:49:09 +0800\" {2142}"
         );
         assert_eq!(std::str::from_utf8(&clt_guard[32]).unwrap(), "C77 NOOP");
+    }
+
+    #[test]
+    fn test_imap_fetch_body_pcap() {
+        let project_root = env::current_dir().unwrap();
+        let file_path = project_root.join("tests/pcap/imap.pcap");
+        let mut cap = Capture::init(file_path).unwrap();
+
+        let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_clt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+
+        let header_callback = {
+            let headers_clone = captured_headers.clone();
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                if header.is_empty() {
+                    dbg!("header cb. header end", header);
+                }
+                let mut headers_guard = headers_clone.borrow_mut();
+                headers_guard.push(header.to_vec());
+            }
+        };
+
+        let body_start_callback = {
+            let current_body_clone = current_body.clone();
+            move |_cb_ctx: *mut c_void| {
+                // 创建新的body缓冲区
+                let mut body_guard = current_body_clone.borrow_mut();
+                *body_guard = Vec::new();
+                println!("Body start callback triggered");
+            }
+        };
+
+        let body_callback = {
+            let current_body_clone = current_body.clone();
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                // 将内容追加到当前body
+                let mut body_guard = current_body_clone.borrow_mut();
+                body_guard.extend_from_slice(body);
+                println!("Body callback: {} bytes", body.len());
+            }
+        };
+
+        let body_stop_callback = {
+            let current_body_clone = current_body.clone();
+            let bodies_clone = captured_bodies.clone();
+            move |_cb_ctx: *mut c_void| {
+                // 将当前body添加到bodies列表
+                let body_guard = current_body_clone.borrow();
+                let mut bodies_guard = bodies_clone.borrow_mut();
+                bodies_guard.push(body_guard.clone());
+                println!(
+                    "Body stop callback triggered, body size: {} bytes",
+                    body_guard.len()
+                );
+            }
+        };
+
+        let clt_callback = {
+            let clt_clone = captured_clt.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                // dbg!("in clt callback", std::str::from_utf8(line).unwrap());
+                let mut clt_guard = clt_clone.borrow_mut();
+                clt_guard.push(line.to_vec());
+            }
+        };
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut task = protolens.new_task();
+
+        protolens.set_cb_imap_header(header_callback);
+        protolens.set_cb_imap_body_start(body_start_callback);
+        protolens.set_cb_imap_body(body_callback);
+        protolens.set_cb_imap_body_stop(body_stop_callback);
+        protolens.set_cb_imap_clt(clt_callback);
+
+        loop {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let pkt = cap.next_packet(now);
+            if pkt.is_none() {
+                break;
+            }
+            let pkt = pkt.unwrap();
+            if pkt.decode().is_err() {
+                continue;
+            }
+            pkt.set_l7_proto(L7Proto::Imap);
+            if pkt.header.borrow().as_ref().unwrap().dport() == IMAP_PORT {
+                pkt.set_direction(PktDirection::Client2Server);
+            } else {
+                pkt.set_direction(PktDirection::Server2Client);
+            }
+
+            protolens.run_task(&mut task, pkt);
+        }
     }
 }
