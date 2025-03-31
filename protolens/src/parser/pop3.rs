@@ -1,3 +1,7 @@
+use crate::CbBody;
+use crate::CbBodyEvt;
+use crate::CbClt;
+use crate::CbHeader;
 use crate::MailCallbacks;
 use crate::Parser;
 use crate::ParserFactory;
@@ -19,11 +23,6 @@ use nom::{
 };
 use std::ffi::c_void;
 use std::marker::PhantomData;
-
-use crate::CbBody;
-use crate::CbBodyEvt;
-use crate::CbClt;
-use crate::CbHeader;
 
 pub struct Pop3Parser<T, P>
 where
@@ -342,10 +341,7 @@ mod tests {
         let headers_guard = captured_headers.borrow();
         assert_eq!(headers_guard.len(), header.len());
         for (idx, expected) in header.iter().enumerate() {
-            assert_eq!(
-                std::str::from_utf8(&headers_guard[idx]).unwrap(),
-                expected.trim_end_matches("\r\n")
-            );
+            assert_eq!(std::str::from_utf8(&headers_guard[idx]).unwrap(), *expected);
         }
 
         let body_guard = captured_body.borrow();
@@ -461,20 +457,20 @@ mod tests {
         }
 
         let expected_headers = [
-            "From: sender@example.com",
-            "To: recipient@example.com",
-            "Subject: Email Subject",
-            "Content-Type: multipart/alternative;",
-            "\tboundary=\"----=_001_NextPart572182624333_=----\"",
-            "",
-            "Content-Type: text/html;",
-            "\tcharset=\"GB2312\"",
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
-            "From: sender2@example.com",
-            "To: recipient2@example.com",
-            "Subject: Email Subject2",
-            "",
+            "From: sender@example.com\r\n",
+            "To: recipient@example.com\r\n",
+            "Subject: Email Subject\r\n",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_001_NextPart572182624333_=----\"\r\n",
+            "\r\n",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
+            "From: sender2@example.com\r\n",
+            "To: recipient2@example.com\r\n",
+            "Subject: Email Subject2\r\n",
+            "\r\n",
         ];
 
         let headers_guard = captured_headers.borrow();
@@ -597,58 +593,58 @@ mod tests {
         }
 
         let expected_headers = [
-            "Received: from qq.com (unknown [183.3.255.59])",
-            "\tby mx7 (Coremail) with SMTP id OcCowACXsZS0C3VgxNvcDw--.34051S3;",
-            "\tTue, 13 Apr 2021 11:10:44 +0800 (CST)",
-            "X-QQ-mid: bizesmtp23t1618283442tu0iybdh",
-            "Received: from Z640100480 (unknown [222.128.113.199])",
-            "\tby esmtp6.qq.com (ESMTP) with ",
-            "\tid ; Tue, 13 Apr 2021 11:10:41 +0800 (CST)",
-            "X-QQ-SSF: B170000A002000H0F000B00A0000000",
-            "X-QQ-FEAT: a5Sfq5qTxp2z0xM/vdov6YOwWvqhVGJAxu+mkDi73Trd40z/7aUGANPgXgvia",
-            "\ttlfsV7zhFLNx2sEnZCKuAaeDuGlY3/5nMtXLNvf3Euw0+17WXnb8Y1vxxdV2Ncy8AFYY43P",
-            "\tLdOZM3Xm6RSgCPNupjasujVLjZFHI5En85q/y5g4kzvHoiVWD51M+GbRPWKvg1kOBCYIuVq",
-            "\tDa7nzktTzOrR6JCElhf472kmMEwpd58dhMpy1LeOYdkC50DMsXBJ1KWmWeAtFlzVwZFbR00",
-            "\thCU6UgKlgDfjZxC2icxY4Ckl2yl5ywNqSWveOkrp7otL4pLnly88J5HhrjV8H/R4h2xA==",
-            "X-QQ-GoodBg: 0",
-            "Date: Tue, 13 Apr 2021 11:10:43 +0800",
-            "From: \"yuuminmin@serverdata.com.cn\" <yuuminmin@serverdata.com.cn>",
-            "To: xiaomingming <xiaomingming@163.com>",
-            "Cc: 625293369 <625293369@qq.com>",
-            "Subject: yishengyishiyishuangren",
-            "X-Priority: 3",
-            "X-GUID: B02C26D8-2D59-4053-96B9-D9462BA83F28",
-            "X-Has-Attach: yes",
-            "X-Mailer: Foxmail 7.2.18.111[cn]",
-            "Mime-Version: 1.0",
-            "Message-ID: <202104131110426530121@serverdata.com.cn>+F9E8617B1B816279",
-            "Content-Type: multipart/mixed;",
-            "\tboundary=\"----=_001_NextPart500622418632_=----\"",
-            "X-QQ-SENDSIZE: 520",
-            "Feedback-ID: bizesmtp:serverdata.com.cn:qybgweb:qybgweb10",
-            "X-CM-TRANSID:OcCowACXsZS0C3VgxNvcDw--.34051S3",
-            "Authentication-Results: mx7; spf=pass smtp.mail=yuuminmin@serverdata.c",
-            "\tom.cn;",
-            "X-Coremail-Antispam: 1Uf129KBjDUn29KB7ZKAUJUUUUU529EdanIXcx71UUUUU7v73",
-            "\tVFW2AGmfu7bjvjm3AaLaJ3UbIYCTnIWIevJa73UjIFyTuYvjxUff-BDUUUU",
-            "",
-            "Content-Type: multipart/alternative;",
-            "\tboundary=\"----=_002_NextPart174447020822_=----\"",
-            "",
-            "Content-Type: text/plain;",
-            "\tcharset=\"us-ascii\"",
-            "Content-Transfer-Encoding: base64",
-            "",
-            "Content-Type: text/html;",
-            "\tcharset=\"us-ascii\"",
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
-            "Content-Type: application/octet-stream;",
-            "\tname=\"zaicao.txt\"",
-            "Content-Transfer-Encoding: base64",
-            "Content-Disposition: attachment;",
-            "\tfilename=\"zaicao.txt\"",
-            "",
+            "Received: from qq.com (unknown [183.3.255.59])\r\n",
+            "\tby mx7 (Coremail) with SMTP id OcCowACXsZS0C3VgxNvcDw--.34051S3;\r\n",
+            "\tTue, 13 Apr 2021 11:10:44 +0800 (CST)\r\n",
+            "X-QQ-mid: bizesmtp23t1618283442tu0iybdh\r\n",
+            "Received: from Z640100480 (unknown [222.128.113.199])\r\n",
+            "\tby esmtp6.qq.com (ESMTP) with \r\n",
+            "\tid ; Tue, 13 Apr 2021 11:10:41 +0800 (CST)\r\n",
+            "X-QQ-SSF: B170000A002000H0F000B00A0000000\r\n",
+            "X-QQ-FEAT: a5Sfq5qTxp2z0xM/vdov6YOwWvqhVGJAxu+mkDi73Trd40z/7aUGANPgXgvia\r\n",
+            "\ttlfsV7zhFLNx2sEnZCKuAaeDuGlY3/5nMtXLNvf3Euw0+17WXnb8Y1vxxdV2Ncy8AFYY43P\r\n",
+            "\tLdOZM3Xm6RSgCPNupjasujVLjZFHI5En85q/y5g4kzvHoiVWD51M+GbRPWKvg1kOBCYIuVq\r\n",
+            "\tDa7nzktTzOrR6JCElhf472kmMEwpd58dhMpy1LeOYdkC50DMsXBJ1KWmWeAtFlzVwZFbR00\r\n",
+            "\thCU6UgKlgDfjZxC2icxY4Ckl2yl5ywNqSWveOkrp7otL4pLnly88J5HhrjV8H/R4h2xA==\r\n",
+            "X-QQ-GoodBg: 0\r\n",
+            "Date: Tue, 13 Apr 2021 11:10:43 +0800\r\n",
+            "From: \"yuuminmin@serverdata.com.cn\" <yuuminmin@serverdata.com.cn>\r\n",
+            "To: xiaomingming <xiaomingming@163.com>\r\n",
+            "Cc: 625293369 <625293369@qq.com>\r\n",
+            "Subject: yishengyishiyishuangren\r\n",
+            "X-Priority: 3\r\n",
+            "X-GUID: B02C26D8-2D59-4053-96B9-D9462BA83F28\r\n",
+            "X-Has-Attach: yes\r\n",
+            "X-Mailer: Foxmail 7.2.18.111[cn]\r\n",
+            "Mime-Version: 1.0\r\n",
+            "Message-ID: <202104131110426530121@serverdata.com.cn>+F9E8617B1B816279\r\n",
+            "Content-Type: multipart/mixed;\r\n",
+            "\tboundary=\"----=_001_NextPart500622418632_=----\"\r\n",
+            "X-QQ-SENDSIZE: 520\r\n",
+            "Feedback-ID: bizesmtp:serverdata.com.cn:qybgweb:qybgweb10\r\n",
+            "X-CM-TRANSID:OcCowACXsZS0C3VgxNvcDw--.34051S3\r\n",
+            "Authentication-Results: mx7; spf=pass smtp.mail=yuuminmin@serverdata.c\r\n",
+            "\tom.cn;\r\n",
+            "X-Coremail-Antispam: 1Uf129KBjDUn29KB7ZKAUJUUUUU529EdanIXcx71UUUUU7v73\r\n",
+            "\tVFW2AGmfu7bjvjm3AaLaJ3UbIYCTnIWIevJa73UjIFyTuYvjxUff-BDUUUU\r\n",
+            "\r\n",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_002_NextPart174447020822_=----\"\r\n",
+            "\r\n",
+            "Content-Type: text/plain;\r\n",
+            "\tcharset=\"us-ascii\"\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "\r\n",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"us-ascii\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
+            "Content-Type: application/octet-stream;\r\n",
+            "\tname=\"zaicao.txt\"\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "Content-Disposition: attachment;\r\n",
+            "\tfilename=\"zaicao.txt\"\r\n",
+            "\r\n",
         ];
 
         let headers_guard = captured_headers.borrow();

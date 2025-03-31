@@ -113,7 +113,7 @@ where
 
     dbg!("header. start");
     loop {
-        let (line, seq) = stm.read_clean_line_str().await?;
+        let (line, seq) = stm.readline_str().await?;
 
         // 空行也回调。调用者知道header结束
         if let Some(cb) = cb_header {
@@ -121,7 +121,7 @@ where
         }
         dbg!(line);
 
-        if line.is_empty() {
+        if line == "\r\n" {
             let ret_bdry = if boundary.is_empty() {
                 None
             } else {

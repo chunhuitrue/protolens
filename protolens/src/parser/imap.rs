@@ -1,3 +1,7 @@
+use crate::CbBody;
+use crate::CbBodyEvt;
+use crate::CbClt;
+use crate::CbHeader;
 use crate::MailCallbacks;
 use crate::Parser;
 use crate::ParserFactory;
@@ -17,11 +21,6 @@ use nom::{
 };
 use std::ffi::c_void;
 use std::marker::PhantomData;
-
-use crate::CbBody;
-use crate::CbBodyEvt;
-use crate::CbClt;
-use crate::CbHeader;
 
 pub struct ImapParser<T, P>
 where
@@ -531,7 +530,11 @@ mod tests {
             seq += line_bytes.len() as u32;
         }
 
-        let expected_headers = ["From: sender@example.com", "To: recipient@example.com", ""];
+        let expected_headers = [
+            "From: sender@example.com\r\n",
+            "To: recipient@example.com\r\n",
+            "\r\n",
+        ];
 
         let headers_guard = captured_headers.borrow();
         assert_eq!(headers_guard.len(), expected_headers.len());
@@ -647,28 +650,28 @@ mod tests {
         }
 
         let expected_headers = [
-            "X-CUID: 7F07679F-B77A-44FA-92A6-BC0C7833DD78",
-            "Date: Tue, 26 Jul 2022 17:49:08 +0800",
-            "From: \"sender123@serverdata.com\" <sender123@serverdata.com>",
-            "To: sender123 <sender123@serverdata.com.cn>",
-            "Subject: test imap",
-            "X-Priority: 3",
-            "X-GUID: 7F07679F-B77A-44FA-92A6-BC0C7833DD78",
-            "X-Has-Attach: no",
-            "X-Mailer: Ffffail 3.4.22.121[cn]",
-            "Mime-Version: 1.0",
-            "Message-ID: <202207261749087393300@serverdata.com>",
-            "Content-Type: multipart/alternative;",
-            "\tboundary=\"----=_001_NextPart376676228212_=----\"",
-            "",
-            "Content-Type: text/plain;",
-            "\tcharset=\"GB2312\"",
-            "Content-Transfer-Encoding: base64",
-            "",
-            "Content-Type: text/html;",
-            "\tcharset=\"GB2312\"",
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
+            "X-CUID: 7F07679F-B77A-44FA-92A6-BC0C7833DD78\r\n",
+            "Date: Tue, 26 Jul 2022 17:49:08 +0800\r\n",
+            "From: \"sender123@serverdata.com\" <sender123@serverdata.com>\r\n",
+            "To: sender123 <sender123@serverdata.com.cn>\r\n",
+            "Subject: test imap\r\n",
+            "X-Priority: 3\r\n",
+            "X-GUID: 7F07679F-B77A-44FA-92A6-BC0C7833DD78\r\n",
+            "X-Has-Attach: no\r\n",
+            "X-Mailer: Ffffail 3.4.22.121[cn]\r\n",
+            "Mime-Version: 1.0\r\n",
+            "Message-ID: <202207261749087393300@serverdata.com>\r\n",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_001_NextPart376676228212_=----\"\r\n",
+            "\r\n",
+            "Content-Type: text/plain;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "\r\n",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
         ];
 
         let headers_guard = captured_headers.borrow();

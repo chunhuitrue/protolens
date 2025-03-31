@@ -600,10 +600,7 @@ mod tests {
         let headers_guard = captured_headers.borrow();
         assert_eq!(headers_guard.len(), header.len());
         for (idx, expected) in header.iter().enumerate() {
-            assert_eq!(
-                std::str::from_utf8(&headers_guard[idx]).unwrap(),
-                expected.trim_end_matches("\r\n")
-            );
+            assert_eq!(std::str::from_utf8(&headers_guard[idx]).unwrap(), *expected);
         }
 
         let body_guard = captured_body.borrow();
@@ -857,18 +854,18 @@ mod tests {
 
         let expected_headers = [
             // 主题header
-            "From: sender@example.com",
-            "To: recipient@example.com",
-            "Subject: Email Subject",
-            "Date: Mon, 01 Jan 2023 12:00:00 +0000",
-            "Content-Type: multipart/alternative;",
-            "\tboundary=\"----=_001_NextPart572182624333_=----\"",
-            "",
+            "From: sender@example.com\r\n",
+            "To: recipient@example.com\r\n",
+            "Subject: Email Subject\r\n",
+            "Date: Mon, 01 Jan 2023 12:00:00 +0000\r\n",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_001_NextPart572182624333_=----\"\r\n",
+            "\r\n",
             // 第二个 part 的 header
-            "Content-Type: text/html;",
-            "\tcharset=\"GB2312\"",
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
         ];
 
         let headers_guard = captured_headers.borrow();
@@ -1083,25 +1080,25 @@ mod tests {
 
         let expected_headers = [
             // 主题header
-            "From: sender@example.com",
-            "To: recipient@example.com",
-            "Subject: Email Subject",
-            "Date: Mon, 01 Jan 2023 12:00:00 +0000",
-            "Content-Type: multipart/alternative;",
-            "\tboundary=\"----=_001_NextPart572182624333_=----\"",
-            "",
+            "From: sender@example.com\r\n",
+            "To: recipient@example.com\r\n",
+            "Subject: Email Subject\r\n",
+            "Date: Mon, 01 Jan 2023 12:00:00 +0000\r\n",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_001_NextPart572182624333_=----\"\r\n",
+            "\r\n",
             // 第一个 part 的 header,空
-            "",
+            "\r\n",
             // 第二个 part 的 header
-            "Content-Type: text/html;",
-            "\tcharset=\"GB2312\"",
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
             // 第三个 part 的 header
-            "Content-Type: text/html;",
-            "\tcharset=\"GB2312\"",
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
         ];
 
         let headers_guard = captured_headers.borrow();
@@ -1344,30 +1341,30 @@ mod tests {
 
         let expected_headers = [
             // 主邮件头
-            "From: \"sender\" <sender@example.in>",
-            "To: <recipient1@example.com>",
-            "Subject: SMTP",
-            "Date: Mon, 5 Oct 2009 11:36:07 +0530",
-            "MIME-Version: 1.0",
-            "Content-Type: multipart/mixed;",
-            "\tboundary=\"----=_NextPart_000_0004_01CA45B0.095693F0\"",
-            "",
+            "From: \"sender\" <sender@example.in>\r\n",
+            "To: <recipient1@example.com>\r\n",
+            "Subject: SMTP\r\n",
+            "Date: Mon, 5 Oct 2009 11:36:07 +0530\r\n",
+            "MIME-Version: 1.0\r\n",
+            "Content-Type: multipart/mixed;\r\n",
+            "\tboundary=\"----=_NextPart_000_0004_01CA45B0.095693F0\"\r\n",
+            "\r\n",
             // 第一个嵌套部分的头
-            "Content-Type: multipart/alternative;",
-            "\tboundary=\"----=_NextPart_001_0005_01CA45B0.095693F0\"",
-            "",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_NextPart_001_0005_01CA45B0.095693F0\"\r\n",
+            "\r\n",
             // 第二个嵌套部分的头
-            "Content-Type: text/plain;",
-            "Content-Transfer-Encoding: 7bit",
-            "",
+            "Content-Type: text/plain;\r\n",
+            "Content-Transfer-Encoding: 7bit\r\n",
+            "\r\n",
             // 第三个嵌套部分的头
-            "Content-Type: text/html;",
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
+            "Content-Type: text/html;\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
             // 最后一个部分的头
-            "Content-Type: text/plain;",
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
+            "Content-Type: text/plain;\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
         ];
 
         let headers_guard = captured_headers.borrow();
@@ -1572,26 +1569,26 @@ mod tests {
         );
 
         let expected_headers = [
-            "Date: Mon, 27 Jun 2022 17:01:55 +0800",
-            "From: \"user12345@example123.com\" <user12345@example123.com>",
-            "To: =?GB2312?B?wO60urvU?= <user12345@example123.com>",
-            "Subject: biaoti",
-            "X-Priority: 3",
-            "X-Has-Attach: no",
-            "X-Mailer: Foxmail 7.2.19.158[cn]",
-            "Mime-Version: 1.0",
-            "Message-ID: <202206271701548584972@example123.com>",
-            "Content-Type: multipart/alternative;",
-            "\tboundary=\"----=_001_NextPart572182624333_=----\"",
-            "",
-            "Content-Type: text/plain;",
-            "\tcharset=\"GB2312\"",
-            "Content-Transfer-Encoding: base64",
-            "",
-            "Content-Type: text/html;",
-            "\tcharset=\"GB2312\"",
-            "Content-Transfer-Encoding: quoted-printable",
-            "",
+            "Date: Mon, 27 Jun 2022 17:01:55 +0800\r\n",
+            "From: \"user12345@example123.com\" <user12345@example123.com>\r\n",
+            "To: =?GB2312?B?wO60urvU?= <user12345@example123.com>\r\n",
+            "Subject: biaoti\r\n",
+            "X-Priority: 3\r\n",
+            "X-Has-Attach: no\r\n",
+            "X-Mailer: Foxmail 7.2.19.158[cn]\r\n",
+            "Mime-Version: 1.0\r\n",
+            "Message-ID: <202206271701548584972@example123.com>\r\n",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_001_NextPart572182624333_=----\"\r\n",
+            "\r\n",
+            "Content-Type: text/plain;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "\r\n",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
         ];
 
         let headers_guard = captured_headers.borrow();
