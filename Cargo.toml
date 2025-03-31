@@ -3,4 +3,5 @@ resolver = "2"
 members = [
     "protolens",  # 如果你的库代码位于 src 目录下，则将其添加为成员
     "rust_example",  # 将 example/rust 添加为成员
+    "imap-proto",
 ]

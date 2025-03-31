@@ -358,7 +358,6 @@ where
                                     &self.buff[self.buff_start..(self.buff_start + data_len)];
                                 let result = Ok(unsafe { std::str::from_utf8_unchecked(data) });
                                 self.buff_next -= data_len;
-                                self.read_size -= data_len;
                                 return result;
                             } else if byte == b'\r' {
                                 state = 1;
@@ -492,7 +491,6 @@ where
         // 处理可能的情况[++++++\r\n--boun]dary
         if match_len > 0 {
             self.buff_next -= match_len; // 把match到的部分bdry留在buff中，下次继续match
-            self.read_size -= match_len;
         }
         let (data, seq) = self.get_buff_data(0)?;
         Ok((ReadRet::Data, data, seq))
@@ -546,6 +544,7 @@ where
         let result = Ok((data, seq));
         self.buff_start += data_len;
         self.buff_len -= data_len;
+        self.read_size += data_len;
 
         // 如果数据读空，buff start移到开始位置。可以减少将来move数据的机会
         if self.buff_len == 0 {
@@ -680,7 +679,6 @@ where
 
         let byte = self.buff[self.buff_next];
         self.buff_next += 1;
-        self.read_size += 1;
         Poll::Ready(Some(byte))
     }
 }

@@ -4,10 +4,10 @@ use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
-use crate::body;
 use crate::header;
 use crate::multi_body;
 use crate::packet::*;
+use imap_proto::{parse_follow_rsp_fetch, parse_rsp_fetch};
 use nom::{
     IResult,
     bytes::complete::{tag, take_while1},
@@ -86,18 +86,67 @@ where
         }
     }
 
-    // async fn s2c_parser_inner(
-    //     stream: *const PktStrm<T, P>,
-    //     cb: ImapCallbacks,
-    //     cb_ctx: *mut c_void,
-    // ) -> Result<(), ()> {
-    //     let stm: &mut PktStrm<T, P>;
-    //     unsafe {
-    //         stm = &mut *(stream as *mut PktStrm<T, P>);
-    //     }
+    async fn s2c_parser_inner(
+        stream: *const PktStrm<T, P>,
+        cb: MailCallbacks,
+        cb_ctx: *mut c_void,
+    ) -> Result<(), ()> {
+        let stm: &mut PktStrm<T, P>;
+        unsafe {
+            stm = &mut *(stream as *mut PktStrm<T, P>);
+        }
 
-    //     Ok(())
-    // }
+        loop {
+            let (line, seq) = stm.readline_str().await?;
+
+            let tail_seq = seq + line.len() as u32;
+            if let Some(fetch_ret) = parse_rsp_fetch(line) {
+                dbg!("rsp fetch", line);
+                if let Some(data) = fetch_ret.data() {
+                    quoted_body(data, tail_seq - data.len() as u32, &cb, cb_ctx)?;
+                } else {
+                    let size = fetch_ret.literal_size();
+                    let header = fetch_ret.is_header();
+                    Self::handle_fetch_ret(stm, size, header, &cb, cb_ctx).await?;
+                }
+            } else if let Some(fetch_ret) = parse_follow_rsp_fetch(line) {
+                dbg!("follow rsp fetch", line);
+                if let Some(data) = fetch_ret.data() {
+                    quoted_body(data, tail_seq - data.len() as u32, &cb, cb_ctx)?;
+                } else {
+                    let size = fetch_ret.literal_size();
+                    let header = fetch_ret.is_header();
+                    Self::handle_fetch_ret(stm, size, header, &cb, cb_ctx).await?;
+                }
+            }
+
+            let (byte, _seq) = stm.readn(1).await?;
+            if byte == b")" {
+                return Ok(());
+            }
+        }
+    }
+
+    async fn handle_fetch_ret(
+        stm: &mut PktStrm<T, P>,
+        size: Option<usize>,
+        header: bool,
+        cb: &MailCallbacks,
+        cb_ctx: *mut c_void,
+    ) -> Result<(), ()> {
+        if size.is_none() {
+            return Ok(());
+        }
+        let literal_size = size.unwrap();
+
+        if header {
+            fetch_header(stm, cb, cb_ctx).await?;
+            return Ok(());
+        }
+
+        size_body(stm, literal_size, cb, cb_ctx).await?;
+        Ok(())
+    }
 }
 
 impl<T, P> Parser for ImapParser<T, P>
@@ -128,20 +177,20 @@ where
         )))
     }
 
-    // fn s2c_parser(
-    //     &self,
-    //     stream: *const PktStrm<T, P>,
-    //     cb_ctx: *mut c_void,
-    // ) -> Option<ParserFuture> {
-    //     let cb = ImapCallbacks {
-    //         header: self.cb_header.clone(),
-    //         body_start: self.cb_body_start.clone(),
-    //         body: self.cb_body.clone(),
-    //         body_stop: self.cb_body_stop.clone(),
-    //     };
+    fn s2c_parser(
+        &self,
+        stream: *const PktStrm<T, P>,
+        cb_ctx: *mut c_void,
+    ) -> Option<ParserFuture> {
+        let cb_mail = MailCallbacks {
+            header: self.cb_header.clone(),
+            body_start: self.cb_body_start.clone(),
+            body: self.cb_body.clone(),
+            body_stop: self.cb_body_stop.clone(),
+        };
 
-    //     Some(Box::pin(Self::s2c_parser_inner(stream, cb, cb_ctx)))
-    // }
+        Some(Box::pin(Self::s2c_parser_inner(stream, cb_mail, cb_ctx)))
+    }
 }
 
 pub(crate) struct ImapFactory<T, P> {
@@ -199,15 +248,7 @@ where
     } else {
         let head_size = stm.get_read_size() - start_size;
         let body_size = mail_size - head_size;
-        size_body(
-            stm,
-            body_size,
-            cb.body_start.as_ref(),
-            cb.body.as_ref(),
-            cb.body_stop.as_ref(),
-            cb_ctx,
-        )
-        .await?;
+        size_body(stm, body_size, cb, cb_ctx).await?;
     }
     dbg!("imap_mail end");
     Ok(())
@@ -216,9 +257,7 @@ where
 async fn size_body<T, P>(
     stm: &mut PktStrm<T, P>,
     size: usize,
-    cb_body_start: Option<&CbBodyEvt>,
-    cb_body: Option<&CbBody>,
-    cb_body_stop: Option<&CbBodyEvt>,
+    cb: &MailCallbacks,
     cb_ctx: *mut c_void,
 ) -> Result<bool, ()>
 where
@@ -228,22 +267,35 @@ where
     let mut remain_size = size;
 
     dbg!("size_body start");
-    if let Some(cb) = cb_body_start {
+    if let Some(cb) = &cb.body_start {
         cb.borrow_mut()(cb_ctx);
     }
     while remain_size > 0 {
         let (bytes, seq) = stm.read(remain_size).await?;
         remain_size -= bytes.len();
 
-        if let Some(cb) = &cb_body {
+        if let Some(cb) = &cb.body {
             cb.borrow_mut()(bytes, seq, cb_ctx);
         }
     }
-    if let Some(cb) = cb_body_stop {
+    if let Some(cb) = &cb.body_stop {
         cb.borrow_mut()(cb_ctx);
     }
     dbg!("size_body end");
     Ok(true)
+}
+
+fn quoted_body(data: &[u8], seq: u32, cb: &MailCallbacks, cb_ctx: *mut c_void) -> Result<(), ()> {
+    if let Some(cb) = &cb.body_start {
+        cb.borrow_mut()(cb_ctx);
+    }
+    if let Some(cb) = &cb.body {
+        cb.borrow_mut()(data, seq, cb_ctx);
+    }
+    if let Some(cb) = &cb.body_stop {
+        cb.borrow_mut()(cb_ctx);
+    }
+    Ok(())
 }
 
 async fn imap_epilogue<T, P>(
@@ -256,6 +308,7 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
 {
     let remain_size = mail_size.saturating_sub(stm.get_read_size() - start_size);
+    dbg!(remain_size);
     if remain_size != 0 {
         stm.readn(remain_size).await?;
     }
@@ -325,6 +378,28 @@ where
 {
     let line = stm.peekline_str().await?;
     Ok(line.contains(':'))
+}
+
+async fn fetch_header<T, P>(
+    stm: &mut PktStrm<T, P>,
+    cb: &MailCallbacks,
+    cb_ctx: *mut c_void,
+) -> Result<(), ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    loop {
+        let (line, seq) = stm.readline_str().await?;
+
+        if let Some(cb) = &cb.header {
+            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
+        }
+
+        if line == "\r\n" {
+            return Ok(());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -470,7 +545,7 @@ mod tests {
         let body = &bodies_guard[0];
         let body_str = std::str::from_utf8(body).unwrap();
         dbg!(body_str);
-        assert!(body_str.contains("mail body line.\r\n"));
+        assert!(body_str == "mail body line.\r\n");
     }
 
     #[test]
@@ -632,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn test_imap_fetch_body_pcap() {
+    fn test_imap_pcap() {
         let project_root = env::current_dir().unwrap();
         let file_path = project_root.join("tests/pcap/imap.pcap");
         let mut cap = Capture::init(file_path).unwrap();

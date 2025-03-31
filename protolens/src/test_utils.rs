@@ -141,7 +141,7 @@ impl Packet for MyPacket {
     }
 }
 
-pub(crate) const MAX_PACKET_LEN: usize = 2048;
+pub(crate) const MAX_PACKET_LEN: usize = 4096;
 
 pub(crate) enum PacketError {
     DecodeErr,
