@@ -510,6 +510,7 @@ mod tests {
         let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
         let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_clt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_srv = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
@@ -557,9 +558,17 @@ mod tests {
         let clt_callback = {
             let clt_clone = captured_clt.clone();
             move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                // dbg!("in clt callback", std::str::from_utf8(line).unwrap());
                 let mut clt_guard = clt_clone.borrow_mut();
                 clt_guard.push(line.to_vec());
+            }
+        };
+
+        let srv_callback = {
+            let srv_clone = captured_srv.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                // dbg!("in clt callback", std::str::from_utf8(line).unwrap());
+                let mut srv_guard = srv_clone.borrow_mut();
+                srv_guard.push(line.to_vec());
             }
         };
 
@@ -571,6 +580,7 @@ mod tests {
         protolens.set_cb_pop3_body(body_callback);
         protolens.set_cb_pop3_body_stop(body_stop_callback);
         protolens.set_cb_pop3_clt(clt_callback);
+        protolens.set_cb_pop3_srv(srv_callback);
 
         loop {
             let now = SystemTime::now()
@@ -698,5 +708,19 @@ mod tests {
         );
         assert_eq!(std::str::from_utf8(&clt_guard[2]).unwrap(), "STAT");
         assert_eq!(std::str::from_utf8(&clt_guard[6]).unwrap(), "QUIT");
+
+        let srv_guard = captured_srv.borrow();
+        assert_eq!(
+            std::str::from_utf8(&srv_guard[0]).unwrap(),
+            "+OK Welcome to coremail Mail Pop3 Server (163coms[10774b260cc7a37d26d71b52404dcf5cs])"
+        );
+        assert_eq!(
+            std::str::from_utf8(&srv_guard[13]).unwrap(),
+            "+OK 7 3044427"
+        );
+        assert_eq!(
+            std::str::from_utf8(&srv_guard[22]).unwrap(),
+            "+OK 6750 octets"
+        );
     }
 }

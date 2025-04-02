@@ -101,9 +101,12 @@ where
         loop {
             let (line, seq) = stm.readline_str().await?;
 
+            if let Some(ref cb) = cb.srv {
+                cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
+            }
+
             let tail_seq = seq + line.len() as u32;
             if let Some(fetch_ret) = parse_rsp_fetch(line) {
-                dbg!("rsp fetch", line);
                 if let Some(data) = fetch_ret.data() {
                     quoted_body(data, tail_seq - data.len() as u32, &cb, cb_ctx)?;
                 } else {
@@ -112,7 +115,6 @@ where
                     Self::handle_fetch_ret(stm, size, header, &cb, cb_ctx).await?;
                 }
             } else if let Some(fetch_ret) = parse_follow_rsp_fetch(line) {
-                dbg!("follow rsp fetch", line);
                 if let Some(data) = fetch_ret.data() {
                     quoted_body(data, tail_seq - data.len() as u32, &cb, cb_ctx)?;
                 } else {
@@ -139,7 +141,6 @@ where
         if header {
             fetch_header(stm, cb_imap, cb_ctx).await?;
         } else {
-            dbg!("handle_fetch_ret. size body", literal_size);
             size_body(stm, literal_size, cb_imap, cb_ctx).await?;
         }
 
@@ -220,6 +221,7 @@ where
         parser.cb_body = prolens.cb_imap_body.clone();
         parser.cb_body_stop = prolens.cb_imap_body_stop.clone();
         parser.cb_clt = prolens.cb_imap_clt.clone();
+        parser.cb_srv = prolens.cb_imap_srv.clone();
         parser
     }
 }
@@ -244,7 +246,6 @@ where
         let body_size = mail_size - head_size;
         size_body(stm, body_size, cb_imap, cb_ctx).await?;
     }
-    dbg!("imap_mail end");
     Ok(())
 }
 
@@ -300,7 +301,6 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
 {
     let remain_size = mail_size.saturating_sub(stm.get_read_size() - start_size);
-    dbg!(remain_size);
     if remain_size != 0 {
         stm.readn(remain_size).await?;
     }
@@ -711,14 +711,15 @@ mod tests {
         let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
         let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_clt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_srv = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
             move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, dir: Direction| {
-                dbg!(std::str::from_utf8(header).unwrap());
+                // dbg!(std::str::from_utf8(header).unwrap());
                 if dir == Direction::S2c {
                     if header == b"\r\n" {
-                        dbg!("header cb. header end");
+                        // dbg!("header cb. header end");
                     }
                     let mut headers_guard = headers_clone.borrow_mut();
                     headers_guard.push(header.to_vec());
@@ -761,9 +762,16 @@ mod tests {
         let clt_callback = {
             let clt_clone = captured_clt.clone();
             move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                // dbg!("in clt callback", std::str::from_utf8(line).unwrap());
                 let mut clt_guard = clt_clone.borrow_mut();
                 clt_guard.push(line.to_vec());
+            }
+        };
+
+        let srv_callback = {
+            let srv_clone = captured_srv.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut srv_guard = srv_clone.borrow_mut();
+                srv_guard.push(line.to_vec());
             }
         };
 
@@ -775,6 +783,7 @@ mod tests {
         protolens.set_cb_imap_body(body_callback);
         protolens.set_cb_imap_body_stop(body_stop_callback);
         protolens.set_cb_imap_clt(clt_callback);
+        protolens.set_cb_imap_srv(srv_callback);
 
         loop {
             let now = SystemTime::now()
@@ -847,7 +856,6 @@ mod tests {
             "\r\n",
         ];
 
-        // s2c
         let headers_guard = captured_headers.borrow();
         assert_eq!(headers_guard.len(), expected_headers.len());
         for (idx, expected) in expected_headers.iter().enumerate() {
@@ -955,5 +963,30 @@ mod tests {
             "ABAAAACgKQAAd29yZC9fcmVscy9QSwECFAAUAAAACACHTuJAOQqq9PwAAAA2AwAAHAAAAAAAAAAB\r\n"
         ));
         assert!(body9_str.contains("bWUvdGhlbWUxLnhtbFBLBQYAAAAAFQAVABkFAACbLAAAAAA=\r\n"));
+
+        let clt_guard = captured_clt.borrow();
+        assert_eq!(std::str::from_utf8(&clt_guard[0]).unwrap(), "DONE");
+        assert_eq!(
+            std::str::from_utf8(&clt_guard[3]).unwrap(),
+            "A53 SELECT \"INBOX\" (CONDSTORE)"
+        );
+        assert_eq!(
+            std::str::from_utf8(&clt_guard[7]).unwrap(),
+            "A57 UID FETCH 55 (RFC822.HEADER BODY.PEEK[1.2] BODY.PEEK[2] BODY.PEEK[3] BODY.PEEK[4] BODY.PEEK[5])"
+        );
+
+        let srv_guard = captured_srv.borrow();
+        assert_eq!(
+            std::str::from_utf8(&srv_guard[0]).unwrap(),
+            "* OK Still here\r\n"
+        );
+        assert_eq!(
+            std::str::from_utf8(&srv_guard[6]).unwrap(),
+            "A52 OK List completed (0.001 + 0.000 secs).\r\n"
+        );
+        assert_eq!(
+            std::str::from_utf8(&srv_guard[18]).unwrap(),
+            "A54 OK Search completed (0.001 + 0.000 secs).\r\n"
+        );
     }
 }

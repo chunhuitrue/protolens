@@ -74,7 +74,6 @@ where
     cb_smtp_body_start: Option<CbBodyEvt>,
     cb_smtp_body: Option<CbBody>,
     cb_smtp_body_stop: Option<CbBodyEvt>,
-    cb_smtp_clt: Option<CbClt>,
     cb_smtp_srv: Option<CbSrv>,
     cb_pop3_header: Option<CbHeader>,
     cb_pop3_body_start: Option<CbBodyEvt>,
@@ -137,7 +136,6 @@ where
             cb_smtp_body_start: None,
             cb_smtp_body: None,
             cb_smtp_body_stop: None,
-            cb_smtp_clt: None,
             cb_smtp_srv: None,
             cb_pop3_header: None,
             cb_pop3_body_start: None,
@@ -346,13 +344,6 @@ where
         F: EvtCbFn + 'static,
     {
         self.cb_smtp_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
-    }
-
-    pub fn set_cb_smtp_clt<F>(&mut self, callback: F)
-    where
-        F: DataCbFn + 'static,
-    {
-        self.cb_smtp_clt = Some(Rc::new(RefCell::new(callback)) as CbClt);
     }
 
     pub fn set_cb_smtp_srv<F>(&mut self, callback: F)

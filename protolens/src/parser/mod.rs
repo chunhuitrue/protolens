@@ -119,7 +119,6 @@ where
     let mut cont_type = false;
     let mut boundary = String::new();
 
-    dbg!("header. start");
     loop {
         let (line, seq) = stm.readline_str().await?;
 
@@ -127,7 +126,6 @@ where
         if let Some(cb) = cb_header {
             cb.borrow_mut()(line.as_bytes(), seq, cb_ctx, dir);
         }
-        // dbg!(line);
 
         if line == "\r\n" {
             let ret_bdry = if boundary.is_empty() {
@@ -135,7 +133,6 @@ where
             } else {
                 Some(boundary)
             };
-            dbg!("header. end");
             return Ok(ret_bdry);
         }
 
@@ -228,10 +225,8 @@ where
 
         let (byte, _seq) = stm.readn(2).await?;
         if byte == b"--" {
-            dbg!("close bdry break");
             break;
         } else if byte == b"\r\n" {
-            dbg!("bdry continue");
             continue;
         } else {
             return Err(());
@@ -245,7 +240,6 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    dbg!("preamble start");
     mime_body(
         stm,
         bdry,

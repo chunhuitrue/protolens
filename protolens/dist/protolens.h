@@ -77,7 +77,6 @@ void prolens_set_cb_smtp_header(FfiProlens *prolens, CbDirData callback);
 void prolens_set_cb_smtp_body_start(FfiProlens *prolens, CbDirEvt callback);
 void prolens_set_cb_smtp_body(FfiProlens *prolens, CbDirData callback);
 void prolens_set_cb_smtp_body_stop(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_smtp_clt(FfiProlens *prolens, CbDirData callback);
 void prolens_set_cb_smtp_srv(FfiProlens *prolens, CbDirData callback);
 
 void prolens_set_cb_pop3_header(FfiProlens *prolens, CbDirData callback);
