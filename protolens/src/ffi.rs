@@ -2,6 +2,7 @@ extern crate libc;
 use crate::L7Proto;
 use crate::Prolens;
 use crate::Task;
+use crate::TransferEncoding;
 use crate::packet::Direction;
 use crate::packet::TransProto;
 use std::cell::RefCell;
@@ -290,10 +291,42 @@ pub extern "C" fn prolens_set_cb_ord_pkt(prolens: *mut FfiProlens, callback: Opt
     prolens.0.set_cb_ord_pkt(wrapper);
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum CTransferEncoding {
+    None,
+    Bit7,
+    Bit8,
+    Binary,
+    QuotedPrintable,
+    Base64,
+}
+
+impl From<Option<TransferEncoding>> for CTransferEncoding {
+    fn from(te: Option<TransferEncoding>) -> Self {
+        match te {
+            Some(TransferEncoding::Bit7) => CTransferEncoding::Bit7,
+            Some(TransferEncoding::Bit8) => CTransferEncoding::Bit8,
+            Some(TransferEncoding::Binary) => CTransferEncoding::Binary,
+            Some(TransferEncoding::QuotedPrintable) => CTransferEncoding::QuotedPrintable,
+            Some(TransferEncoding::Base64) => CTransferEncoding::Base64,
+            None => CTransferEncoding::None,
+        }
+    }
+}
+
 type CbData = extern "C" fn(data: *const u8, len: usize, seq: u32, ctx: *const c_void);
 type CbDirData =
     extern "C" fn(data: *const u8, len: usize, seq: u32, ctx: *const c_void, dir: Direction);
 type CbDirEvt = extern "C" fn(ctx: *const c_void, dir: Direction);
+type CbBody = extern "C" fn(
+    data: *const u8,
+    len: usize,
+    seq: u32,
+    ctx: *const c_void,
+    dir: Direction,
+    te: CTransferEncoding,
+);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_smtp_user(prolens: *mut FfiProlens, callback: Option<CbData>) {
@@ -380,14 +413,18 @@ pub extern "C" fn prolens_set_cb_smtp_body_start(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: Option<CbDirData>) {
+pub extern "C" fn prolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: Option<CbBody>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void, dir: Direction| {
-        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir);
+    let wrapper = move |data: &[u8],
+                        seq: u32,
+                        ctx: *mut c_void,
+                        dir: Direction,
+                        te: Option<TransferEncoding>| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir, te.into());
     };
     prolens.0.set_cb_smtp_body(wrapper);
 }
@@ -454,14 +491,18 @@ pub extern "C" fn prolens_set_cb_pop3_body_start(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_pop3_body(prolens: *mut FfiProlens, callback: Option<CbDirData>) {
+pub extern "C" fn prolens_set_cb_pop3_body(prolens: *mut FfiProlens, callback: Option<CbBody>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void, dir: Direction| {
-        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir);
+    let wrapper = move |data: &[u8],
+                        seq: u32,
+                        ctx: *mut c_void,
+                        dir: Direction,
+                        te: Option<TransferEncoding>| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir, te.into());
     };
     prolens.0.set_cb_pop3_body(wrapper);
 }
@@ -541,14 +582,18 @@ pub extern "C" fn prolens_set_cb_imap_body_start(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_imap_body(prolens: *mut FfiProlens, callback: Option<CbDirData>) {
+pub extern "C" fn prolens_set_cb_imap_body(prolens: *mut FfiProlens, callback: Option<CbBody>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void, dir: Direction| {
-        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir);
+    let wrapper = move |data: &[u8],
+                        seq: u32,
+                        ctx: *mut c_void,
+                        dir: Direction,
+                        te: Option<TransferEncoding>| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir, te.into());
     };
     prolens.0.set_cb_imap_body(wrapper);
 }

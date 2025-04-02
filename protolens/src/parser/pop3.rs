@@ -195,13 +195,14 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    let boundary = header(stm, cb_pop3.header.as_ref(), cb_ctx, Direction::S2c).await?;
+    let (boundary, te) = header(stm, cb_pop3.header.as_ref(), cb_ctx, Direction::S2c).await?;
     if let Some(bdry) = boundary {
         multi_body(stm, &bdry, cb_pop3, cb_ctx).await?;
         epilogue(stm).await?;
     } else {
         body(
             stm,
+            te,
             cb_pop3.body_start.as_ref(),
             cb_pop3.body.as_ref(),
             cb_pop3.body_stop.as_ref(),
@@ -254,6 +255,7 @@ fn stls_answer(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TransferEncoding;
     use crate::test_utils::*;
     use std::cell::RefCell;
     use std::env;
@@ -324,7 +326,11 @@ mod tests {
 
         let body_callback = {
             let body_clone = captured_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  _dir: Direction,
+                  _te: Option<TransferEncoding>| {
                 let mut body_guard = body_clone.borrow_mut();
                 body_guard.push(body.to_vec());
             }
@@ -419,7 +425,11 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  _dir: Direction,
+                  _te: Option<TransferEncoding>| {
                 // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
@@ -435,10 +445,6 @@ mod tests {
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
                 bodies_guard.push(body_guard.clone());
-                println!(
-                    "Body stop callback triggered, body size: {} bytes",
-                    body_guard.len()
-                );
             }
         };
 
@@ -511,6 +517,8 @@ mod tests {
         let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_clt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
         let captured_srv = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let current_te = Rc::new(RefCell::new(None));
+        let captured_tes = Rc::new(RefCell::new(Vec::new()));
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
@@ -522,21 +530,34 @@ mod tests {
 
         let body_start_callback = {
             let current_body_clone = current_body.clone();
+            let current_te = current_te.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
-                println!("Body start callback triggered");
+                *current_te.borrow_mut() = None;
             }
         };
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
-                // 将内容追加到当前body
+            let current_te = current_te.clone();
+            let captured_tes = captured_tes.clone();
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  _dir: Direction,
+                  te: Option<TransferEncoding>| {
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
-                println!("Body callback: {} bytes", body.len());
+                // dbg!(te.clone(), std::str::from_utf8(body).unwrap());
+
+                let mut current_te = current_te.borrow_mut();
+                if current_te.is_none() {
+                    *current_te = te.clone();
+                    captured_tes.borrow_mut().push(te);
+                } else {
+                    assert_eq!(*current_te, te, "TransferEncoding changed within same body");
+                }
             }
         };
 
@@ -548,10 +569,7 @@ mod tests {
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
                 bodies_guard.push(body_guard.clone());
-                println!(
-                    "Body stop callback triggered, body size: {} bytes",
-                    body_guard.len()
-                );
+                dbg!("Body stop callback triggered", body_guard.len());
             }
         };
 
@@ -671,7 +689,6 @@ mod tests {
 
         let body0 = &bodies_guard[0];
         let body0_str = std::str::from_utf8(body0).unwrap();
-        dbg!(body0_str);
         assert!(body0_str.contains(
             "ZGFtb2d1eWFuemhpDQpjaGFuZ2hlbHVvcml5dWFuDQoNCg0KDQp5dWV5YW55YW5AaGFvaGFuZGF0\r\n"
         ));
@@ -679,20 +696,21 @@ mod tests {
 
         let body1 = &bodies_guard[1];
         let body1_str = std::str::from_utf8(body1).unwrap();
-        dbg!(body1_str);
         assert!(body1_str.contains(
             "<html><head><meta http-equiv=3D\"content-type\" content=3D\"text/html; charse=\r\n"
         ));
         assert!(body1_str.contains("..com.cn</span></div>=0A</body></html>")); // 最后的\r\n不属于body
 
+        // ..com.cn</span></div>=0A</body></html>
+        // ------=_002_NextPart174447020822_=------
+        // body2
+        // ------=_001_NextPart500622418632_=----
         let body2 = &bodies_guard[2];
         let body2_str = std::str::from_utf8(body2).unwrap();
-        dbg!(body2_str);
         assert!(body2_str == "\r\n");
 
         let body3 = &bodies_guard[3];
         let body3_str = std::str::from_utf8(body3).unwrap();
-        dbg!(body3_str);
         assert!(body3_str.contains(
             "44CK6I+c5qC56LCt44CLLS3lmrzlvpfoj5zmoLnvvIznmb7kuovlj6/lgZrvvIENCuaWh+eroOWB\r\n"
         ));
@@ -722,5 +740,12 @@ mod tests {
             std::str::from_utf8(&srv_guard[22]).unwrap(),
             "+OK 6750 octets"
         );
+
+        let tes = captured_tes.borrow();
+        assert_eq!(tes.len(), 4);
+        assert_eq!(tes[0], Some(TransferEncoding::Base64));
+        assert_eq!(tes[1], Some(TransferEncoding::QuotedPrintable));
+        assert_eq!(tes[2], None);
+        assert_eq!(tes[3], Some(TransferEncoding::Base64));
     }
 }

@@ -237,7 +237,7 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
 {
     let start_size = stm.get_read_size();
-    let boundary = header(stm, cb_imap.header.as_ref(), cb_ctx, Direction::C2s).await?;
+    let (boundary, _te) = header(stm, cb_imap.header.as_ref(), cb_ctx, Direction::C2s).await?;
     if let Some(bdry) = boundary {
         multi_body(stm, &bdry, cb_imap, cb_ctx).await?;
         imap_epilogue(stm, mail_size, start_size).await?;
@@ -269,7 +269,7 @@ where
         remain_size -= bytes.len();
 
         if let Some(cb) = &cb_imap.body {
-            cb.borrow_mut()(bytes, seq, cb_ctx, cb_imap.dir);
+            cb.borrow_mut()(bytes, seq, cb_ctx, cb_imap.dir, None);
         }
     }
     if let Some(cb) = &cb_imap.body_stop {
@@ -283,7 +283,7 @@ fn quoted_body(data: &[u8], seq: u32, cb_imap: &Callbacks, cb_ctx: *mut c_void) 
         cb.borrow_mut()(cb_ctx, cb_imap.dir);
     }
     if let Some(cb) = &cb_imap.body {
-        cb.borrow_mut()(data, seq, cb_ctx, cb_imap.dir);
+        cb.borrow_mut()(data, seq, cb_ctx, cb_imap.dir, None);
     }
     if let Some(cb) = &cb_imap.body_stop {
         cb.borrow_mut()(cb_ctx, cb_imap.dir);
@@ -397,7 +397,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::*;
+    use crate::{TransferEncoding, test_utils::*};
     use std::cell::RefCell;
     use std::env;
     use std::rc::Rc;
@@ -469,7 +469,11 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  _dir: Direction,
+                  _te: Option<TransferEncoding>| {
                 // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
@@ -580,7 +584,11 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, dir: Direction| {
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  dir: Direction,
+                  _te: Option<TransferEncoding>| {
                 if dir == Direction::C2s {
                     let mut body_guard = current_body_clone.borrow_mut();
                     body_guard.extend_from_slice(body);
@@ -739,7 +747,11 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, dir: Direction| {
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  dir: Direction,
+                  _te: Option<TransferEncoding>| {
                 if dir == Direction::S2c {
                     let mut body_guard = current_body_clone.borrow_mut();
                     body_guard.extend_from_slice(body);

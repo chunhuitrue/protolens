@@ -26,7 +26,10 @@ use crate::ReadRet;
 use futures::Future;
 use nom::{
     IResult,
-    bytes::complete::{tag, take_till},
+    branch::alt,
+    bytes::complete::{tag, tag_no_case, take_till, take_while},
+    combinator::value,
+    sequence::{preceded, terminated},
 };
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -85,6 +88,9 @@ impl<F: FnMut(&[u8], u32, *mut c_void, Direction)> DataCbDirFn for F {}
 pub trait EvtCbFn: FnMut(*mut c_void, Direction) {}
 impl<F: FnMut(*mut c_void, Direction)> EvtCbFn for F {}
 
+pub trait BodyCbFn: FnMut(&[u8], u32, *mut c_void, Direction, Option<TransferEncoding>) {}
+impl<F: FnMut(&[u8], u32, *mut c_void, Direction, Option<TransferEncoding>)> BodyCbFn for F {}
+
 pub(crate) type CbUser = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbPass = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbMailFrom = Rc<RefCell<dyn DataCbFn + 'static>>;
@@ -93,7 +99,7 @@ pub(crate) type CbSrv = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbClt = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbHeader = Rc<RefCell<dyn DataCbDirFn + 'static>>;
 pub(crate) type CbBodyEvt = Rc<RefCell<dyn EvtCbFn + 'static>>;
-pub(crate) type CbBody = Rc<RefCell<dyn DataCbDirFn + 'static>>;
+pub(crate) type CbBody = Rc<RefCell<dyn BodyCbFn + 'static>>;
 
 #[derive(Clone)]
 pub(crate) struct Callbacks {
@@ -111,16 +117,18 @@ pub(crate) async fn header<T, P>(
     cb_header: Option<&CbHeader>,
     cb_ctx: *mut c_void,
     dir: Direction,
-) -> Result<Option<String>, ()>
+) -> Result<(Option<String>, Option<TransferEncoding>), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
     let mut cont_type = false;
     let mut boundary = String::new();
+    let mut te = None;
 
     loop {
         let (line, seq) = stm.readline_str().await?;
+        dbg!(line);
 
         // 空行也回调。调用者知道header结束
         if let Some(cb) = cb_header {
@@ -128,12 +136,13 @@ where
         }
 
         if line == "\r\n" {
+            dbg!("======== header end===========", &te);
             let ret_bdry = if boundary.is_empty() {
                 None
             } else {
                 Some(boundary)
             };
-            return Ok(ret_bdry);
+            return Ok((ret_bdry, te));
         }
 
         // content-type ext
@@ -158,11 +167,16 @@ where
             }
             Err(_err) => {}
         }
+
+        if te.is_none() {
+            te = transfer_encoding(line.as_bytes());
+        }
     }
 }
 
 pub(crate) async fn body<T, P>(
     stm: &mut PktStrm<T, P>,
+    te: Option<TransferEncoding>,
     cb_body_start: Option<&CbBodyEvt>,
     cb_body: Option<&CbBody>,
     cb_body_stop: Option<&CbBodyEvt>,
@@ -184,9 +198,8 @@ where
             break;
         }
 
-        dbg!(line);
         if let Some(cb) = &cb_body {
-            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx, dir);
+            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx, dir, te.clone());
         }
     }
     if let Some(cb) = cb_body_stop {
@@ -208,20 +221,21 @@ where
 {
     preamble(stm, bdry).await?;
     loop {
-        if let Some(new_bdry) = header(stm, cb.header.as_ref(), cb_ctx, cb.dir).await? {
+        let (boundary, te) = header(stm, cb.header.as_ref(), cb_ctx, cb.dir).await?;
+        if let Some(new_bdry) = boundary {
             Box::pin(multi_body(stm, &new_bdry, cb, cb_ctx)).await?;
         }
 
-        mime_body(
-            stm,
+        let params = MimeBodyParams {
+            te,
             bdry,
-            cb.body_start.as_ref(),
-            cb.body.as_ref(),
-            cb.body_stop.as_ref(),
+            cb_body_start: cb.body_start.as_ref(),
+            cb_body: cb.body.as_ref(),
+            cb_body_stop: cb.body_stop.as_ref(),
             cb_ctx,
-            cb.dir,
-        )
-        .await?;
+            dir: cb.dir,
+        };
+        mime_body(stm, params).await?;
 
         let (byte, _seq) = stm.readn(2).await?;
         if byte == b"--" {
@@ -240,51 +254,52 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    mime_body(
-        stm,
+    let params = MimeBodyParams {
+        te: None,
         bdry,
-        None,
-        None,
-        None,
-        std::ptr::null_mut(),
-        Direction::Unknown,
-    )
-    .await?;
+        cb_body_start: None,
+        cb_body: None,
+        cb_body_stop: None,
+        cb_ctx: std::ptr::null_mut(),
+        dir: Direction::Unknown,
+    };
+    mime_body(stm, params).await?;
 
     let (byte, _seq) = stm.readn(2).await?;
     if byte == b"\r\n" { Ok(()) } else { Err(()) }
 }
 
-async fn mime_body<T, P>(
-    stm: &mut PktStrm<T, P>,
-    bdry: &str,
-    cb_body_start: Option<&CbBodyEvt>,
-    cb_body: Option<&CbBody>,
-    cb_body_stop: Option<&CbBodyEvt>,
+struct MimeBodyParams<'a> {
+    te: Option<TransferEncoding>,
+    bdry: &'a str,
+    cb_body_start: Option<&'a CbBodyEvt>,
+    cb_body: Option<&'a CbBody>,
+    cb_body_stop: Option<&'a CbBodyEvt>,
     cb_ctx: *mut c_void,
     dir: Direction,
-) -> Result<(), ()>
+}
+
+async fn mime_body<T, P>(stm: &mut PktStrm<T, P>, params: MimeBodyParams<'_>) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    if let Some(cb) = cb_body_start {
-        cb.borrow_mut()(cb_ctx, dir);
+    if let Some(cb) = params.cb_body_start {
+        cb.borrow_mut()(params.cb_ctx, params.dir);
     }
     loop {
-        let (ret, content, seq) = stm.read_mime_octet(bdry).await?;
-        // dbg!(std::str::from_utf8(content).unwrap_or(""));
+        let (ret, content, seq) = stm.read_mime_octet(params.bdry).await?;
 
-        if let Some(cb) = cb_body {
-            cb.borrow_mut()(content, seq, cb_ctx, dir);
+        if let Some(cb) = params.cb_body {
+            cb.borrow_mut()(content, seq, params.cb_ctx, params.dir, params.te.clone());
         }
 
         if ret == ReadRet::DashBdry {
             break;
         }
     }
-    if let Some(cb) = cb_body_stop {
-        cb.borrow_mut()(cb_ctx, dir);
+    if let Some(cb) = params.cb_body_stop {
+        cb.borrow_mut()(params.cb_ctx, params.dir);
     }
     Ok(())
 }
@@ -296,6 +311,7 @@ where
 {
     let _ = body(
         stm,
+        None,
         None,
         None,
         None,
@@ -332,6 +348,42 @@ fn content_type_ext(input: &str) -> IResult<&str, &str> {
     let (input, _) = tag("\tboundary=\"")(input)?;
     let (input, bdry) = take_till(|c| c == '"')(input)?;
     Ok((input, bdry))
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum TransferEncoding {
+    Bit7,
+    Bit8,
+    Binary,
+    QuotedPrintable,
+    Base64,
+}
+
+fn transfer_encoding(input: &[u8]) -> Option<TransferEncoding> {
+    let mut parser = preceded::<_, _, _, nom::error::Error<&[u8]>, _, _>(
+        tag_no_case("Content-Transfer-Encoding:"),
+        preceded(
+            take_while(|c| c == b' '),
+            terminated(
+                alt((
+                    value(TransferEncoding::Bit7, tag_no_case("7bit")),
+                    value(TransferEncoding::Bit8, tag_no_case("8bit")),
+                    value(TransferEncoding::Binary, tag_no_case("binary")),
+                    value(
+                        TransferEncoding::QuotedPrintable,
+                        tag_no_case("quoted-printable"),
+                    ),
+                    value(TransferEncoding::Base64, tag_no_case("base64")),
+                )),
+                tag("\r\n"),
+            ),
+        ),
+    );
+
+    match parser(input) {
+        Ok((_, encoding)) => Some(encoding),
+        Err(_) => None,
+    }
 }
 
 #[cfg(test)]
@@ -376,5 +428,25 @@ mod tests {
         let input = "Wrong-Type: multipart/mixed; boundary=\"abc123\"";
         let result = content_type(input);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_transfer_encoding() {
+        assert_eq!(
+            transfer_encoding(b"Content-Transfer-Encoding: base64\r\n"),
+            Some(TransferEncoding::Base64)
+        );
+        assert_eq!(
+            transfer_encoding(b"Content-Transfer-Encoding: 7BIT\r\n"),
+            Some(TransferEncoding::Bit7)
+        );
+        assert_eq!(
+            transfer_encoding(b"Content-Transfer-Encoding:quoted-printable\r\n"),
+            Some(TransferEncoding::QuotedPrintable)
+        );
+        assert_eq!(
+            transfer_encoding(b"Content-Transfer-Encoding: invalid\r\n"),
+            None
+        );
     }
 }

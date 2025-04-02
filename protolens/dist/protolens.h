@@ -37,6 +37,15 @@ typedef enum {
     TASK_ERROR,
 } TaskResult;
 
+typedef enum {
+    None,
+    Bit7,
+    Bit8,
+    Binary,
+    QuotedPrintable,
+    Base64,
+} CTransferEncoding;
+
 typedef struct {
     ProlensDirection (*direction)(void* pkt_ptr);
     L7Proto (*l7_proto)(void* pkt_ptr);
@@ -54,7 +63,8 @@ typedef void (*CbStm)(const uint8_t *data, size_t data_len, uint32_t seq, const 
 typedef void (*CbOrdPkt)(void *pkt_ptr, const void *ctx);
 typedef void (*CbData)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx);
 typedef void (*CbDirData)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx, ProlensDirection dir);
-typedef void (*CbDirEvt)(const void *ctx, ProlensDirection dir);    
+typedef void (*CbDirEvt)(const void *ctx, ProlensDirection dir);
+typedef void (*CbBody)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx, ProlensDirection dir, CTransferEncoding te);    
 
 void        prolens_init_vtable(PacketVTable vtable);
 FfiProlens *prolens_new(void);
@@ -75,20 +85,20 @@ void prolens_set_cb_smtp_mailfrom(FfiProlens *prolens, CbData callback);
 void prolens_set_cb_smtp_rcpt(FfiProlens *prolens, CbData callback);
 void prolens_set_cb_smtp_header(FfiProlens *prolens, CbDirData callback);
 void prolens_set_cb_smtp_body_start(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_smtp_body(FfiProlens *prolens, CbDirData callback);
+void prolens_set_cb_smtp_body(FfiProlens *prolens, CbBody callback);
 void prolens_set_cb_smtp_body_stop(FfiProlens *prolens, CbDirEvt callback);
 void prolens_set_cb_smtp_srv(FfiProlens *prolens, CbDirData callback);
 
 void prolens_set_cb_pop3_header(FfiProlens *prolens, CbDirData callback);
 void prolens_set_cb_pop3_body_start(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_pop3_body(FfiProlens *prolens, CbDirData callback);
+void prolens_set_cb_pop3_body(FfiProlens *prolens, CbBody callback);
 void prolens_set_cb_pop3_body_stop(FfiProlens *prolens, CbDirEvt callback);
 void prolens_set_cb_pop3_clt(FfiProlens *prolens, CbDirData callback);
 void prolens_set_cb_pop3_srv(FfiProlens *prolens, CbDirData callback);
 
 void prolens_set_cb_imap_header(FfiProlens *prolens, CbDirData callback);
 void prolens_set_cb_imap_body_start(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_imap_body(FfiProlens *prolens, CbDirData callback);
+void prolens_set_cb_imap_body(FfiProlens *prolens, CbBody callback);
 void prolens_set_cb_imap_body_stop(FfiProlens *prolens, CbDirEvt callback);
 void prolens_set_cb_imap_clt(FfiProlens *prolens, CbDirData callback);
 void prolens_set_cb_imap_srv(FfiProlens *prolens, CbDirData callback);

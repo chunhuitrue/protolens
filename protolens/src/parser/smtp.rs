@@ -132,12 +132,13 @@ where
 
         multi_rcpt_to(stm, cb_smtp.rcpt, cb_ctx).await?;
 
-        let boundary = header(stm, cb.header.as_ref(), cb_ctx, Direction::C2s).await?;
+        let (boundary, te) = header(stm, cb.header.as_ref(), cb_ctx, Direction::C2s).await?;
         if let Some(bdry) = boundary {
             multi_body(stm, &bdry, &cb, cb_ctx).await?;
         } else {
             body(
                 stm,
+                te,
                 cb.body_start.as_ref(),
                 cb.body.as_ref(),
                 cb.body_stop.as_ref(),
@@ -352,6 +353,7 @@ fn starts_with_helo(input: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TransferEncoding;
     use crate::test_utils::*;
     use std::cell::RefCell;
     use std::env;
@@ -537,7 +539,11 @@ mod tests {
 
         let body_callback = {
             let body_clone = captured_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  _dir: Direction,
+                  _te: Option<TransferEncoding>| {
                 let mut body_guard = body_clone.borrow_mut();
                 body_guard.push(body.to_vec());
             }
@@ -1004,7 +1010,11 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  _dir: Direction,
+                  _te: Option<TransferEncoding>| {
                 // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
@@ -1276,7 +1286,11 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  _dir: Direction,
+                  _te: Option<TransferEncoding>| {
                 // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
@@ -1418,6 +1432,8 @@ mod tests {
         let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
         let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_srv = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let current_te = Rc::new(RefCell::new(None));
+        let captured_tes = Rc::new(RefCell::new(Vec::new()));
 
         let user_callback = {
             let user_clone = captured_user.clone();
@@ -1472,21 +1488,33 @@ mod tests {
 
         let body_start_callback = {
             let current_body_clone = current_body.clone();
+            let current_te = current_te.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
-                println!("Body start callback triggered");
+                *current_te.borrow_mut() = None;
             }
         };
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
-                // 将内容追加到当前body
+            let current_te = current_te.clone();
+            let captured_tes = captured_tes.clone();
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  _dir: Direction,
+                  te: Option<TransferEncoding>| {
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
-                println!("Body callback: {} bytes", body.len());
+
+                let mut current_te = current_te.borrow_mut();
+                if current_te.is_none() {
+                    *current_te = te.clone();
+                    captured_tes.borrow_mut().push(te);
+                } else {
+                    assert_eq!(*current_te, te, "TransferEncoding changed within same body");
+                }
             }
         };
 
@@ -1646,5 +1674,10 @@ mod tests {
         for (idx, expected) in expected_srv.iter().enumerate() {
             assert_eq!(std::str::from_utf8(&srv_guard[idx]).unwrap(), *expected);
         }
+
+        let tes = captured_tes.borrow();
+        assert_eq!(tes.len(), 2);
+        assert_eq!(tes[0], Some(TransferEncoding::Base64));
+        assert_eq!(tes[1], Some(TransferEncoding::QuotedPrintable));
     }
 }

@@ -334,7 +334,7 @@ where
 
     pub fn set_cb_smtp_body<F>(&mut self, callback: F)
     where
-        F: DataCbDirFn + 'static,
+        F: BodyCbFn + 'static,
     {
         self.cb_smtp_body = Some(Rc::new(RefCell::new(callback)) as CbBody);
     }
@@ -369,7 +369,7 @@ where
 
     pub fn set_cb_pop3_body<F>(&mut self, callback: F)
     where
-        F: DataCbDirFn + 'static,
+        F: BodyCbFn + 'static,
     {
         self.cb_pop3_body = Some(Rc::new(RefCell::new(callback)) as CbBody);
     }
@@ -411,7 +411,7 @@ where
 
     pub fn set_cb_imap_body<F>(&mut self, callback: F)
     where
-        F: DataCbDirFn + 'static,
+        F: BodyCbFn + 'static,
     {
         self.cb_imap_body = Some(Rc::new(RefCell::new(callback)) as CbBody);
     }
