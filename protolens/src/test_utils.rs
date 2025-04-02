@@ -9,7 +9,7 @@ use std::ops::Deref;
 use std::path::Path;
 use std::rc::Rc;
 
-use crate::PktDirection;
+use crate::Direction;
 use crate::{L7Proto, Packet, TransProto};
 
 pub(crate) const SMTP_PORT: u16 = 25;
@@ -69,7 +69,7 @@ impl<T: Packet> Packet for PacketRef<T> {
         self.inner.l7_proto()
     }
 
-    fn direction(&self) -> PktDirection {
+    fn direction(&self) -> Direction {
         self.inner.direction()
     }
 }
@@ -100,8 +100,8 @@ impl MyPacket {
 }
 
 impl Packet for MyPacket {
-    fn direction(&self) -> PktDirection {
-        PktDirection::Client2Server
+    fn direction(&self) -> Direction {
+        Direction::C2s
     }
 
     fn l7_proto(&self) -> L7Proto {
@@ -156,7 +156,7 @@ pub(crate) struct PktHeader {
     pub(crate) payload_offset: usize,
     pub(crate) payload_len: usize,
     pub(crate) l7_proto: L7Proto,
-    pub(crate) direction: PktDirection,
+    pub(crate) direction: Direction,
 }
 
 impl PktHeader {
@@ -237,7 +237,7 @@ impl CapPacket {
                     payload_len: self.data_len
                         - (headers.payload.as_ptr() as usize - self.data.as_ptr() as usize),
                     l7_proto: L7Proto::Unknown,
-                    direction: PktDirection::Client2Server,
+                    direction: Direction::C2s,
                 }));
                 Ok(())
             }
@@ -251,7 +251,7 @@ impl CapPacket {
         }
     }
 
-    pub(crate) fn set_direction(&self, direction: PktDirection) {
+    pub(crate) fn set_direction(&self, direction: Direction) {
         if let Some(header) = self.header.borrow_mut().as_mut() {
             header.direction = direction;
         }
@@ -296,7 +296,7 @@ impl CapPacket {
 }
 
 impl Packet for CapPacket {
-    fn direction(&self) -> PktDirection {
+    fn direction(&self) -> Direction {
         self.header.borrow().as_ref().unwrap().direction
     }
 

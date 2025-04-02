@@ -43,15 +43,15 @@ pub enum TransProto {
 
 #[repr(C)]
 #[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Copy)]
-pub enum PktDirection {
-    Client2Server,
-    Server2Client,
-    BiDirection,
+pub enum Direction {
+    C2s,
+    S2c,
+    BiDir,
     Unknown,
 }
 
 pub trait Packet: Clone {
-    fn direction(&self) -> PktDirection;
+    fn direction(&self) -> Direction;
     fn l7_proto(&self) -> L7Proto;
     fn trans_proto(&self) -> TransProto;
     // tcp或者udp的源端口。否则为0

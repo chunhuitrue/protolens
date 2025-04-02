@@ -1,6 +1,6 @@
 use etherparse::{IpHeader, TransportHeader};
+use protolens::Direction as ProlenDir;
 use protolens::L7Proto;
-use protolens::PktDirection;
 use std::net::IpAddr;
 
 use crate::{
@@ -23,12 +23,12 @@ pub enum Direction {
     Unknown,
 }
 
-impl From<Direction> for PktDirection {
+impl From<Direction> for ProlenDir {
     fn from(value: Direction) -> Self {
         match value {
-            Direction::Client => PktDirection::Client2Server,
-            Direction::Server => PktDirection::Server2Client,
-            _ => PktDirection::Unknown,
+            Direction::Client => ProlenDir::C2s,
+            Direction::Server => ProlenDir::S2c,
+            _ => ProlenDir::Unknown,
         }
     }
 }

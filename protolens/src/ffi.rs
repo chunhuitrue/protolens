@@ -2,7 +2,7 @@ extern crate libc;
 use crate::L7Proto;
 use crate::Prolens;
 use crate::Task;
-use crate::packet::PktDirection;
+use crate::packet::Direction;
 use crate::packet::TransProto;
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -11,7 +11,7 @@ use std::rc::Rc;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct PacketVTable {
-    pub direction: extern "C" fn(*mut std::ffi::c_void) -> PktDirection,
+    pub direction: extern "C" fn(*mut std::ffi::c_void) -> Direction,
     pub l7_proto: extern "C" fn(*mut std::ffi::c_void) -> L7Proto,
     pub trans_proto: extern "C" fn(*mut std::ffi::c_void) -> TransProto,
     pub tu_sport: extern "C" fn(*mut std::ffi::c_void) -> u16,
@@ -23,7 +23,7 @@ pub struct PacketVTable {
     pub payload: extern "C" fn(*mut std::ffi::c_void) -> *const u8,
 }
 
-extern "C" fn missing_direction(_: *mut std::ffi::c_void) -> PktDirection {
+extern "C" fn missing_direction(_: *mut std::ffi::c_void) -> Direction {
     panic!("VTABLE not initialized")
 }
 
@@ -83,7 +83,7 @@ pub struct FfiPacket {
 }
 
 impl crate::Packet for FfiPacket {
-    fn direction(&self) -> PktDirection {
+    fn direction(&self) -> Direction {
         VTABLE.with(|vtable| (vtable.borrow().direction)(self.packet_ptr))
     }
 
@@ -291,7 +291,9 @@ pub extern "C" fn prolens_set_cb_ord_pkt(prolens: *mut FfiProlens, callback: Opt
 }
 
 type CbData = extern "C" fn(data: *const u8, len: usize, seq: u32, ctx: *const c_void);
-type CbEvt = extern "C" fn(ctx: *const c_void);
+type CbDirData =
+    extern "C" fn(data: *const u8, len: usize, seq: u32, ctx: *const c_void, dir: Direction);
+type CbDirEvt = extern "C" fn(ctx: *const c_void, dir: Direction);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_smtp_user(prolens: *mut FfiProlens, callback: Option<CbData>) {
@@ -346,14 +348,17 @@ pub extern "C" fn prolens_set_cb_smtp_rcpt(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_header(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn prolens_set_cb_smtp_header(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirData>,
+) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
-        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir);
     };
     prolens.0.set_cb_smtp_header(wrapper);
 }
@@ -361,21 +366,50 @@ pub extern "C" fn prolens_set_cb_smtp_header(prolens: *mut FfiProlens, callback:
 #[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_smtp_body_start(
     prolens: *mut FfiProlens,
-    callback: Option<CbEvt>,
+    callback: Option<CbDirEvt>,
 ) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |ctx: *mut c_void| {
-        callback.unwrap()(ctx);
+    let wrapper = move |ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(ctx, dir);
     };
     prolens.0.set_cb_smtp_body_start(wrapper);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn prolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: Option<CbDirData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir);
+    };
+    prolens.0.set_cb_smtp_body(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_smtp_body_stop(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirEvt>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(ctx, dir);
+    };
+    prolens.0.set_cb_smtp_body_stop(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_smtp_clt(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -384,20 +418,7 @@ pub extern "C" fn prolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: O
     let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
         callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
     };
-    prolens.0.set_cb_smtp_body(wrapper);
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_body_stop(prolens: *mut FfiProlens, callback: Option<CbEvt>) {
-    if prolens.is_null() || callback.is_none() {
-        return;
-    }
-
-    let prolens = unsafe { &mut *prolens };
-    let wrapper = move |ctx: *mut c_void| {
-        callback.unwrap()(ctx);
-    };
-    prolens.0.set_cb_smtp_body_stop(wrapper);
+    prolens.0.set_cb_smtp_clt(wrapper);
 }
 
 #[unsafe(no_mangle)]
@@ -414,14 +435,17 @@ pub extern "C" fn prolens_set_cb_smtp_srv(prolens: *mut FfiProlens, callback: Op
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_pop3_header(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn prolens_set_cb_pop3_header(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirData>,
+) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
-        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir);
     };
     prolens.0.set_cb_pop3_header(wrapper);
 }
@@ -429,41 +453,44 @@ pub extern "C" fn prolens_set_cb_pop3_header(prolens: *mut FfiProlens, callback:
 #[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_pop3_body_start(
     prolens: *mut FfiProlens,
-    callback: Option<CbEvt>,
+    callback: Option<CbDirEvt>,
 ) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |ctx: *mut c_void| {
-        callback.unwrap()(ctx);
+    let wrapper = move |ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(ctx, dir);
     };
     prolens.0.set_cb_pop3_body_start(wrapper);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_pop3_body(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn prolens_set_cb_pop3_body(prolens: *mut FfiProlens, callback: Option<CbDirData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
-        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir);
     };
     prolens.0.set_cb_pop3_body(wrapper);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_pop3_body_stop(prolens: *mut FfiProlens, callback: Option<CbEvt>) {
+pub extern "C" fn prolens_set_cb_pop3_body_stop(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirEvt>,
+) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |ctx: *mut c_void| {
-        callback.unwrap()(ctx);
+    let wrapper = move |ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(ctx, dir);
     };
     prolens.0.set_cb_pop3_body_stop(wrapper);
 }
@@ -482,7 +509,7 @@ pub extern "C" fn prolens_set_cb_pop3_clt(prolens: *mut FfiProlens, callback: Op
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_imap_header(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn prolens_set_cb_pop3_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -490,6 +517,22 @@ pub extern "C" fn prolens_set_cb_imap_header(prolens: *mut FfiProlens, callback:
     let prolens = unsafe { &mut *prolens };
     let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
         callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_pop3_srv(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_imap_header(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirData>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir);
     };
     prolens.0.set_cb_imap_header(wrapper);
 }
@@ -497,41 +540,44 @@ pub extern "C" fn prolens_set_cb_imap_header(prolens: *mut FfiProlens, callback:
 #[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_imap_body_start(
     prolens: *mut FfiProlens,
-    callback: Option<CbEvt>,
+    callback: Option<CbDirEvt>,
 ) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |ctx: *mut c_void| {
-        callback.unwrap()(ctx);
+    let wrapper = move |ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(ctx, dir);
     };
     prolens.0.set_cb_imap_body_start(wrapper);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_imap_body(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn prolens_set_cb_imap_body(prolens: *mut FfiProlens, callback: Option<CbDirData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
-        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir);
     };
     prolens.0.set_cb_imap_body(wrapper);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_imap_body_stop(prolens: *mut FfiProlens, callback: Option<CbEvt>) {
+pub extern "C" fn prolens_set_cb_imap_body_stop(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirEvt>,
+) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |ctx: *mut c_void| {
-        callback.unwrap()(ctx);
+    let wrapper = move |ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(ctx, dir);
     };
     prolens.0.set_cb_imap_body_stop(wrapper);
 }
@@ -547,4 +593,17 @@ pub extern "C" fn prolens_set_cb_imap_clt(prolens: *mut FfiProlens, callback: Op
         callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
     };
     prolens.0.set_cb_imap_clt(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_imap_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_imap_srv(wrapper);
 }

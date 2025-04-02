@@ -1,8 +1,10 @@
+use crate::Callbacks;
 use crate::CbBody;
 use crate::CbBodyEvt;
 use crate::CbClt;
 use crate::CbHeader;
-use crate::MailCallbacks;
+use crate::CbSrv;
+use crate::Direction;
 use crate::Parser;
 use crate::ParserFactory;
 use crate::ParserFuture;
@@ -29,11 +31,12 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    pub(crate) cb_header: Option<CbHeader>,
-    pub(crate) cb_body_start: Option<CbBodyEvt>,
-    pub(crate) cb_body: Option<CbBody>,
-    pub(crate) cb_body_stop: Option<CbBodyEvt>,
-    pub(crate) cb_clt: Option<CbClt>,
+    cb_header: Option<CbHeader>,
+    cb_body_start: Option<CbBodyEvt>,
+    cb_body: Option<CbBody>,
+    cb_body_stop: Option<CbBodyEvt>,
+    cb_clt: Option<CbClt>,
+    cb_srv: Option<CbSrv>,
     _phantom_t: PhantomData<T>,
     _phantom_p: PhantomData<P>,
 }
@@ -50,6 +53,7 @@ where
             cb_body: None,
             cb_body_stop: None,
             cb_clt: None,
+            cb_srv: None,
             _phantom_t: PhantomData,
             _phantom_p: PhantomData,
         }
@@ -57,7 +61,7 @@ where
 
     async fn c2s_parser_inner(
         stream: *const PktStrm<T, P>,
-        cb_clt: Option<CbClt>,
+        cb_pop3: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm: &mut PktStrm<T, P>;
@@ -68,7 +72,7 @@ where
         loop {
             let (line, seq) = stm.read_clean_line_str().await?;
 
-            if let Some(ref cb) = cb_clt {
+            if let Some(ref cb) = cb_pop3.clt {
                 cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
             }
 
@@ -81,7 +85,7 @@ where
 
     async fn s2c_parser_inner(
         stream: *const PktStrm<T, P>,
-        cb: MailCallbacks,
+        cb_pop3: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm: &mut PktStrm<T, P>;
@@ -90,14 +94,18 @@ where
         }
 
         loop {
-            let (line, _seq) = stm.read_clean_line_str().await?;
+            let (line, seq) = stm.read_clean_line_str().await?;
+
+            if let Some(ref cb) = cb_pop3.srv {
+                cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
+            }
 
             if stls_answer(line) {
                 break;
             }
 
             if retr_answer(line) {
-                pop3_mail(stm, &cb, cb_ctx).await?;
+                pop3_mail(stm, &cb_pop3, cb_ctx).await?;
             }
         }
         Ok(())
@@ -117,11 +125,17 @@ where
         stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        Some(Box::pin(Self::c2s_parser_inner(
-            stream,
-            self.cb_clt.clone(),
-            cb_ctx,
-        )))
+        let cb_pop3 = Callbacks {
+            header: None,
+            body_start: None,
+            body: None,
+            body_stop: None,
+            clt: self.cb_clt.clone(),
+            srv: None,
+            dir: Direction::C2s,
+        };
+
+        Some(Box::pin(Self::c2s_parser_inner(stream, cb_pop3, cb_ctx)))
     }
 
     fn s2c_parser(
@@ -129,14 +143,17 @@ where
         stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        let cb = MailCallbacks {
+        let cb_pop3 = Callbacks {
             header: self.cb_header.clone(),
             body_start: self.cb_body_start.clone(),
             body: self.cb_body.clone(),
             body_stop: self.cb_body_stop.clone(),
+            clt: None,
+            srv: self.cb_srv.clone(),
+            dir: Direction::S2c,
         };
 
-        Some(Box::pin(Self::s2c_parser_inner(stream, cb, cb_ctx)))
+        Some(Box::pin(Self::s2c_parser_inner(stream, cb_pop3, cb_ctx)))
     }
 }
 
@@ -164,40 +181,32 @@ where
         parser.cb_body = prolens.cb_pop3_body.clone();
         parser.cb_body_stop = prolens.cb_pop3_body_stop.clone();
         parser.cb_clt = prolens.cb_pop3_clt.clone();
+        parser.cb_srv = prolens.cb_pop3_srv.clone();
         parser
     }
 }
 
 async fn pop3_mail<T, P>(
     stm: &mut PktStrm<T, P>,
-    cb: &MailCallbacks,
+    cb_pop3: &Callbacks,
     cb_ctx: *mut c_void,
 ) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    let boundary = header(stm, cb.header.as_ref(), cb_ctx).await?;
+    let boundary = header(stm, cb_pop3.header.as_ref(), cb_ctx, Direction::S2c).await?;
     if let Some(bdry) = boundary {
-        dbg!("to multi body2");
-        multi_body(
-            stm,
-            &bdry,
-            cb.header.as_ref(),
-            cb.body_start.as_ref(),
-            cb.body.as_ref(),
-            cb.body_stop.as_ref(),
-            cb_ctx,
-        )
-        .await?;
+        multi_body(stm, &bdry, cb_pop3, cb_ctx).await?;
         epilogue(stm).await?;
     } else {
         body(
             stm,
-            cb.body_start.as_ref(),
-            cb.body.as_ref(),
-            cb.body_stop.as_ref(),
+            cb_pop3.body_start.as_ref(),
+            cb_pop3.body.as_ref(),
+            cb_pop3.body_stop.as_ref(),
             cb_ctx,
+            cb_pop3.dir,
         )
         .await?;
     }
@@ -306,7 +315,7 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 let mut headers_guard = headers_clone.borrow_mut();
                 headers_guard.push(header.to_vec());
                 dbg!("header cb. push", std::str::from_utf8(header).unwrap());
@@ -315,7 +324,7 @@ mod tests {
 
         let body_callback = {
             let body_clone = captured_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 let mut body_guard = body_clone.borrow_mut();
                 body_guard.push(body.to_vec());
             }
@@ -332,7 +341,7 @@ mod tests {
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
             pkt.set_l7_proto(L7Proto::Pop3);
-            pkt.set_direction(PktDirection::Server2Client);
+            pkt.set_direction(Direction::S2c);
 
             protolens.run_task(&mut task, pkt);
             seq += line_bytes.len() as u32;
@@ -391,11 +400,8 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 dbg!("callback header", std::str::from_utf8(header).unwrap());
-                if header.is_empty() {
-                    dbg!("header cb. header end", header);
-                }
                 let mut headers_guard = headers_clone.borrow_mut();
                 headers_guard.push(header.to_vec());
             }
@@ -403,7 +409,7 @@ mod tests {
 
         let body_start_callback = {
             let current_body_clone = current_body.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
@@ -413,7 +419,7 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
@@ -424,7 +430,7 @@ mod tests {
         let body_stop_callback = {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
@@ -449,7 +455,7 @@ mod tests {
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
             pkt.set_l7_proto(L7Proto::Pop3);
-            pkt.set_direction(PktDirection::Server2Client);
+            pkt.set_direction(Direction::S2c);
 
             protolens.run_task(&mut task, pkt);
 
@@ -507,10 +513,7 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                if header.is_empty() {
-                    dbg!("header cb. header end", header);
-                }
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 let mut headers_guard = headers_clone.borrow_mut();
                 headers_guard.push(header.to_vec());
             }
@@ -518,7 +521,7 @@ mod tests {
 
         let body_start_callback = {
             let current_body_clone = current_body.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
@@ -528,7 +531,7 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
@@ -539,7 +542,7 @@ mod tests {
         let body_stop_callback = {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
@@ -584,9 +587,9 @@ mod tests {
             }
             pkt.set_l7_proto(L7Proto::Pop3);
             if pkt.header.borrow().as_ref().unwrap().dport() == POP3_PORT {
-                pkt.set_direction(PktDirection::Client2Server);
+                pkt.set_direction(Direction::C2s);
             } else {
-                pkt.set_direction(PktDirection::Server2Client);
+                pkt.set_direction(Direction::S2c);
             }
 
             protolens.run_task(&mut task, pkt);

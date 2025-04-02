@@ -10,9 +10,9 @@ mod task;
 #[cfg(test)]
 mod test_utils;
 
+pub use crate::packet::Direction;
 pub use crate::packet::L7Proto;
 pub use crate::packet::Packet;
-pub use crate::packet::PktDirection;
 pub use crate::packet::TransProto;
 pub use crate::task::Task;
 
@@ -23,6 +23,9 @@ use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::CbBody;
+use crate::CbBodyEvt;
+use crate::CbHeader;
 use crate::config::*;
 use crate::enum_map::EnumMap;
 use crate::heap::*;
@@ -71,17 +74,20 @@ where
     cb_smtp_body_start: Option<CbBodyEvt>,
     cb_smtp_body: Option<CbBody>,
     cb_smtp_body_stop: Option<CbBodyEvt>,
+    cb_smtp_clt: Option<CbClt>,
     cb_smtp_srv: Option<CbSrv>,
     cb_pop3_header: Option<CbHeader>,
     cb_pop3_body_start: Option<CbBodyEvt>,
     cb_pop3_body: Option<CbBody>,
     cb_pop3_body_stop: Option<CbBodyEvt>,
     cb_pop3_clt: Option<CbClt>,
+    cb_pop3_srv: Option<CbSrv>,
     cb_imap_header: Option<CbHeader>,
     cb_imap_body_start: Option<CbBodyEvt>,
     cb_imap_body: Option<CbBody>,
     cb_imap_body_stop: Option<CbBodyEvt>,
     cb_imap_clt: Option<CbClt>,
+    cb_imap_srv: Option<CbSrv>,
 
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
@@ -131,17 +137,20 @@ where
             cb_smtp_body_start: None,
             cb_smtp_body: None,
             cb_smtp_body_stop: None,
+            cb_smtp_clt: None,
             cb_smtp_srv: None,
             cb_pop3_header: None,
             cb_pop3_body_start: None,
             cb_pop3_body: None,
             cb_pop3_body_stop: None,
             cb_pop3_clt: None,
+            cb_pop3_srv: None,
             cb_imap_header: None,
             cb_imap_body_start: None,
             cb_imap_body: None,
             cb_imap_body_stop: None,
             cb_imap_clt: None,
+            cb_imap_srv: None,
         };
         prolens.regist_parsers();
         prolens
@@ -313,7 +322,7 @@ where
 
     pub fn set_cb_smtp_header<F>(&mut self, callback: F)
     where
-        F: DataCbFn + 'static,
+        F: DataCbDirFn + 'static,
     {
         self.cb_smtp_header = Some(Rc::new(RefCell::new(callback)) as CbHeader);
     }
@@ -327,7 +336,7 @@ where
 
     pub fn set_cb_smtp_body<F>(&mut self, callback: F)
     where
-        F: DataCbFn + 'static,
+        F: DataCbDirFn + 'static,
     {
         self.cb_smtp_body = Some(Rc::new(RefCell::new(callback)) as CbBody);
     }
@@ -339,6 +348,13 @@ where
         self.cb_smtp_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
     }
 
+    pub fn set_cb_smtp_clt<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_smtp_clt = Some(Rc::new(RefCell::new(callback)) as CbClt);
+    }
+
     pub fn set_cb_smtp_srv<F>(&mut self, callback: F)
     where
         F: DataCbFn + 'static,
@@ -348,7 +364,7 @@ where
 
     pub fn set_cb_pop3_header<F>(&mut self, callback: F)
     where
-        F: DataCbFn + 'static,
+        F: DataCbDirFn + 'static,
     {
         self.cb_pop3_header = Some(Rc::new(RefCell::new(callback)) as CbHeader);
     }
@@ -362,7 +378,7 @@ where
 
     pub fn set_cb_pop3_body<F>(&mut self, callback: F)
     where
-        F: DataCbFn + 'static,
+        F: DataCbDirFn + 'static,
     {
         self.cb_pop3_body = Some(Rc::new(RefCell::new(callback)) as CbBody);
     }
@@ -381,9 +397,16 @@ where
         self.cb_pop3_clt = Some(Rc::new(RefCell::new(callback)) as CbSrv);
     }
 
-    pub fn set_cb_imap_header<F>(&mut self, callback: F)
+    pub fn set_cb_pop3_srv<F>(&mut self, callback: F)
     where
         F: DataCbFn + 'static,
+    {
+        self.cb_pop3_srv = Some(Rc::new(RefCell::new(callback)) as CbSrv);
+    }
+
+    pub fn set_cb_imap_header<F>(&mut self, callback: F)
+    where
+        F: DataCbDirFn + 'static,
     {
         self.cb_imap_header = Some(Rc::new(RefCell::new(callback)) as CbHeader);
     }
@@ -397,7 +420,7 @@ where
 
     pub fn set_cb_imap_body<F>(&mut self, callback: F)
     where
-        F: DataCbFn + 'static,
+        F: DataCbDirFn + 'static,
     {
         self.cb_imap_body = Some(Rc::new(RefCell::new(callback)) as CbBody);
     }
@@ -413,7 +436,14 @@ where
     where
         F: DataCbFn + 'static,
     {
-        self.cb_imap_clt = Some(Rc::new(RefCell::new(callback)) as CbSrv);
+        self.cb_imap_clt = Some(Rc::new(RefCell::new(callback)) as CbClt);
+    }
+
+    pub fn set_cb_imap_srv<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_imap_srv = Some(Rc::new(RefCell::new(callback)) as CbSrv);
     }
 }
 

@@ -14,8 +14,8 @@ typedef struct {
     size_t         payload_len;
 } TestPacket;
 
-PktDirection packet_direction(void* packet) {
-    return CLIENT2SERVER;
+ProlensDirection packet_direction(void* packet) {
+    return C2S;
 }
 
 L7Proto packet_l7_proto(void* packet) {

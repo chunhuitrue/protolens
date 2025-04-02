@@ -1,2 +1,2 @@
-cargo run -- ../protolens/tests/res/smtp.pcap
+cargo run -- ../protolens/tests/pcap/smtp.pcap
 

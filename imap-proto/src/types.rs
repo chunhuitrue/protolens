@@ -402,6 +402,8 @@ pub enum AttributeValue2<'a> {
         data: Option<&'a [u8]>,
     },
     BodyStructure(BodyStructure<'a>),
+    Rfc822Header(Option<usize>),
+    Rfc822Text(Option<usize>),
     Ignored,
 }
 

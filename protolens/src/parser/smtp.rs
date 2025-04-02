@@ -1,11 +1,14 @@
+use crate::Callbacks;
 use crate::CbBody;
 use crate::CbBodyEvt;
+use crate::CbClt;
 use crate::CbHeader;
 use crate::CbMailFrom;
 use crate::CbPass;
 use crate::CbRcpt;
 use crate::CbSrv;
 use crate::CbUser;
+use crate::Direction;
 use crate::Parser;
 use crate::ParserFactory;
 use crate::ParserFuture;
@@ -24,14 +27,10 @@ use std::marker::PhantomData;
 
 #[derive(Clone)]
 pub(crate) struct SmtpCallbacks {
-    pub(crate) user: Option<CbUser>,
-    pub(crate) pass: Option<CbPass>,
-    pub(crate) mailfrom: Option<CbMailFrom>,
-    pub(crate) rcpt: Option<CbRcpt>,
-    pub(crate) header: Option<CbHeader>,
-    pub(crate) body_start: Option<CbBodyEvt>,
-    pub(crate) body: Option<CbBody>,
-    pub(crate) body_stop: Option<CbBodyEvt>,
+    user: Option<CbUser>,
+    pass: Option<CbPass>,
+    mailfrom: Option<CbMailFrom>,
+    rcpt: Option<CbRcpt>,
 }
 
 pub struct SmtpParser<T, P>
@@ -39,15 +38,16 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    pub(crate) cb_user: Option<CbUser>,
-    pub(crate) cb_pass: Option<CbPass>,
-    pub(crate) cb_mailfrom: Option<CbMailFrom>,
-    pub(crate) cb_rcpt: Option<CbRcpt>,
-    pub(crate) cb_header: Option<CbHeader>,
-    pub(crate) cb_body_start: Option<CbBodyEvt>,
-    pub(crate) cb_body: Option<CbBody>,
-    pub(crate) cb_body_stop: Option<CbBodyEvt>,
-    pub(crate) cb_srv: Option<CbSrv>,
+    cb_user: Option<CbUser>,
+    cb_pass: Option<CbPass>,
+    cb_mailfrom: Option<CbMailFrom>,
+    cb_rcpt: Option<CbRcpt>,
+    cb_header: Option<CbHeader>,
+    cb_body_start: Option<CbBodyEvt>,
+    cb_body: Option<CbBody>,
+    cb_body_stop: Option<CbBodyEvt>,
+    cb_clt: Option<CbClt>,
+    cb_srv: Option<CbSrv>,
     _phantom_t: PhantomData<T>,
     _phantom_p: PhantomData<P>,
 }
@@ -67,6 +67,7 @@ where
             cb_body_start: None,
             cb_body: None,
             cb_body_stop: None,
+            cb_clt: None,
             cb_srv: None,
             _phantom_t: PhantomData,
             _phantom_p: PhantomData,
@@ -75,7 +76,8 @@ where
 
     async fn c2s_parser_inner(
         stream: *const PktStrm<T, P>,
-        cb: SmtpCallbacks,
+        cb: Callbacks,
+        cb_smtp: SmtpCallbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm: &mut PktStrm<T, P>;
@@ -95,13 +97,13 @@ where
         } else if line.eq_ignore_ascii_case("AUTH LOGIN") {
             // user
             let (user, seq) = stm.read_clean_line().await?;
-            if let Some(cb) = cb.user {
+            if let Some(cb) = cb_smtp.user {
                 cb.borrow_mut()(user, seq, cb_ctx);
             }
 
             // pass
             let (pass, seq) = stm.read_clean_line().await?;
-            if let Some(cb) = cb.pass {
+            if let Some(cb) = cb_smtp.pass {
                 cb.borrow_mut()(pass, seq, cb_ctx);
             }
 
@@ -110,7 +112,7 @@ where
 
             if let Ok((_, (mail, offset))) = mail_from(from) {
                 let mailfrom_seq = seq + offset as u32;
-                if let Some(cb) = cb.mailfrom {
+                if let Some(cb) = cb_smtp.mailfrom {
                     cb.borrow_mut()(mail.as_bytes(), mailfrom_seq, cb_ctx);
                 }
             }
@@ -118,30 +120,21 @@ where
             // 没有auth，直接到mail from的情况
             if let Ok((_, (mail, offset))) = mail_from(line) {
                 let mailfrom_seq = seq + offset as u32;
-                if let Some(cb) = cb.mailfrom {
+                if let Some(cb) = cb_smtp.mailfrom {
                     cb.borrow_mut()(mail.as_bytes(), mailfrom_seq, cb_ctx);
                 }
             }
         } else {
             // 其他auth情况。AUTH PLAIN，AUTH CRAM-MD5
             // 清空mail from之前或有或无的命令
-            read_to_from(stm, cb.mailfrom, cb_ctx).await?;
+            read_to_from(stm, cb_smtp.mailfrom, cb_ctx).await?;
         }
 
-        multi_rcpt_to(stm, cb.rcpt, cb_ctx).await?;
+        multi_rcpt_to(stm, cb_smtp.rcpt, cb_ctx).await?;
 
-        let boundary = header(stm, cb.header.as_ref(), cb_ctx).await?;
+        let boundary = header(stm, cb.header.as_ref(), cb_ctx, Direction::C2s).await?;
         if let Some(bdry) = boundary {
-            multi_body(
-                stm,
-                &bdry,
-                cb.header.as_ref(),
-                cb.body_start.as_ref(),
-                cb.body.as_ref(),
-                cb.body_stop.as_ref(),
-                cb_ctx,
-            )
-            .await?;
+            multi_body(stm, &bdry, &cb, cb_ctx).await?;
         } else {
             body(
                 stm,
@@ -149,6 +142,7 @@ where
                 cb.body.as_ref(),
                 cb.body_stop.as_ref(),
                 cb_ctx,
+                cb.dir,
             )
             .await?;
         }
@@ -194,18 +188,25 @@ where
         stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        let cb = SmtpCallbacks {
+        let cb_smtp = SmtpCallbacks {
             user: self.cb_user.clone(),
             pass: self.cb_pass.clone(),
             mailfrom: self.cb_mailfrom.clone(),
             rcpt: self.cb_rcpt.clone(),
+        };
+        let cb = Callbacks {
             header: self.cb_header.clone(),
             body_start: self.cb_body_start.clone(),
             body: self.cb_body.clone(),
             body_stop: self.cb_body_stop.clone(),
+            clt: self.cb_clt.clone(),
+            srv: None,
+            dir: Direction::C2s,
         };
 
-        Some(Box::pin(Self::c2s_parser_inner(stream, cb, cb_ctx)))
+        Some(Box::pin(Self::c2s_parser_inner(
+            stream, cb, cb_smtp, cb_ctx,
+        )))
     }
 
     fn s2c_parser(
@@ -525,7 +526,7 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 if header.is_empty() {
                     dbg!("header cb. header end", header);
                 }
@@ -536,7 +537,7 @@ mod tests {
 
         let body_callback = {
             let body_clone = captured_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 let mut body_guard = body_clone.borrow_mut();
                 body_guard.push(body.to_vec());
             }
@@ -826,9 +827,9 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 dbg!(std::str::from_utf8(header).unwrap_or(""));
-                if header.is_empty() {
+                if header == b"\r\n" {
                     dbg!("header cb. header end");
                 }
                 let mut headers_guard = headers_clone.borrow_mut();
@@ -981,9 +982,9 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 dbg!(std::str::from_utf8(header).unwrap_or("err"));
-                if header.is_empty() {
+                if header == b"\r\n" {
                     dbg!("header cb. header end");
                 }
                 let mut headers_guard = headers_clone.borrow_mut();
@@ -993,7 +994,7 @@ mod tests {
 
         let body_start_callback = {
             let current_body_clone = current_body.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
@@ -1003,7 +1004,7 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
@@ -1014,7 +1015,7 @@ mod tests {
         let body_stop_callback = {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
@@ -1254,8 +1255,8 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                if header.is_empty() {
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
+                if header == b"\r\n" {
                     dbg!("header cb. header end", header);
                 }
                 let mut headers_guard = headers_clone.borrow_mut();
@@ -1265,7 +1266,7 @@ mod tests {
 
         let body_start_callback = {
             let current_body_clone = current_body.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
@@ -1275,7 +1276,7 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
@@ -1287,7 +1288,7 @@ mod tests {
         let body_stop_callback = {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
@@ -1460,8 +1461,8 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                if header.is_empty() {
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
+                if header == b"\r\n" {
                     dbg!("header cb. header end", header);
                 }
                 let mut headers_guard = headers_clone.borrow_mut();
@@ -1471,7 +1472,7 @@ mod tests {
 
         let body_start_callback = {
             let current_body_clone = current_body.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
@@ -1481,7 +1482,7 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
@@ -1492,7 +1493,7 @@ mod tests {
         let body_stop_callback = {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
@@ -1541,9 +1542,9 @@ mod tests {
             }
             pkt.set_l7_proto(L7Proto::Smtp);
             if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT {
-                pkt.set_direction(PktDirection::Client2Server);
+                pkt.set_direction(Direction::C2s);
             } else {
-                pkt.set_direction(PktDirection::Server2Client);
+                pkt.set_direction(Direction::S2c);
             }
 
             protolens.run_task(&mut task, pkt);

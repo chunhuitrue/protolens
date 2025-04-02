@@ -1,7 +1,7 @@
 use etherparse::*;
 use pcap::Capture as PcapCap;
 use pcap::Offline;
-use protolens::{L7Proto, Packet, PktDirection, TransProto};
+use protolens::{Direction, L7Proto, Packet, TransProto};
 use std::cell::RefCell;
 use std::fmt;
 use std::ops::Deref;
@@ -156,11 +156,11 @@ impl CapPacket {
 }
 
 impl Packet for CapPacket {
-    fn direction(&self) -> PktDirection {
+    fn direction(&self) -> Direction {
         if self.tu_dport() == SMTP_PORT_NET {
-            PktDirection::Client2Server
+            Direction::C2s
         } else {
-            PktDirection::Server2Client
+            Direction::S2c
         }
     }
 

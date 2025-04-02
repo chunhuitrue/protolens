@@ -4,7 +4,7 @@
 #include <arpa/inet.h>
 #include "../protolens/dist/protolens.h"
 
-#define SMTP_PCAP "../protolens/tests/res/smtp.pcap"
+#define SMTP_PCAP "../protolens/tests/pcap/smtp.pcap"
 
 typedef struct {
     uint32_t       seq;
@@ -17,9 +17,9 @@ typedef struct {
     L7Proto    l7_proto;    
 } PcapPacket;
 
-PktDirection packet_direction(void* packet) {
+ProlensDirection packet_direction(void* packet) {
     PcapPacket *pkt = (PcapPacket*)packet;
-    return (pkt->dport == 25) ? CLIENT2SERVER : SERVER2CLIENT;
+    return (pkt->dport == 25) ? C2S : S2C;
 }
 
 L7Proto packet_l7_proto(void* packet) {

@@ -100,15 +100,15 @@ where
     // Some(Err(())) - 表示解析遇到错误
     pub(crate) fn run(&mut self, pkt: PacketWrapper<T, P>) -> Option<Result<(), ()>> {
         match pkt.ptr.direction() {
-            PktDirection::Client2Server => {
+            Direction::C2s => {
                 self.stream_c2s.push(pkt);
                 return self.c2s_run();
             }
-            PktDirection::Server2Client => {
+            Direction::S2c => {
                 self.stream_s2c.push(pkt);
                 return self.s2c_run();
             }
-            PktDirection::BiDirection => None,
+            Direction::BiDir => None,
             _ => Some(Err::<T, ()>(())),
         };
         self.bdir_run()

@@ -1,8 +1,10 @@
+use crate::Callbacks;
 use crate::CbBody;
 use crate::CbBodyEvt;
 use crate::CbClt;
 use crate::CbHeader;
-use crate::MailCallbacks;
+use crate::CbSrv;
+use crate::Direction;
 use crate::Parser;
 use crate::ParserFactory;
 use crate::ParserFuture;
@@ -27,11 +29,12 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    pub(crate) cb_header: Option<CbHeader>,
-    pub(crate) cb_body_start: Option<CbBodyEvt>,
-    pub(crate) cb_body: Option<CbBody>,
-    pub(crate) cb_body_stop: Option<CbBodyEvt>,
-    pub(crate) cb_clt: Option<CbClt>,
+    cb_header: Option<CbHeader>,
+    cb_body_start: Option<CbBodyEvt>,
+    cb_body: Option<CbBody>,
+    cb_body_stop: Option<CbBodyEvt>,
+    cb_clt: Option<CbClt>,
+    cb_srv: Option<CbSrv>,
     _phantom_t: PhantomData<T>,
     _phantom_p: PhantomData<P>,
 }
@@ -48,6 +51,7 @@ where
             cb_body: None,
             cb_body_stop: None,
             cb_clt: None,
+            cb_srv: None,
             _phantom_t: PhantomData,
             _phantom_p: PhantomData,
         }
@@ -55,8 +59,7 @@ where
 
     async fn c2s_parser_inner(
         stream: *const PktStrm<T, P>,
-        cb_mail: MailCallbacks,
-        cb_clt: Option<CbClt>,
+        cb_imap: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm: &mut PktStrm<T, P>;
@@ -67,13 +70,13 @@ where
         loop {
             let (line, seq) = stm.read_clean_line_str().await?;
 
-            if let Some(ref cb) = cb_clt {
+            if let Some(ref cb) = cb_imap.clt {
                 cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
             }
 
             let (is_append, mail_size) = append(line);
             if is_append && append_ok(stm).await? {
-                imap_mail(stm, mail_size, &cb_mail, cb_ctx).await?;
+                imap_mail(stm, mail_size, &cb_imap, cb_ctx).await?;
 
                 // command = tag SP (command-any / command-auth / command-nonauth /
                 //           command-select) CRLF
@@ -87,7 +90,7 @@ where
 
     async fn s2c_parser_inner(
         stream: *const PktStrm<T, P>,
-        cb: MailCallbacks,
+        cb: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm: &mut PktStrm<T, P>;
@@ -118,11 +121,6 @@ where
                     Self::handle_fetch_ret(stm, size, header, &cb, cb_ctx).await?;
                 }
             }
-
-            let (byte, _seq) = stm.readn(1).await?;
-            if byte == b")" {
-                return Ok(());
-            }
         }
     }
 
@@ -130,7 +128,7 @@ where
         stm: &mut PktStrm<T, P>,
         size: Option<usize>,
         header: bool,
-        cb: &MailCallbacks,
+        cb_imap: &Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         if size.is_none() {
@@ -139,11 +137,16 @@ where
         let literal_size = size.unwrap();
 
         if header {
-            fetch_header(stm, cb, cb_ctx).await?;
-            return Ok(());
+            fetch_header(stm, cb_imap, cb_ctx).await?;
+        } else {
+            dbg!("handle_fetch_ret. size body", literal_size);
+            size_body(stm, literal_size, cb_imap, cb_ctx).await?;
         }
 
-        size_body(stm, literal_size, cb, cb_ctx).await?;
+        let (byte, _seq) = stm.readn(1).await?;
+        if byte == b")" {
+            return Ok(());
+        }
         Ok(())
     }
 }
@@ -161,19 +164,17 @@ where
         stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        let cb_mail = MailCallbacks {
+        let cb_imap = Callbacks {
             header: self.cb_header.clone(),
             body_start: self.cb_body_start.clone(),
             body: self.cb_body.clone(),
             body_stop: self.cb_body_stop.clone(),
+            clt: self.cb_clt.clone(),
+            srv: None,
+            dir: Direction::C2s,
         };
 
-        Some(Box::pin(Self::c2s_parser_inner(
-            stream,
-            cb_mail,
-            self.cb_clt.clone(),
-            cb_ctx,
-        )))
+        Some(Box::pin(Self::c2s_parser_inner(stream, cb_imap, cb_ctx)))
     }
 
     fn s2c_parser(
@@ -181,14 +182,17 @@ where
         stream: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
-        let cb_mail = MailCallbacks {
+        let cb_imap = Callbacks {
             header: self.cb_header.clone(),
             body_start: self.cb_body_start.clone(),
             body: self.cb_body.clone(),
             body_stop: self.cb_body_stop.clone(),
+            clt: None,
+            srv: self.cb_srv.clone(),
+            dir: Direction::S2c,
         };
 
-        Some(Box::pin(Self::s2c_parser_inner(stream, cb_mail, cb_ctx)))
+        Some(Box::pin(Self::s2c_parser_inner(stream, cb_imap, cb_ctx)))
     }
 }
 
@@ -223,7 +227,7 @@ where
 async fn imap_mail<T, P>(
     stm: &mut PktStrm<T, P>,
     mail_size: usize,
-    cb: &MailCallbacks,
+    cb_imap: &Callbacks,
     cb_ctx: *mut c_void,
 ) -> Result<(), ()>
 where
@@ -231,23 +235,14 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
 {
     let start_size = stm.get_read_size();
-    let boundary = header(stm, cb.header.as_ref(), cb_ctx).await?;
+    let boundary = header(stm, cb_imap.header.as_ref(), cb_ctx, Direction::C2s).await?;
     if let Some(bdry) = boundary {
-        multi_body(
-            stm,
-            &bdry,
-            cb.header.as_ref(),
-            cb.body_start.as_ref(),
-            cb.body.as_ref(),
-            cb.body_stop.as_ref(),
-            cb_ctx,
-        )
-        .await?;
+        multi_body(stm, &bdry, cb_imap, cb_ctx).await?;
         imap_epilogue(stm, mail_size, start_size).await?;
     } else {
         let head_size = stm.get_read_size() - start_size;
         let body_size = mail_size - head_size;
-        size_body(stm, body_size, cb, cb_ctx).await?;
+        size_body(stm, body_size, cb_imap, cb_ctx).await?;
     }
     dbg!("imap_mail end");
     Ok(())
@@ -256,7 +251,7 @@ where
 async fn size_body<T, P>(
     stm: &mut PktStrm<T, P>,
     size: usize,
-    cb: &MailCallbacks,
+    cb_imap: &Callbacks,
     cb_ctx: *mut c_void,
 ) -> Result<bool, ()>
 where
@@ -265,34 +260,32 @@ where
 {
     let mut remain_size = size;
 
-    dbg!("size_body start");
-    if let Some(cb) = &cb.body_start {
-        cb.borrow_mut()(cb_ctx);
+    if let Some(cb) = &cb_imap.body_start {
+        cb.borrow_mut()(cb_ctx, cb_imap.dir);
     }
     while remain_size > 0 {
         let (bytes, seq) = stm.read(remain_size).await?;
         remain_size -= bytes.len();
 
-        if let Some(cb) = &cb.body {
-            cb.borrow_mut()(bytes, seq, cb_ctx);
+        if let Some(cb) = &cb_imap.body {
+            cb.borrow_mut()(bytes, seq, cb_ctx, cb_imap.dir);
         }
     }
-    if let Some(cb) = &cb.body_stop {
-        cb.borrow_mut()(cb_ctx);
+    if let Some(cb) = &cb_imap.body_stop {
+        cb.borrow_mut()(cb_ctx, cb_imap.dir);
     }
-    dbg!("size_body end");
     Ok(true)
 }
 
-fn quoted_body(data: &[u8], seq: u32, cb: &MailCallbacks, cb_ctx: *mut c_void) -> Result<(), ()> {
-    if let Some(cb) = &cb.body_start {
-        cb.borrow_mut()(cb_ctx);
+fn quoted_body(data: &[u8], seq: u32, cb_imap: &Callbacks, cb_ctx: *mut c_void) -> Result<(), ()> {
+    if let Some(cb) = &cb_imap.body_start {
+        cb.borrow_mut()(cb_ctx, cb_imap.dir);
     }
-    if let Some(cb) = &cb.body {
-        cb.borrow_mut()(data, seq, cb_ctx);
+    if let Some(cb) = &cb_imap.body {
+        cb.borrow_mut()(data, seq, cb_ctx, cb_imap.dir);
     }
-    if let Some(cb) = &cb.body_stop {
-        cb.borrow_mut()(cb_ctx);
+    if let Some(cb) = &cb_imap.body_stop {
+        cb.borrow_mut()(cb_ctx, cb_imap.dir);
     }
     Ok(())
 }
@@ -381,7 +374,7 @@ where
 
 async fn fetch_header<T, P>(
     stm: &mut PktStrm<T, P>,
-    cb: &MailCallbacks,
+    cb_imap: &Callbacks,
     cb_ctx: *mut c_void,
 ) -> Result<(), ()>
 where
@@ -391,8 +384,8 @@ where
     loop {
         let (line, seq) = stm.readline_str().await?;
 
-        if let Some(cb) = &cb.header {
-            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
+        if let Some(cb) = &cb_imap.header {
+            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx, cb_imap.dir);
         }
 
         if line == "\r\n" {
@@ -455,7 +448,7 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 if header.is_empty() {
                     dbg!("header cb. header end", header);
                 }
@@ -466,7 +459,7 @@ mod tests {
 
         let body_start_callback = {
             let current_body_clone = current_body.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
@@ -476,7 +469,7 @@ mod tests {
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
                 // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
@@ -487,7 +480,7 @@ mod tests {
         let body_stop_callback = {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
-            move |_cb_ctx: *mut c_void| {
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
                 // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
@@ -523,7 +516,7 @@ mod tests {
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
             pkt.set_l7_proto(L7Proto::Imap);
-            pkt.set_direction(PktDirection::Client2Server);
+            pkt.set_direction(Direction::C2s);
 
             protolens.run_task(&mut task, pkt);
 
@@ -564,47 +557,46 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                if header.is_empty() {
-                    dbg!("header cb. header end", header);
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, dir: Direction| {
+                if dir == Direction::C2s {
+                    if header.is_empty() {
+                        dbg!("header cb. header end", header);
+                    }
+                    let mut headers_guard = headers_clone.borrow_mut();
+                    headers_guard.push(header.to_vec());
                 }
-                let mut headers_guard = headers_clone.borrow_mut();
-                headers_guard.push(header.to_vec());
             }
         };
 
         let body_start_callback = {
             let current_body_clone = current_body.clone();
-            move |_cb_ctx: *mut c_void| {
-                // 创建新的body缓冲区
-                let mut body_guard = current_body_clone.borrow_mut();
-                *body_guard = Vec::new();
-                println!("Body start callback triggered");
+            move |_cb_ctx: *mut c_void, dir: Direction| {
+                if dir == Direction::C2s {
+                    let mut body_guard = current_body_clone.borrow_mut();
+                    *body_guard = Vec::new();
+                }
             }
         };
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                // 将内容追加到当前body
-                let mut body_guard = current_body_clone.borrow_mut();
-                body_guard.extend_from_slice(body);
-                println!("Body callback: {} bytes", body.len());
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, dir: Direction| {
+                if dir == Direction::C2s {
+                    let mut body_guard = current_body_clone.borrow_mut();
+                    body_guard.extend_from_slice(body);
+                }
             }
         };
 
         let body_stop_callback = {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
-            move |_cb_ctx: *mut c_void| {
-                // 将当前body添加到bodies列表
-                let body_guard = current_body_clone.borrow();
-                let mut bodies_guard = bodies_clone.borrow_mut();
-                bodies_guard.push(body_guard.clone());
-                println!(
-                    "Body stop callback triggered, body size: {} bytes",
-                    body_guard.len()
-                );
+            move |_cb_ctx: *mut c_void, dir: Direction| {
+                if dir == Direction::C2s {
+                    let body_guard = current_body_clone.borrow();
+                    let mut bodies_guard = bodies_clone.borrow_mut();
+                    bodies_guard.push(body_guard.clone());
+                }
             }
         };
 
@@ -641,9 +633,9 @@ mod tests {
             }
             pkt.set_l7_proto(L7Proto::Imap);
             if pkt.header.borrow().as_ref().unwrap().dport() == IMAP_PORT {
-                pkt.set_direction(PktDirection::Client2Server);
+                pkt.set_direction(Direction::C2s);
             } else {
-                pkt.set_direction(PktDirection::Server2Client);
+                pkt.set_direction(Direction::S2c);
             }
 
             protolens.run_task(&mut task, pkt);
@@ -722,47 +714,47 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                if header.is_empty() {
-                    dbg!("header cb. header end", header);
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, dir: Direction| {
+                dbg!(std::str::from_utf8(header).unwrap());
+                if dir == Direction::S2c {
+                    if header == b"\r\n" {
+                        dbg!("header cb. header end");
+                    }
+                    let mut headers_guard = headers_clone.borrow_mut();
+                    headers_guard.push(header.to_vec());
                 }
-                let mut headers_guard = headers_clone.borrow_mut();
-                headers_guard.push(header.to_vec());
             }
         };
 
         let body_start_callback = {
             let current_body_clone = current_body.clone();
-            move |_cb_ctx: *mut c_void| {
-                // 创建新的body缓冲区
-                let mut body_guard = current_body_clone.borrow_mut();
-                *body_guard = Vec::new();
-                println!("Body start callback triggered");
+            move |_cb_ctx: *mut c_void, dir: Direction| {
+                if dir == Direction::S2c {
+                    let mut body_guard = current_body_clone.borrow_mut();
+                    *body_guard = Vec::new();
+                }
             }
         };
 
         let body_callback = {
             let current_body_clone = current_body.clone();
-            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                // 将内容追加到当前body
-                let mut body_guard = current_body_clone.borrow_mut();
-                body_guard.extend_from_slice(body);
-                println!("Body callback: {} bytes", body.len());
+            move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, dir: Direction| {
+                if dir == Direction::S2c {
+                    let mut body_guard = current_body_clone.borrow_mut();
+                    body_guard.extend_from_slice(body);
+                }
             }
         };
 
         let body_stop_callback = {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
-            move |_cb_ctx: *mut c_void| {
-                // 将当前body添加到bodies列表
-                let body_guard = current_body_clone.borrow();
-                let mut bodies_guard = bodies_clone.borrow_mut();
-                bodies_guard.push(body_guard.clone());
-                println!(
-                    "Body stop callback triggered, body size: {} bytes",
-                    body_guard.len()
-                );
+            move |_cb_ctx: *mut c_void, dir: Direction| {
+                if dir == Direction::S2c {
+                    let body_guard = current_body_clone.borrow();
+                    let mut bodies_guard = bodies_clone.borrow_mut();
+                    bodies_guard.push(body_guard.clone());
+                }
             }
         };
 
@@ -799,12 +791,169 @@ mod tests {
             }
             pkt.set_l7_proto(L7Proto::Imap);
             if pkt.header.borrow().as_ref().unwrap().dport() == IMAP_PORT {
-                pkt.set_direction(PktDirection::Client2Server);
+                pkt.set_direction(Direction::C2s);
             } else {
-                pkt.set_direction(PktDirection::Server2Client);
+                pkt.set_direction(Direction::S2c);
             }
 
             protolens.run_task(&mut task, pkt);
         }
+
+        let expected_headers = [
+            "From: sendmail <sendmail@test.act>\r\n",
+            "Subject: =?utf-8?B?6L2s5Y+ROiDmlofmnKznsbvmoLfmnKz=?=\r\n",
+            "Date: Sat, 2 Jul 2022 21:29:15 +0800\r\n",
+            "Importance: normal\r\n",
+            "X-Priority: 3\r\n",
+            "Content-Type: multipart/mixed;\r\n",
+            "\tboundary=\"_4805B00C-044E-4966-B0DA-ED690B999A97_\"\r\n",
+            "\r\n",
+            "Return-Path: <sendmail@test.act>\r\n",
+            "Received: from [IPv6:::ffff:192.168.0.110] ([223.102.87.186])\r\n",
+            "\tby mail.test.act (8.14.7/8.14.7) with ESMTP id 262DUNZr039188\r\n",
+            "\tfor <sendmail@test.act>; Sat, 2 Jul 2022 21:30:23 +0800\r\n",
+            "Message-Id: <202207021330.262DUNZr039188@mail.test.act>\r\n",
+            "MIME-Version: 1.0\r\n",
+            "To: sendmail <sendmail@test.act>\r\n",
+            "From: sendmail <sendmail@test.act>\r\n",
+            "Subject: =?utf-8?B?6L2s5Y+ROiDmlofmnKznsbvmoLfmnKz=?=\r\n",
+            "Date: Sat, 2 Jul 2022 21:29:15 +0800\r\n",
+            "Importance: normal\r\n",
+            "X-Priority: 3\r\n",
+            "References: <202207022059022721750@test.act>\r\n",
+            "Content-Type: multipart/mixed;\r\n",
+            "\tboundary=\"_4805B00C-044E-4966-B0DA-ED690B999A97_\"\r\n",
+            "\r\n",
+            "From: sendmail <sendmail@test.act>\r\n",
+            "Subject: =?utf-8?B?6L2s5Y+ROiDmlofmnKznsbvmoLfmnKz=?=\r\n",
+            "Date: Sat, 2 Jul 2022 21:28:18 +0800\r\n",
+            "Importance: normal\r\n",
+            "X-Priority: 3\r\n",
+            "Content-Type: multipart/mixed;\r\n",
+            "\tboundary=\"_26A40801-CA53-432D-92AD-3D34157EAF72_\"\r\n",
+            "\r\n",
+            "MIME-Version: 1.0\r\n",
+            "To: sendmail <sendmail@test.act>\r\n",
+            "From: sendmail <sendmail@test.act>\r\n",
+            "Subject: =?utf-8?B?6L2s5Y+ROiDmlofmnKznsbvmoLfmnKz=?=\r\n",
+            "Date: Sat, 2 Jul 2022 21:28:18 +0800\r\n",
+            "Importance: normal\r\n",
+            "X-Priority: 3\r\n",
+            "In-Reply-To: <202207021322.262DMr0f038643@mail.test.act>\r\n",
+            "References: <202207022059022721750@test.act>\r\n",
+            " <202207021322.262DMr0f038643@mail.test.act>\r\n",
+            "Content-Type: multipart/mixed;\r\n",
+            "\tboundary=\"_26A40801-CA53-432D-92AD-3D34157EAF72_\"\r\n",
+            "\r\n",
+        ];
+
+        // s2c
+        let headers_guard = captured_headers.borrow();
+        assert_eq!(headers_guard.len(), expected_headers.len());
+        for (idx, expected) in expected_headers.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&headers_guard[idx]).unwrap(), *expected);
+        }
+
+        let bodies_guard = captured_bodies.borrow();
+        assert_eq!(bodies_guard.len(), 10);
+
+        let body0 = &bodies_guard[0];
+        let body0_str = std::str::from_utf8(body0).unwrap();
+        assert!(body0_str.contains(
+            "<html xmlns:v=3D\"urn:schemas-microsoft-com:vml\" xmlns:o=3D\"urn:schemas-micr=\r\n"
+        ));
+        assert!(body0_str.contains(
+            ">=E6=96=87=E6=9C=AC=E7=B1=BB=E6=A0=B7=E6=9C=AC</p></div><p class=3DMsoNorm=\r\n"
+        ));
+        assert!(body0_str.contains("</html>="));
+
+        let body1 = &bodies_guard[1];
+        let body1_str = std::str::from_utf8(body1).unwrap();
+        assert!(body1_str.contains(
+            "iVBORw0KGgoAAAANSUhEUgAAANIAAAABCAYAAACrM/DDAAAAAXNSR0IArs4c6QAAAARnQU1BAACx\r\n"
+        ));
+        assert!(body1_str.contains(
+            "jwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAARSURBVDhPYxgFo2AUUAoYGAADSQABJmPiTQAA\r\n"
+        ));
+
+        let body2 = &bodies_guard[2];
+        let body2_str = std::str::from_utf8(body2).unwrap();
+        assert!(body2_str.contains(
+            "5Liq5Lq65aeT5ZCNOuS5oOiCsuWnrA0K55Sf5pelOjIwMDIwMjI1DQrmgKfliKs655S3DQrmsJHm\r\n"
+        ));
+        assert!(body2_str.contains(
+            "jZXkvY06576O5rqQ5Lyv5qC55YWs5Y+4DQrpk7booYzotKbmiLc6NjY2NzY0NFhYWDA3NjQxNg0K\r\n"
+        ));
+        assert!(body2_str.contains("j7I65bey5amaDQo=\r\n"));
+
+        let body3 = &bodies_guard[3];
+        let body3_str = std::str::from_utf8(body3).unwrap();
+        assert!(body3_str.contains(
+            "iVBORw0KGgoAAAANSUhEUgAAAUcAAADhCAMAAABspYceAAADAFBMVEXy9PbEuKipopelnpKrpJqm\r\n"
+        ));
+        assert!(body3_str.contains(
+            "ng66jOwo/kd8Q9/+l69tr/CjR+MusNJaBetRM6/bkjuuJKkeohoiKWYunNH/DmwIfEyPMOJXrjBg\r\n"
+        ));
+        assert!(body3_str.contains("DyN5xfEvr0CMOwnVoAYAAAAASUVORK5CYII=\r\n"));
+
+        let body4 = &bodies_guard[4];
+        let body4_str = std::str::from_utf8(body4).unwrap();
+        assert!(body4_str.contains(
+            "UEsDBAoAAAAAAIdO4kAAAAAAAAAAAAAAAAAJAAAAZG9jUHJvcHMvUEsDBBQAAAAIAIdO4kD2HAbf\r\n"
+        ));
+        assert!(body4_str.contains(
+            "MPcnSeienE9M3C2EDl1zt1Bi5bczSUE9ictlK8IWzZsUJRKFOMHSU8/YGGPH6u4SYsX1gAw5E2wk\r\n"
+        ));
+        assert!(body4_str.contains("bWUvdGhlbWUxLnhtbFBLBQYAAAAAFQAVABkFAACbLAAAAAA=\r\n"));
+
+        let body5 = &bodies_guard[5];
+        let body5_str = std::str::from_utf8(body5).unwrap();
+        assert!(body5_str.contains(
+            "<html xmlns:v=3D\"urn:schemas-microsoft-com:vml\" xmlns:o=3D\"urn:schemas-micr=\r\n"
+        ));
+        assert!(body5_str.contains(
+            "ze:12.0pt;font-family:SimSun'><o:p>&nbsp;</o:p></span></p><div style=3D'mso=\r\n"
+        ));
+        assert!(body5_str.contains("</html>=\r\n"));
+
+        let body6 = &bodies_guard[6];
+        let body6_str = std::str::from_utf8(body6).unwrap();
+        assert!(body6_str.contains(
+            "iVBORw0KGgoAAAANSUhEUgAAANIAAAABCAYAAACrM/DDAAAAAXNSR0IArs4c6QAAAARnQU1BAACx\r\n"
+        ));
+        assert!(body6_str.contains(
+            "jwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAARSURBVDhPYxgFo2AUUAoYGAADSQABJmPiTQAA\r\n"
+        ));
+        assert!(body6_str.contains("AABJRU5ErkJggg==\r\n"));
+
+        let body7 = &bodies_guard[7];
+        let body7_str = std::str::from_utf8(body7).unwrap();
+        assert!(body7_str.contains(
+            "5Liq5Lq65aeT5ZCNOuS5oOiCsuWnrA0K55Sf5pelOjIwMDIwMjI1DQrmgKfliKs655S3DQrmsJHm\r\n"
+        ));
+        assert!(body7_str.contains(
+            "jZXkvY06576O5rqQ5Lyv5qC55YWs5Y+4DQrpk7booYzotKbmiLc6NjY2NzY0NFhYWDA3NjQxNg0K\r\n"
+        ));
+        assert!(body7_str.contains("j7I65bey5amaDQo=\r\n"));
+
+        let body8 = &bodies_guard[8];
+        let body8_str = std::str::from_utf8(body8).unwrap();
+        assert!(body8_str.contains(
+            "iVBORw0KGgoAAAANSUhEUgAAAUcAAADhCAMAAABspYceAAADAFBMVEXy9PbEuKipopelnpKrpJqm\r\n"
+        ));
+        assert!(body8_str.contains(
+            "cA/cXJgZF2foaowp2FFrlMsNkJP6MWo0PkMfP6pOSWEERzX7QwWpZWpK9eUCWqk0XyIt1+vL9ed1\r\n"
+        ));
+        assert!(body8_str.contains("DyN5xfEvr0CMOwnVoAYAAAAASUVORK5CYII=\r\n"));
+
+        let body9 = &bodies_guard[9];
+        let body9_str = std::str::from_utf8(body9).unwrap();
+        assert!(body9_str.contains(
+            "UEsDBAoAAAAAAIdO4kAAAAAAAAAAAAAAAAAJAAAAZG9jUHJvcHMvUEsDBBQAAAAIAIdO4kD2HAbf\r\n"
+        ));
+        assert!(body9_str.contains(
+            "ABAAAACgKQAAd29yZC9fcmVscy9QSwECFAAUAAAACACHTuJAOQqq9PwAAAA2AwAAHAAAAAAAAAAB\r\n"
+        ));
+        assert!(body9_str.contains("bWUvdGhlbWUxLnhtbFBLBQYAAAAAFQAVABkFAACbLAAAAAA=\r\n"));
     }
 }

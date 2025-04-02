@@ -540,7 +540,7 @@ fn msg_att_rfc822(i: &[u8]) -> IResult<&[u8], AttributeValue> {
 }
 
 fn msg_att_rfc822_2(input: &[u8]) -> IResult<&[u8], AttributeValue2> {
-    map(preceded(tag_no_case("RFC822 "), nstring), |_v| {
+    map(preceded(tag_no_case("RFC822 "), nstring2), |_v| {
         AttributeValue2::Ignored
     })(input)
 }
@@ -556,8 +556,8 @@ fn msg_att_rfc822_header(i: &[u8]) -> IResult<&[u8], AttributeValue> {
 fn msg_att_rfc822_header2(input: &[u8]) -> IResult<&[u8], AttributeValue2> {
     // extra space workaround for DavMail
     map(
-        tuple((tag_no_case("RFC822.HEADER "), opt(tag(b" ")), nstring)),
-        |(_, _, _raw)| AttributeValue2::Ignored,
+        tuple((tag_no_case("RFC822.HEADER "), opt(tag(b" ")), nstring2)),
+        |(_, _, (_data, size))| AttributeValue2::Rfc822Header(size),
     )(input)
 }
 
@@ -581,9 +581,10 @@ fn msg_att_rfc822_text(i: &[u8]) -> IResult<&[u8], AttributeValue> {
 }
 
 fn msg_att_rfc822_text2(input: &[u8]) -> IResult<&[u8], AttributeValue2> {
-    map(preceded(tag_no_case("RFC822.TEXT "), nstring), |_v| {
-        AttributeValue2::Ignored
-    })(input)
+    map(
+        preceded(tag_no_case("RFC822.TEXT "), nstring2),
+        |(_data, size)| AttributeValue2::Rfc822Text(size),
+    )(input)
 }
 
 fn msg_att_uid(i: &[u8]) -> IResult<&[u8], AttributeValue> {
@@ -814,18 +815,17 @@ impl<'a> FetchRet<'a> {
     }
 
     pub fn literal_size(&self) -> Option<usize> {
-        self.attrs.last().and_then(|attr| {
-            if let AttributeValue2::BodySection { literal_size, .. } = attr {
-                *literal_size
-            } else {
-                None
-            }
+        self.attrs.last().and_then(|attr| match attr {
+            AttributeValue2::BodySection { literal_size, .. } => *literal_size,
+            AttributeValue2::Rfc822Header(size) => *size,
+            AttributeValue2::Rfc822Text(size) => *size,
+            _ => None,
         })
     }
 
     pub fn is_header(&self) -> bool {
-        self.attrs.last().map_or(false, |attr| {
-            if let AttributeValue2::BodySection { section, .. } = attr {
+        self.attrs.last().map_or(false, |attr| match attr {
+            AttributeValue2::BodySection { section, .. } => {
                 section.as_ref().map_or(false, |section| {
                     matches!(
                         section,
@@ -833,9 +833,9 @@ impl<'a> FetchRet<'a> {
                             | SectionPath::Part(_, Some(MessageSection::Header))
                     )
                 })
-            } else {
-                false
             }
+            AttributeValue2::Rfc822Header(_) => true,
+            _ => false,
         })
     }
 }
@@ -1016,6 +1016,33 @@ mod tests {
         let (_, fetch_ret) = rsp_fetch(RESPONSE).expect("failed to parse FETCH response");
         assert_eq!(fetch_ret.data(), Some(b"content" as &[u8]));
         assert_eq!(fetch_ret.attrs.len(), 1);
+    }
+
+    #[test]
+    fn test_fetchret_is_header() {
+        // Test RFC822.HEADER
+        let response1 = b"* 49 FETCH (UID 55 RFC822.HEADER {625}\r\n";
+        let (_, fetch_ret1) = rsp_fetch(response1).expect("failed to parse FETCH response");
+        assert!(fetch_ret1.is_header());
+        assert_eq!(fetch_ret1.literal_size(), Some(625));
+
+        // Test BODY[HEADER]
+        let response2 = b"* 49 FETCH (BODY[HEADER] {625}\r\n";
+        let (_, fetch_ret2) = rsp_fetch(response2).expect("failed to parse FETCH response");
+        assert!(fetch_ret2.is_header());
+        assert_eq!(fetch_ret1.literal_size(), Some(625));
+
+        // Test BODY[1.HEADER]
+        let response3 = b"* 49 FETCH (BODY[1.HEADER] {625}\r\n";
+        let (_, fetch_ret3) = rsp_fetch(response3).expect("failed to parse FETCH response");
+        assert!(fetch_ret3.is_header());
+        assert_eq!(fetch_ret1.literal_size(), Some(625));
+
+        // Test non-header response
+        let response4 = b"* 49 FETCH (UID 55 BODY[] {625}\r\n";
+        let (_, fetch_ret4) = rsp_fetch(response4).expect("failed to parse FETCH response");
+        assert!(!fetch_ret4.is_header());
+        assert_eq!(fetch_ret1.literal_size(), Some(625));
     }
 
     // ------------------------------------

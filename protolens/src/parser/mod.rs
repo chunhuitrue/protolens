@@ -16,6 +16,7 @@ pub mod readline;
 #[cfg(test)]
 pub mod readn;
 
+use crate::Direction;
 use crate::PacketBind;
 use crate::PktStrm;
 use crate::Prolens;
@@ -78,31 +79,38 @@ where
 pub trait DataCbFn: FnMut(&[u8], u32, *mut c_void) {}
 impl<F: FnMut(&[u8], u32, *mut c_void)> DataCbFn for F {}
 
-pub trait EvtCbFn: FnMut(*mut c_void) {}
-impl<F: FnMut(*mut c_void)> EvtCbFn for F {}
+pub trait DataCbDirFn: FnMut(&[u8], u32, *mut c_void, Direction) {}
+impl<F: FnMut(&[u8], u32, *mut c_void, Direction)> DataCbDirFn for F {}
+
+pub trait EvtCbFn: FnMut(*mut c_void, Direction) {}
+impl<F: FnMut(*mut c_void, Direction)> EvtCbFn for F {}
 
 pub(crate) type CbUser = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbPass = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbMailFrom = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbRcpt = Rc<RefCell<dyn DataCbFn + 'static>>;
-pub(crate) type CbHeader = Rc<RefCell<dyn DataCbFn + 'static>>;
-pub(crate) type CbBodyEvt = Rc<RefCell<dyn EvtCbFn + 'static>>;
-pub(crate) type CbBody = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbSrv = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbClt = Rc<RefCell<dyn DataCbFn + 'static>>;
+pub(crate) type CbHeader = Rc<RefCell<dyn DataCbDirFn + 'static>>;
+pub(crate) type CbBodyEvt = Rc<RefCell<dyn EvtCbFn + 'static>>;
+pub(crate) type CbBody = Rc<RefCell<dyn DataCbDirFn + 'static>>;
 
 #[derive(Clone)]
-pub(crate) struct MailCallbacks {
+pub(crate) struct Callbacks {
     pub(crate) header: Option<CbHeader>,
     pub(crate) body_start: Option<CbBodyEvt>,
     pub(crate) body: Option<CbBody>,
     pub(crate) body_stop: Option<CbBodyEvt>,
+    pub(crate) clt: Option<CbClt>,
+    pub(crate) srv: Option<CbSrv>,
+    pub(crate) dir: Direction,
 }
 
 pub(crate) async fn header<T, P>(
     stm: &mut PktStrm<T, P>,
     cb_header: Option<&CbHeader>,
     cb_ctx: *mut c_void,
+    dir: Direction,
 ) -> Result<Option<String>, ()>
 where
     T: PacketBind,
@@ -117,9 +125,9 @@ where
 
         // 空行也回调。调用者知道header结束
         if let Some(cb) = cb_header {
-            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
+            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx, dir);
         }
-        dbg!(line);
+        // dbg!(line);
 
         if line == "\r\n" {
             let ret_bdry = if boundary.is_empty() {
@@ -162,6 +170,7 @@ pub(crate) async fn body<T, P>(
     cb_body: Option<&CbBody>,
     cb_body_stop: Option<&CbBodyEvt>,
     cb_ctx: *mut c_void,
+    dir: Direction,
 ) -> Result<bool, ()>
 where
     T: PacketBind,
@@ -169,7 +178,7 @@ where
 {
     dbg!("body start");
     if let Some(cb) = cb_body_start {
-        cb.borrow_mut()(cb_ctx);
+        cb.borrow_mut()(cb_ctx, dir);
     }
     loop {
         let (line, seq) = stm.readline_str().await?;
@@ -180,11 +189,11 @@ where
 
         dbg!(line);
         if let Some(cb) = &cb_body {
-            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
+            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx, dir);
         }
     }
     if let Some(cb) = cb_body_stop {
-        cb.borrow_mut()(cb_ctx);
+        cb.borrow_mut()(cb_ctx, dir);
     }
     dbg!("body end");
     Ok(true)
@@ -193,10 +202,7 @@ where
 pub(crate) async fn multi_body<T, P>(
     stm: &mut PktStrm<T, P>,
     bdry: &str,
-    cb_header: Option<&CbHeader>,
-    cb_body_start: Option<&CbBodyEvt>,
-    cb_body: Option<&CbBody>,
-    cb_body_stop: Option<&CbBodyEvt>,
+    cb: &Callbacks,
     cb_ctx: *mut c_void,
 ) -> Result<(), ()>
 where
@@ -205,20 +211,20 @@ where
 {
     preamble(stm, bdry).await?;
     loop {
-        if let Some(new_bdry) = header(stm, cb_header, cb_ctx).await? {
-            Box::pin(multi_body(
-                stm,
-                &new_bdry,
-                cb_header,
-                cb_body_start,
-                cb_body,
-                cb_body_stop,
-                cb_ctx,
-            ))
-            .await?;
+        if let Some(new_bdry) = header(stm, cb.header.as_ref(), cb_ctx, cb.dir).await? {
+            Box::pin(multi_body(stm, &new_bdry, cb, cb_ctx)).await?;
         }
 
-        mime_body(stm, bdry, cb_body_start, cb_body, cb_body_stop, cb_ctx).await?;
+        mime_body(
+            stm,
+            bdry,
+            cb.body_start.as_ref(),
+            cb.body.as_ref(),
+            cb.body_stop.as_ref(),
+            cb_ctx,
+            cb.dir,
+        )
+        .await?;
 
         let (byte, _seq) = stm.readn(2).await?;
         if byte == b"--" {
@@ -240,7 +246,16 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
 {
     dbg!("preamble start");
-    mime_body(stm, bdry, None, None, None, std::ptr::null_mut()).await?;
+    mime_body(
+        stm,
+        bdry,
+        None,
+        None,
+        None,
+        std::ptr::null_mut(),
+        Direction::Unknown,
+    )
+    .await?;
 
     let (byte, _seq) = stm.readn(2).await?;
     if byte == b"\r\n" { Ok(()) } else { Err(()) }
@@ -253,21 +268,21 @@ async fn mime_body<T, P>(
     cb_body: Option<&CbBody>,
     cb_body_stop: Option<&CbBodyEvt>,
     cb_ctx: *mut c_void,
+    dir: Direction,
 ) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    dbg!("mime body start");
     if let Some(cb) = cb_body_start {
-        cb.borrow_mut()(cb_ctx);
+        cb.borrow_mut()(cb_ctx, dir);
     }
     loop {
         let (ret, content, seq) = stm.read_mime_octet(bdry).await?;
-        dbg!(std::str::from_utf8(content).unwrap_or(""));
+        // dbg!(std::str::from_utf8(content).unwrap_or(""));
 
         if let Some(cb) = cb_body {
-            cb.borrow_mut()(content, seq, cb_ctx);
+            cb.borrow_mut()(content, seq, cb_ctx, dir);
         }
 
         if ret == ReadRet::DashBdry {
@@ -275,9 +290,8 @@ where
         }
     }
     if let Some(cb) = cb_body_stop {
-        cb.borrow_mut()(cb_ctx);
+        cb.borrow_mut()(cb_ctx, dir);
     }
-    dbg!("mime body end");
     Ok(())
 }
 
@@ -286,9 +300,15 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    dbg!("--------- epilogue start");
-    let _ = body(stm, None, None, None, std::ptr::null_mut()).await?;
-    dbg!("--------- epilogue end");
+    let _ = body(
+        stm,
+        None,
+        None,
+        None,
+        std::ptr::null_mut(),
+        Direction::Unknown,
+    )
+    .await?;
     Ok(())
 }
 
