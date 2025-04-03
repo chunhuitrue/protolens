@@ -134,7 +134,7 @@ where
 
         let (boundary, te) = header(stm, cb.header.as_ref(), cb_ctx, Direction::C2s).await?;
         if let Some(bdry) = boundary {
-            multi_body(stm, &bdry, &cb, cb_ctx).await?;
+            multi_body(stm, &bdry, &bdry, &cb, cb_ctx).await?;
         } else {
             body(
                 stm,
@@ -1142,14 +1142,14 @@ mod tests {
         let raw_guard = captured_raw.borrow();
         let lines_bytes_len: usize = lines.iter().map(|line| line.len()).sum();
         dbg!(std::str::from_utf8(&raw_guard).unwrap());
-        assert_eq!(raw_guard.len(), lines_bytes_len - 63); // 减去后续没读的\r\n 到最后
+        assert_eq!(raw_guard.len(), lines_bytes_len - 8); // epilogue 读到.为止
 
         let raw_str = std::str::from_utf8(&raw_guard).unwrap();
         assert!(raw_str.contains("EHLO client.example.com\r\n"));
         assert!(raw_str.contains("Content-Type: text/html;\r\n"));
         assert!(raw_str.contains("<html> line 1\r\n"));
-        assert!(!raw_str.contains("This is the epilogue 2.\r\n"));
-        assert!(!raw_str.contains("QUIT\r\n")); // 解码器没有读取后续内容
+        assert!(raw_str.contains("This is the epilogue 2.\r\n"));
+        assert!(!raw_str.contains("QUIT\r\n")); // epilogue 读到.为止
     }
 
     #[test]
@@ -1173,7 +1173,7 @@ mod tests {
             "Content-Type: multipart/alternative;\r\n",
             "\tboundary=\"----=_NextPart_001_0005_01CA45B0.095693F0\"\r\n",
             "\r\n",
-            "\r\n", // 这个\r\n不属于body。此中情况body为空
+            "\r\n",                                            // 这个\r\n属于第二层的preamble
             "------=_NextPart_001_0005_01CA45B0.095693F0\r\n", // 内层
             "Content-Type: text/plain;\r\n",
             "Content-Transfer-Encoding: 7bit\r\n",
@@ -1389,31 +1389,25 @@ mod tests {
         }
 
         let bodies_guard = captured_bodies.borrow();
-        assert_eq!(bodies_guard.len(), 4);
+        assert_eq!(bodies_guard.len(), 3);
 
         // 第一个是嵌套内层第一个
-        let body1 = &bodies_guard[0];
-        dbg!(body1.len(), std::str::from_utf8(body1).unwrap());
-        let body1_str = std::str::from_utf8(body1).unwrap();
-        assert!(body1_str.contains("I send u smtp pcap file"));
-        assert!(body1_str.contains("Find the attachment"));
+        let body0 = &bodies_guard[0];
+        dbg!(body0.len(), std::str::from_utf8(body0).unwrap());
+        let body0_str = std::str::from_utf8(body0).unwrap();
+        assert!(body0_str.contains("I send u smtp pcap file"));
+        assert!(body0_str.contains("Find the attachment"));
 
         // 第二个是内层第二个。内层结束
-        let body2 = &bodies_guard[1];
-        let body2_str = std::str::from_utf8(body2).unwrap();
-        assert!(body2_str.contains("<html"));
-        assert!(body2_str.contains("</html>\r\n"));
+        let body1 = &bodies_guard[1];
+        let body1_str = std::str::from_utf8(body1).unwrap();
+        assert!(body1_str.contains("<html"));
+        assert!(body1_str.contains("</html>\r\n"));
 
-        // 第三个是外层第一个
-        let body3 = &bodies_guard[2];
-        dbg!(body3.len(), std::str::from_utf8(body3).unwrap());
-        assert!(body3.is_empty() || body3.len() < 5);
-
-        // 第四个是外层第二个。外层结束
-        let bodyr = &bodies_guard[3];
-        let body4_str = std::str::from_utf8(bodyr).unwrap();
-        assert!(body4_str.contains("* Profiling support\r\n"));
-        assert!(body4_str.contains("* Lots of bugfixes\r\n"));
+        let bodyr2 = &bodies_guard[2];
+        let body2_str = std::str::from_utf8(bodyr2).unwrap();
+        assert!(body2_str.contains("* Profiling support\r\n"));
+        assert!(body2_str.contains("* Lots of bugfixes\r\n"));
     }
 
     #[test]
@@ -1629,25 +1623,25 @@ mod tests {
         let bodies_guard = captured_bodies.borrow();
         assert_eq!(bodies_guard.len(), 2);
 
-        let body1 = &bodies_guard[0];
-        let body1_str = std::str::from_utf8(body1).unwrap();
-        assert!(body1_str.contains(
+        let body0 = &bodies_guard[0];
+        let body0_str = std::str::from_utf8(body0).unwrap();
+        assert!(body0_str.contains(
             "aGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRk\r\n"
         ));
-        assert!(body1_str.contains(
+        assert!(body0_str.contains(
             "ZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRk\r\n"
         ));
-        assert!(body1_str.contains("DQo=\r\n"));
+        assert!(body0_str.contains("DQo=\r\n"));
 
-        let body2 = &bodies_guard[1];
-        let body2_str = std::str::from_utf8(body2).unwrap();
-        assert!(body2_str.contains(
+        let body1 = &bodies_guard[1];
+        let body1_str = std::str::from_utf8(body1).unwrap();
+        assert!(body1_str.contains(
             "<html><head><meta http-equiv=3D\"content-type\" content=3D\"text/html; charse=\r\n"
         ));
-        assert!(body2_str.contains(
+        assert!(body1_str.contains(
             "nd-color: transparent;\">hello dddddddddddddddddd</span><span style=3D\"line=\r\n"
         ));
-        assert!(body2_str.contains("y></html>")); // 最后的\r\n不属于body
+        assert!(body1_str.contains("y></html>")); // 最后的\r\n不属于body
 
         let expected_srv = [
             "220 smtp.qq.com Esmtp QQ QMail Server",

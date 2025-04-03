@@ -211,6 +211,7 @@ where
 
 pub(crate) async fn multi_body<T, P>(
     stm: &mut PktStrm<T, P>,
+    out_bdry: &str,
     bdry: &str,
     cb: &Callbacks,
     cb_ctx: *mut c_void,
@@ -222,20 +223,22 @@ where
     preamble(stm, bdry).await?;
     loop {
         let (boundary, te) = header(stm, cb.header.as_ref(), cb_ctx, cb.dir).await?;
-        if let Some(new_bdry) = boundary {
-            Box::pin(multi_body(stm, &new_bdry, cb, cb_ctx)).await?;
-        }
 
-        let params = MimeBodyParams {
-            te,
-            bdry,
-            cb_body_start: cb.body_start.as_ref(),
-            cb_body: cb.body.as_ref(),
-            cb_body_stop: cb.body_stop.as_ref(),
-            cb_ctx,
-            dir: cb.dir,
-        };
-        mime_body(stm, params).await?;
+        if let Some(new_bdry) = boundary {
+            Box::pin(multi_body(stm, out_bdry, &new_bdry, cb, cb_ctx)).await?;
+            continue;
+        } else {
+            let params = MimeBodyParams {
+                te,
+                bdry,
+                cb_body_start: cb.body_start.as_ref(),
+                cb_body: cb.body.as_ref(),
+                cb_body_stop: cb.body_stop.as_ref(),
+                cb_ctx,
+                dir: cb.dir,
+            };
+            mime_body(stm, params).await?;
+        }
 
         let (byte, _seq) = stm.readn(2).await?;
         if byte == b"--" {
@@ -246,10 +249,11 @@ where
             return Err(());
         }
     }
+    epilogue(stm, out_bdry).await?;
     Ok(())
 }
 
-async fn preamble<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(), ()>
+pub(crate) async fn preamble<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
@@ -269,7 +273,7 @@ where
     if byte == b"\r\n" { Ok(()) } else { Err(()) }
 }
 
-struct MimeBodyParams<'a> {
+pub(crate) struct MimeBodyParams<'a> {
     te: Option<TransferEncoding>,
     bdry: &'a str,
     cb_body_start: Option<&'a CbBodyEvt>,
@@ -279,7 +283,10 @@ struct MimeBodyParams<'a> {
     dir: Direction,
 }
 
-async fn mime_body<T, P>(stm: &mut PktStrm<T, P>, params: MimeBodyParams<'_>) -> Result<(), ()>
+pub(crate) async fn mime_body<T, P>(
+    stm: &mut PktStrm<T, P>,
+    params: MimeBodyParams<'_>,
+) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
@@ -304,22 +311,26 @@ where
     Ok(())
 }
 
-async fn epilogue<T, P>(stm: &mut PktStrm<T, P>) -> Result<(), ()>
+pub(crate) async fn epilogue<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(), ()>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    let _ = body(
-        stm,
-        None,
-        None,
-        None,
-        None,
-        std::ptr::null_mut(),
-        Direction::Unknown,
-    )
-    .await?;
+    loop {
+        let (line, _seq) = stm.readline_str().await?;
+
+        if line == ".\r\n" || dash_bdry(line, bdry) {
+            break;
+        }
+    }
     Ok(())
+}
+
+pub(crate) fn dash_bdry(line: &str, bdry: &str) -> bool {
+    if line.starts_with("--") && line[2..].starts_with(bdry) && line[line.len() - 2..] == *"\r\n" {
+        return true;
+    }
+    false
 }
 
 // 如果是content type 且带boundary: Content-Type: multipart/mixed; boundary="abc123"

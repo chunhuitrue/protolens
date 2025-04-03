@@ -5,14 +5,17 @@ use crate::CbClt;
 use crate::CbHeader;
 use crate::CbSrv;
 use crate::Direction;
+use crate::MimeBodyParams;
 use crate::Parser;
 use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
+use crate::dash_bdry;
 use crate::header;
-use crate::multi_body;
+use crate::mime_body;
 use crate::packet::*;
+use crate::preamble;
 use imap_proto::{parse_follow_rsp_fetch, parse_rsp_fetch};
 use nom::{
     IResult,
@@ -239,13 +242,72 @@ where
     let start_size = stm.get_read_size();
     let (boundary, _te) = header(stm, cb_imap.header.as_ref(), cb_ctx, Direction::C2s).await?;
     if let Some(bdry) = boundary {
-        multi_body(stm, &bdry, cb_imap, cb_ctx).await?;
-        imap_epilogue(stm, mail_size, start_size).await?;
+        imap_multi_body(stm, mail_size, start_size, &bdry, &bdry, cb_imap, cb_ctx).await?;
     } else {
         let head_size = stm.get_read_size() - start_size;
         let body_size = mail_size - head_size;
         size_body(stm, body_size, cb_imap, cb_ctx).await?;
     }
+    Ok(())
+}
+
+async fn imap_multi_body<T, P>(
+    stm: &mut PktStrm<T, P>,
+    mail_size: usize,
+    start_size: usize,
+    out_bdry: &str,
+    bdry: &str,
+    cb: &Callbacks,
+    cb_ctx: *mut c_void,
+) -> Result<(), ()>
+where
+    T: PacketBind,
+    P: PtrWrapper<T> + PtrNew<T>,
+{
+    dbg!("multi body start");
+    dbg!("preamble start");
+    preamble(stm, bdry).await?;
+    dbg!("preamble stop");
+    loop {
+        let (boundary, te) = header(stm, cb.header.as_ref(), cb_ctx, cb.dir).await?;
+
+        if let Some(new_bdry) = boundary {
+            Box::pin(imap_multi_body(
+                stm, mail_size, start_size, out_bdry, &new_bdry, cb, cb_ctx,
+            ))
+            .await?;
+            dbg!("box multi_body stop, continue");
+            continue;
+        } else {
+            let params = MimeBodyParams {
+                te,
+                bdry,
+                cb_body_start: cb.body_start.as_ref(),
+                cb_body: cb.body.as_ref(),
+                cb_body_stop: cb.body_stop.as_ref(),
+                cb_ctx,
+                dir: cb.dir,
+            };
+            dbg!("mime body start");
+            mime_body(stm, params).await?;
+            dbg!("mime body stop");
+        }
+
+        let (byte, _seq) = stm.readn(2).await?;
+        if byte == b"--" {
+            dbg!("close bdry break");
+            break;
+        } else if byte == b"\r\n" {
+            dbg!("bdry continue");
+            continue;
+        } else {
+            return Err(());
+        }
+    }
+    dbg!("epilogue start");
+    imap_epilogue(stm, out_bdry, mail_size, start_size).await?;
+    dbg!("epilogue stop");
+    dbg!("multi body stop");
     Ok(())
 }
 
@@ -293,6 +355,7 @@ fn quoted_body(data: &[u8], seq: u32, cb_imap: &Callbacks, cb_ctx: *mut c_void) 
 
 async fn imap_epilogue<T, P>(
     stm: &mut PktStrm<T, P>,
+    bdry: &str,
     mail_size: usize,
     start_size: usize,
 ) -> Result<(), ()>
@@ -300,9 +363,20 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    let remain_size = mail_size.saturating_sub(stm.get_read_size() - start_size);
-    if remain_size != 0 {
-        stm.readn(remain_size).await?;
+    loop {
+        let remain_size = mail_size.saturating_sub(stm.get_read_size() - start_size);
+        dbg!(remain_size);
+        if remain_size < bdry.len() && remain_size != 0 {
+            dbg!("imap_epilogue size", remain_size);
+            stm.readn(remain_size).await?;
+            break;
+        }
+
+        dbg!("22222", mail_size);
+        let (line, _seq) = stm.readline_str().await?;
+        if dash_bdry(line, bdry) {
+            break;
+        }
     }
     Ok(())
 }
@@ -611,7 +685,6 @@ mod tests {
         let clt_callback = {
             let clt_clone = captured_clt.clone();
             move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                // dbg!("in clt callback", std::str::from_utf8(line).unwrap());
                 let mut clt_guard = clt_clone.borrow_mut();
                 clt_guard.push(line.to_vec());
             }
@@ -685,7 +758,6 @@ mod tests {
 
         let body0 = &bodies_guard[0];
         let body0_str = std::str::from_utf8(body0).unwrap();
-        // dbg!(body0_str);
         assert!(body0_str.contains(
             "DQq63LbguavLvtTnvs2/qsq81NrG5Mv7tdi3vb+q0dC3otbQ0MTBy6Gjuty24Lmry77U577Nv6rK\r\n"
         ));
@@ -693,7 +765,6 @@ mod tests {
 
         let body1 = &bodies_guard[1];
         let body1_str = std::str::from_utf8(body1).unwrap();
-        // dbg!(body1_str);
         assert!(body1_str.contains(
             "<html><head><meta http-equiv=3D\"content-type\" content=3D\"text/html; charse=\r\n"
         ));
@@ -707,6 +778,197 @@ mod tests {
             "C59 APPEND \"Drafts\" (\\Seen) \"26-Jul-2022 17:49:09 +0800\" {2142}"
         );
         assert_eq!(std::str::from_utf8(&clt_guard[32]).unwrap(), "C77 NOOP");
+    }
+
+    #[test]
+    fn test_imap_append_nest() {
+        let lines = [
+            "C59 APPEND \"Drafts\" (\\Seen) \"26-Jul-2022 17:49:09 +0800\" {1616}\r\n",
+            "Date: Tue, 13 Apr 2021 11:10:43 +0800\r\n",
+            "From: \"yuuminmin@serverdata.com.cn\" <yuuminmin@serverdata.com.cn>\r\n",
+            "To: xiaomingming <xiaomingming@aaa.com>\r\n",
+            "Subject: yishengyishiyishuangren\r\n",
+            "Mime-Version: 1.0\r\n",
+            "Content-Type: multipart/mixed;\r\n",
+            "\tboundary=\"----=_001_NextPart500622418632_=----\"\r\n",
+            "Authentication-Results: mx7; spf=pass smtp.mail=yuuminmin@serverdata.c\r\n",
+            "\tom.cn;\r\n",
+            "\r\n",
+            "This is a multi-part message in MIME format.\r\n",
+            "\r\n",
+            "------=_001_NextPart500622418632_=----\r\n",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_002_NextPart174447020822_=----\"\r\n",
+            "\r\n",
+            "\r\n", //按照定义这里是body，body又是一个multi body，那么这里是preamble，因为有\r\n
+            "------=_002_NextPart174447020822_=----\r\n",
+            "Content-Type: text/plain;\r\n",
+            "\tcharset=\"us-ascii\"\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "\r\n",
+            "ZGFtb2d1eWFuemhpDQpjaGFuZ2hlbHVvcml5dWFuDQoNCg0KDQp5dWV5YW55YW5AaGFvaGFuZGF0\r\n",
+            "YS5jb20uY24NCg==\r\n",
+            "\r\n",
+            "------=_002_NextPart174447020822_=----\r\n",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"us-ascii\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
+            "<html><head><meta http-equiv=3D\"content-type\" content=3D\"text/html; charse=\r\n",
+            "t=3Dus-ascii\"><style>body { line-height: 1.5; }body { font-size: 14px; fon=\r\n",
+            "..com.cn</span></div>=0A</body></html>\r\n",
+            "------=_002_NextPart174447020822_=------\r\n",
+            "\r\n", //上面的close bdry 结尾有\r\n。所以这里是epilogue
+            "------=_001_NextPart500622418632_=----\r\n",
+            "Content-Type: application/octet-stream;\r\n",
+            "\tname=\"zaicao.txt\"\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "Content-Disposition: attachment;\r\n",
+            "\tfilename=\"zaicao.txt\"\r\n",
+            "\r\n",
+            "44CK6I+c5qC56LCt44CLLS3lmrzlvpfoj5zmoLnvvIznmb7kuovlj6/lgZrvvIENCuaWh+eroOWB\r\n",
+            "muWIsOaegeWkhO+8jOaXoOacieS7luWlh++8jOWPquaYr+aBsOWlve+8mw0K5Lq65ZOB5YGa5Yiw\r\n",
+            "heWQm+WtkOS6i+adpeiAjOW/g+Wni+eOsO+8jOS6i+WOu+iAjOW/g+maj+epuuOAgg0KDQoNCg==\r\n",
+            "\r\n",
+            "------=_001_NextPart500622418632_=------\r\n",
+            "\r\n", //上面的close bdry 结尾有\r\n。所以这里是epilogue
+        ];
+        let total_bytes: usize = lines.iter().map(|line| line.len()).sum();
+        dbg!(lines.len(), total_bytes);
+
+        let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
+
+        let header_callback = {
+            let headers_clone = captured_headers.clone();
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
+                if header.is_empty() {
+                    dbg!("header cb. header end", header);
+                }
+                let mut headers_guard = headers_clone.borrow_mut();
+                headers_guard.push(header.to_vec());
+            }
+        };
+
+        let body_start_callback = {
+            let current_body_clone = current_body.clone();
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
+                let mut body_guard = current_body_clone.borrow_mut();
+                *body_guard = Vec::new();
+                println!("Body start callback triggered");
+            }
+        };
+
+        let body_callback = {
+            let current_body_clone = current_body.clone();
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  _dir: Direction,
+                  _te: Option<TransferEncoding>| {
+                let mut body_guard = current_body_clone.borrow_mut();
+                body_guard.extend_from_slice(body);
+                println!("Body callback: {} bytes", body.len());
+            }
+        };
+
+        let body_stop_callback = {
+            let current_body_clone = current_body.clone();
+            let bodies_clone = captured_bodies.clone();
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
+                let body_guard = current_body_clone.borrow();
+                let mut bodies_guard = bodies_clone.borrow_mut();
+                bodies_guard.push(body_guard.clone());
+                println!(
+                    "Body stop callback triggered, body size: {} bytes",
+                    body_guard.len()
+                );
+            }
+        };
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut task = protolens.new_task();
+
+        protolens.set_cb_imap_header(header_callback);
+        protolens.set_cb_imap_body_start(body_start_callback);
+        protolens.set_cb_imap_body(body_callback);
+        protolens.set_cb_imap_body_stop(body_stop_callback);
+
+        let mut seq = 1000;
+        for line in lines.iter() {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload(seq, line_bytes);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Imap);
+            pkt.set_direction(Direction::C2s);
+
+            protolens.run_task(&mut task, pkt);
+
+            seq += line_bytes.len() as u32;
+        }
+
+        let expected_headers = [
+            "Date: Tue, 13 Apr 2021 11:10:43 +0800\r\n",
+            "From: \"yuuminmin@serverdata.com.cn\" <yuuminmin@serverdata.com.cn>\r\n",
+            "To: xiaomingming <xiaomingming@aaa.com>\r\n",
+            "Subject: yishengyishiyishuangren\r\n",
+            "Mime-Version: 1.0\r\n",
+            "Content-Type: multipart/mixed;\r\n",
+            "\tboundary=\"----=_001_NextPart500622418632_=----\"\r\n",
+            "Authentication-Results: mx7; spf=pass smtp.mail=yuuminmin@serverdata.c\r\n",
+            "\tom.cn;\r\n",
+            "\r\n",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_002_NextPart174447020822_=----\"\r\n",
+            "\r\n",
+            "Content-Type: text/plain;\r\n",
+            "\tcharset=\"us-ascii\"\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "\r\n",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"us-ascii\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
+            "Content-Type: application/octet-stream;\r\n",
+            "\tname=\"zaicao.txt\"\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "Content-Disposition: attachment;\r\n",
+            "\tfilename=\"zaicao.txt\"\r\n",
+            "\r\n",
+        ];
+
+        let headers_guard = captured_headers.borrow();
+        assert_eq!(headers_guard.len(), expected_headers.len());
+        for (idx, expected) in expected_headers.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&headers_guard[idx]).unwrap(), *expected);
+        }
+
+        let bodies_guard = captured_bodies.borrow();
+        assert_eq!(bodies_guard.len(), 3);
+
+        let body0 = &bodies_guard[0];
+        let body0_str = std::str::from_utf8(body0).unwrap();
+        assert!(body0_str.contains(
+            "ZGFtb2d1eWFuemhpDQpjaGFuZ2hlbHVvcml5dWFuDQoNCg0KDQp5dWV5YW55YW5AaGFvaGFuZGF0\r\n"
+        ));
+        assert!(body0_str.contains("YS5jb20uY24NCg==\r\n"));
+
+        let body1 = &bodies_guard[1];
+        let body1_str = std::str::from_utf8(body1).unwrap();
+        assert!(body1_str.contains(
+            "<html><head><meta http-equiv=3D\"content-type\" content=3D\"text/html; charse=\r\n"
+        ));
+        assert!(body1_str.contains("..com.cn</span></div>=0A</body></html>")); // 最后的\r\n不属于body
+
+        let body2 = &bodies_guard[2];
+        let body2_str = std::str::from_utf8(body2).unwrap();
+        assert!(body2_str.contains(
+            "44CK6I+c5qC56LCt44CLLS3lmrzlvpfoj5zmoLnvvIznmb7kuovlj6/lgZrvvIENCuaWh+eroOWB\r\n"
+        ));
+        assert!(body2_str.contains(
+            "heWQm+WtkOS6i+adpeiAjOW/g+Wni+eOsO+8jOS6i+WOu+iAjOW/g+maj+epuuOAgg0KDQoNCg==\r\n"
+        ));
     }
 
     #[test]
@@ -727,7 +989,7 @@ mod tests {
                 // dbg!(std::str::from_utf8(header).unwrap());
                 if dir == Direction::S2c {
                     if header == b"\r\n" {
-                        // dbg!("header cb. header end");
+                        dbg!("header cb. header end");
                     }
                     let mut headers_guard = headers_clone.borrow_mut();
                     headers_guard.push(header.to_vec());

@@ -14,7 +14,6 @@ use crate::body;
 use crate::header;
 use crate::multi_body;
 use crate::packet::*;
-use crate::parser::epilogue;
 use nom::{
     IResult,
     bytes::complete::{tag, take_till},
@@ -197,8 +196,7 @@ where
 {
     let (boundary, te) = header(stm, cb_pop3.header.as_ref(), cb_ctx, Direction::S2c).await?;
     if let Some(bdry) = boundary {
-        multi_body(stm, &bdry, cb_pop3, cb_ctx).await?;
-        epilogue(stm).await?;
+        multi_body(stm, &bdry, &bdry, cb_pop3, cb_ctx).await?;
     } else {
         body(
             stm,
@@ -685,7 +683,7 @@ mod tests {
         }
 
         let bodies_guard = captured_bodies.borrow();
-        assert_eq!(bodies_guard.len(), 4);
+        assert_eq!(bodies_guard.len(), 3);
 
         let body0 = &bodies_guard[0];
         let body0_str = std::str::from_utf8(body0).unwrap();
@@ -701,20 +699,12 @@ mod tests {
         ));
         assert!(body1_str.contains("..com.cn</span></div>=0A</body></html>")); // 最后的\r\n不属于body
 
-        // ..com.cn</span></div>=0A</body></html>
-        // ------=_002_NextPart174447020822_=------
-        // body2
-        // ------=_001_NextPart500622418632_=----
         let body2 = &bodies_guard[2];
         let body2_str = std::str::from_utf8(body2).unwrap();
-        assert!(body2_str == "\r\n");
-
-        let body3 = &bodies_guard[3];
-        let body3_str = std::str::from_utf8(body3).unwrap();
-        assert!(body3_str.contains(
+        assert!(body2_str.contains(
             "44CK6I+c5qC56LCt44CLLS3lmrzlvpfoj5zmoLnvvIznmb7kuovlj6/lgZrvvIENCuaWh+eroOWB\r\n"
         ));
-        assert!(body3_str.contains(
+        assert!(body2_str.contains(
             "heWQm+WtkOS6i+adpeiAjOW/g+Wni+eOsO+8jOS6i+WOu+iAjOW/g+maj+epuuOAgg0KDQoNCg==\r\n"
         ));
 
@@ -742,10 +732,9 @@ mod tests {
         );
 
         let tes = captured_tes.borrow();
-        assert_eq!(tes.len(), 4);
+        assert_eq!(tes.len(), 3);
         assert_eq!(tes[0], Some(TransferEncoding::Base64));
         assert_eq!(tes[1], Some(TransferEncoding::QuotedPrintable));
-        assert_eq!(tes[2], None);
-        assert_eq!(tes[3], Some(TransferEncoding::Base64));
+        assert_eq!(tes[2], Some(TransferEncoding::Base64));
     }
 }
