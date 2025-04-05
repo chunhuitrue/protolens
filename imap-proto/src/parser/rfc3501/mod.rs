@@ -838,9 +838,23 @@ impl<'a> FetchRet<'a> {
             _ => false,
         })
     }
+
+    pub fn body_section_parts(&self) -> Option<Vec<u32>> {
+        self.attrs.last().and_then(|attr| {
+            if let AttributeValue2::BodySection {
+                section: Some(SectionPath::Part(parts, _)),
+                ..
+            } = attr
+            {
+                Some(parts.clone())
+            } else {
+                None
+            }
+        })
+    }
 }
 
-fn rsp_fetch(input: &[u8]) -> IResult<&[u8], FetchRet> {
+fn parse_rsp_fetch(input: &[u8]) -> IResult<&[u8], FetchRet> {
     map(
         tuple((
             tag(b"* "),
@@ -857,14 +871,14 @@ fn rsp_fetch(input: &[u8]) -> IResult<&[u8], FetchRet> {
     )(input)
 }
 
-pub fn parse_rsp_fetch(input: &str) -> Option<FetchRet> {
-    match rsp_fetch(input.as_bytes()) {
+pub fn rsp_fetch(input: &str) -> Option<FetchRet> {
+    match parse_rsp_fetch(input.as_bytes()) {
         Ok((_, fetch_ret)) => Some(fetch_ret),
         Err(_) => None,
     }
 }
 
-fn follow_rsp_fetch(input: &[u8]) -> IResult<&[u8], FetchRet> {
+fn parse_follow_rsp_fetch(input: &[u8]) -> IResult<&[u8], FetchRet> {
     map(follow_att_list(msg_att2), |attrs| FetchRet {
         attrs: attrs
             .into_iter()
@@ -873,8 +887,8 @@ fn follow_rsp_fetch(input: &[u8]) -> IResult<&[u8], FetchRet> {
     })(input)
 }
 
-pub fn parse_follow_rsp_fetch(input: &str) -> Option<FetchRet> {
-    match follow_rsp_fetch(input.as_bytes()) {
+pub fn follow_rsp_fetch(input: &str) -> Option<FetchRet> {
+    match parse_follow_rsp_fetch(input.as_bytes()) {
         Ok((_, fetch_ret)) => Some(fetch_ret),
         Err(_) => None,
     }
@@ -883,7 +897,7 @@ pub fn parse_follow_rsp_fetch(input: &str) -> Option<FetchRet> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        parser::rfc3501::{follow_rsp_fetch, rsp_fetch, FetchRet},
+        parser::rfc3501::{parse_follow_rsp_fetch, parse_rsp_fetch, FetchRet},
         types::*,
     };
     use assert_matches::assert_matches;
@@ -892,7 +906,7 @@ mod tests {
     #[test]
     fn test_rsp_fetch_bodystructure() {
         const RESPONSE: &[u8] = b"* 15 FETCH (BODYSTRUCTURE (\"TEXT\" \"PLAIN\" (\"CHARSET\" \"iso-8859-1\") NIL NIL \"QUOTED-PRINTABLE\" 1315 42 NIL NIL NIL NIL))\r\n";
-        match rsp_fetch(RESPONSE) {
+        match parse_rsp_fetch(RESPONSE) {
             Ok((_, FetchRet { attrs })) => {
                 let body = &attrs[0];
                 dbg!(body);
@@ -908,7 +922,7 @@ mod tests {
     #[test]
     fn test_rsp_fetch_ignore() {
         const RESPONSE: &[u8] = b"* 49 FETCH (INTERNALDATE \"02-Jul-2022 21:30:24 +0800\" UID 55 FLAGS (\\Recent) RFC822.SIZE 83801)\r\n";
-        match rsp_fetch(RESPONSE) {
+        match parse_rsp_fetch(RESPONSE) {
             Ok((_, FetchRet { attrs })) => {
                 assert_eq!(0, attrs.len());
             }
@@ -919,7 +933,7 @@ mod tests {
     #[test]
     fn test_rsp_fetch_body_quoted() {
         const RESPONSE: &[u8] = b"* 49 FETCH (UID 55 FLAGS (\\Recent) RFC822.SIZE 83801 BODY[HEADER.FIELDS (DATE FROM SUBJECT CONTENT-TYPE X-MS-TNEF-CORRELATOR CONTENT-CLASS IMPORTANCE PRIORITY X-PRIORITY THREAD-TOPIC REPLY-TO)] \"content\"\r\n";
-        match rsp_fetch(RESPONSE) {
+        match parse_rsp_fetch(RESPONSE) {
             Ok((_, FetchRet { attrs })) => {
                 assert_eq!(1, attrs.len());
                 let body = &attrs[0];
@@ -942,7 +956,7 @@ mod tests {
     #[test]
     fn test_rsp_fetch_body_literal() {
         const RESPONSE: &[u8] = b"* 49 FETCH (UID 55 RFC822.SIZE 83801 BODY[HEADER.FIELDS (DATE FROM SUBJECT CONTENT-TYPE X-MS-TNEF-CORRELATOR CONTENT-CLASS IMPORTANCE PRIORITY X-PRIORITY THREAD-TOPIC REPLY-TO)] {250}\r\n";
-        match rsp_fetch(RESPONSE) {
+        match parse_rsp_fetch(RESPONSE) {
             Ok((_, fetch_ret)) => {
                 assert_eq!(1, fetch_ret.attrs.len());
 
@@ -969,7 +983,7 @@ mod tests {
     #[test]
     fn test_follow_rsp_fetch_part_body() {
         const RESPONSE: &[u8] = b"BODY[1.2] {5964}\r\n";
-        match follow_rsp_fetch(RESPONSE) {
+        match parse_follow_rsp_fetch(RESPONSE) {
             Ok((_, FetchRet { attrs })) => {
                 assert_eq!(1, attrs.len());
                 let body = &attrs[0];
@@ -996,7 +1010,7 @@ mod tests {
     #[test]
     fn test_follow_rsp_fetch_bodystructure() {
         const RESPONSE: &[u8] = b"BODYSTRUCTURE (\"TEXT\" \"PLAIN\" (\"CHARSET\" \"iso-8859-1\") NIL NIL \"QUOTED-PRINTABLE\" 1315 42 NIL NIL NIL NIL))\r\n";
-        match follow_rsp_fetch(RESPONSE) {
+        match parse_follow_rsp_fetch(RESPONSE) {
             Ok((_, FetchRet { attrs })) => {
                 let body = &attrs[0];
                 dbg!(body);
@@ -1013,7 +1027,7 @@ mod tests {
     fn test_fetchret_data() {
         const RESPONSE: &[u8] = b"* 49 FETCH (UID 55 FLAGS (\\Recent) RFC822.SIZE 83801 BODY[HEADER.FIELDS (DATE FROM SUBJECT CONTENT-TYPE X-MS-TNEF-CORRELATOR CONTENT-CLASS IMPORTANCE PRIORITY X-PRIORITY THREAD-TOPIC REPLY-TO)] \"content\"\r\n";
 
-        let (_, fetch_ret) = rsp_fetch(RESPONSE).expect("failed to parse FETCH response");
+        let (_, fetch_ret) = parse_rsp_fetch(RESPONSE).expect("failed to parse FETCH response");
         assert_eq!(fetch_ret.data(), Some(b"content" as &[u8]));
         assert_eq!(fetch_ret.attrs.len(), 1);
     }
@@ -1022,25 +1036,25 @@ mod tests {
     fn test_fetchret_is_header() {
         // Test RFC822.HEADER
         let response1 = b"* 49 FETCH (UID 55 RFC822.HEADER {625}\r\n";
-        let (_, fetch_ret1) = rsp_fetch(response1).expect("failed to parse FETCH response");
+        let (_, fetch_ret1) = parse_rsp_fetch(response1).expect("failed to parse FETCH response");
         assert!(fetch_ret1.is_header());
         assert_eq!(fetch_ret1.literal_size(), Some(625));
 
         // Test BODY[HEADER]
         let response2 = b"* 49 FETCH (BODY[HEADER] {625}\r\n";
-        let (_, fetch_ret2) = rsp_fetch(response2).expect("failed to parse FETCH response");
+        let (_, fetch_ret2) = parse_rsp_fetch(response2).expect("failed to parse FETCH response");
         assert!(fetch_ret2.is_header());
         assert_eq!(fetch_ret1.literal_size(), Some(625));
 
         // Test BODY[1.HEADER]
         let response3 = b"* 49 FETCH (BODY[1.HEADER] {625}\r\n";
-        let (_, fetch_ret3) = rsp_fetch(response3).expect("failed to parse FETCH response");
+        let (_, fetch_ret3) = parse_rsp_fetch(response3).expect("failed to parse FETCH response");
         assert!(fetch_ret3.is_header());
         assert_eq!(fetch_ret1.literal_size(), Some(625));
 
         // Test non-header response
         let response4 = b"* 49 FETCH (UID 55 BODY[] {625}\r\n";
-        let (_, fetch_ret4) = rsp_fetch(response4).expect("failed to parse FETCH response");
+        let (_, fetch_ret4) = parse_rsp_fetch(response4).expect("failed to parse FETCH response");
         assert!(!fetch_ret4.is_header());
         assert_eq!(fetch_ret1.literal_size(), Some(625));
     }

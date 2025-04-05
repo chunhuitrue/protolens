@@ -128,7 +128,6 @@ where
 
     loop {
         let (line, seq) = stm.readline_str().await?;
-        dbg!(line);
 
         // 空行也回调。调用者知道header结束
         if let Some(cb) = cb_header {
@@ -136,7 +135,6 @@ where
         }
 
         if line == "\r\n" {
-            dbg!("======== header end===========", &te);
             let ret_bdry = if boundary.is_empty() {
                 None
             } else {
@@ -187,7 +185,6 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    dbg!("body start");
     if let Some(cb) = cb_body_start {
         cb.borrow_mut()(cb_ctx, dir);
     }
@@ -205,7 +202,6 @@ where
     if let Some(cb) = cb_body_stop {
         cb.borrow_mut()(cb_ctx, dir);
     }
-    dbg!("body end");
     Ok(true)
 }
 

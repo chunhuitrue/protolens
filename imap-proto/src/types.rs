@@ -561,7 +561,7 @@ impl<'a> ContentDisposition<'a> {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum ContentEncoding<'a> {
     SevenBit,
     EightBit,

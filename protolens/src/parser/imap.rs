@@ -11,12 +11,15 @@ use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
+use crate::TransferEncoding;
 use crate::dash_bdry;
 use crate::header;
 use crate::mime_body;
 use crate::packet::*;
 use crate::preamble;
-use imap_proto::{parse_follow_rsp_fetch, parse_rsp_fetch};
+use imap_proto::{
+    AttributeValue2, BodyStructParser2, ContentEncoding, follow_rsp_fetch, rsp_fetch,
+};
 use nom::{
     IResult,
     bytes::complete::{tag, take_while1},
@@ -100,6 +103,7 @@ where
         unsafe {
             stm = &mut *(stream as *mut PktStrm<T, P>);
         }
+        let mut bds_parser = None;
 
         loop {
             let (line, seq) = stm.readline_str().await?;
@@ -108,22 +112,42 @@ where
                 cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
             }
 
-            let tail_seq = seq + line.len() as u32;
-            if let Some(fetch_ret) = parse_rsp_fetch(line) {
+            let fetch_ret = rsp_fetch(line).or_else(|| follow_rsp_fetch(line));
+            if let Some(fetch_ret) = fetch_ret {
                 if let Some(data) = fetch_ret.data() {
+                    let tail_seq = seq + line.len() as u32;
                     quoted_body(data, tail_seq - data.len() as u32, &cb, cb_ctx)?;
                 } else {
                     let size = fetch_ret.literal_size();
                     let header = fetch_ret.is_header();
-                    Self::handle_fetch_ret(stm, size, header, &cb, cb_ctx).await?;
-                }
-            } else if let Some(fetch_ret) = parse_follow_rsp_fetch(line) {
-                if let Some(data) = fetch_ret.data() {
-                    quoted_body(data, tail_seq - data.len() as u32, &cb, cb_ctx)?;
-                } else {
-                    let size = fetch_ret.literal_size();
-                    let header = fetch_ret.is_header();
-                    Self::handle_fetch_ret(stm, size, header, &cb, cb_ctx).await?;
+                    let body_section = fetch_ret.body_section_parts();
+
+                    let body_structure = fetch_ret.attrs.into_iter().find_map(|attr| {
+                        if let AttributeValue2::BodyStructure(body) = attr {
+                            Some(body.into_owned())
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(body_structure) = body_structure {
+                        bds_parser = Some(BodyStructParser2::new(body_structure));
+                    }
+                    let cnt_encoding =
+                        if let (Some(parser), Some(section)) = (&bds_parser, &body_section) {
+                            parser.get_transfer_encoding(section)
+                        } else {
+                            None
+                        };
+                    let te = cnt_encoding.and_then(|enc| match enc {
+                        ContentEncoding::SevenBit => Some(TransferEncoding::Bit7),
+                        ContentEncoding::EightBit => Some(TransferEncoding::Bit8),
+                        ContentEncoding::Binary => Some(TransferEncoding::Binary),
+                        ContentEncoding::Base64 => Some(TransferEncoding::Base64),
+                        ContentEncoding::QuotedPrintable => Some(TransferEncoding::QuotedPrintable),
+                        _ => None,
+                    });
+
+                    Self::handle_fetch_ret(stm, size, header, te, &cb, cb_ctx).await?;
                 }
             }
         }
@@ -133,6 +157,7 @@ where
         stm: &mut PktStrm<T, P>,
         size: Option<usize>,
         header: bool,
+        te: Option<TransferEncoding>,
         cb_imap: &Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
@@ -144,7 +169,7 @@ where
         if header {
             fetch_header(stm, cb_imap, cb_ctx).await?;
         } else {
-            size_body(stm, literal_size, cb_imap, cb_ctx).await?;
+            size_body(stm, literal_size, te, cb_imap, cb_ctx).await?;
         }
 
         let (byte, _seq) = stm.readn(1).await?;
@@ -240,13 +265,13 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
 {
     let start_size = stm.get_read_size();
-    let (boundary, _te) = header(stm, cb_imap.header.as_ref(), cb_ctx, Direction::C2s).await?;
+    let (boundary, te) = header(stm, cb_imap.header.as_ref(), cb_ctx, Direction::C2s).await?;
     if let Some(bdry) = boundary {
         imap_multi_body(stm, mail_size, start_size, &bdry, &bdry, cb_imap, cb_ctx).await?;
     } else {
         let head_size = stm.get_read_size() - start_size;
         let body_size = mail_size - head_size;
-        size_body(stm, body_size, cb_imap, cb_ctx).await?;
+        size_body(stm, body_size, te, cb_imap, cb_ctx).await?;
     }
     Ok(())
 }
@@ -264,10 +289,7 @@ where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,
 {
-    dbg!("multi body start");
-    dbg!("preamble start");
     preamble(stm, bdry).await?;
-    dbg!("preamble stop");
     loop {
         let (boundary, te) = header(stm, cb.header.as_ref(), cb_ctx, cb.dir).await?;
 
@@ -276,7 +298,6 @@ where
                 stm, mail_size, start_size, out_bdry, &new_bdry, cb, cb_ctx,
             ))
             .await?;
-            dbg!("box multi_body stop, continue");
             continue;
         } else {
             let params = MimeBodyParams {
@@ -288,32 +309,26 @@ where
                 cb_ctx,
                 dir: cb.dir,
             };
-            dbg!("mime body start");
             mime_body(stm, params).await?;
-            dbg!("mime body stop");
         }
 
         let (byte, _seq) = stm.readn(2).await?;
         if byte == b"--" {
-            dbg!("close bdry break");
             break;
         } else if byte == b"\r\n" {
-            dbg!("bdry continue");
             continue;
         } else {
             return Err(());
         }
     }
-    dbg!("epilogue start");
     imap_epilogue(stm, out_bdry, mail_size, start_size).await?;
-    dbg!("epilogue stop");
-    dbg!("multi body stop");
     Ok(())
 }
 
 async fn size_body<T, P>(
     stm: &mut PktStrm<T, P>,
     size: usize,
+    te: Option<TransferEncoding>,
     cb_imap: &Callbacks,
     cb_ctx: *mut c_void,
 ) -> Result<bool, ()>
@@ -331,7 +346,7 @@ where
         remain_size -= bytes.len();
 
         if let Some(cb) = &cb_imap.body {
-            cb.borrow_mut()(bytes, seq, cb_ctx, cb_imap.dir, None);
+            cb.borrow_mut()(bytes, seq, cb_ctx, cb_imap.dir, te.clone());
         }
     }
     if let Some(cb) = &cb_imap.body_stop {
@@ -365,14 +380,11 @@ where
 {
     loop {
         let remain_size = mail_size.saturating_sub(stm.get_read_size() - start_size);
-        dbg!(remain_size);
         if remain_size < bdry.len() && remain_size != 0 {
-            dbg!("imap_epilogue size", remain_size);
             stm.readn(remain_size).await?;
             break;
         }
 
-        dbg!("22222", mail_size);
         let (line, _seq) = stm.readline_str().await?;
         if dash_bdry(line, bdry) {
             break;
@@ -833,8 +845,6 @@ mod tests {
             "------=_001_NextPart500622418632_=------\r\n",
             "\r\n", //上面的close bdry 结尾有\r\n。所以这里是epilogue
         ];
-        let total_bytes: usize = lines.iter().map(|line| line.len()).sum();
-        dbg!(lines.len(), total_bytes);
 
         let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
         let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
@@ -982,11 +992,13 @@ mod tests {
         let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_clt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
         let captured_srv = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_tes = Rc::new(RefCell::new(Vec::<Option<TransferEncoding>>::new()));
+        let current_te = Rc::new(RefCell::new(None::<TransferEncoding>));
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
             move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, dir: Direction| {
-                // dbg!(std::str::from_utf8(header).unwrap());
+                dbg!(std::str::from_utf8(header).unwrap());
                 if dir == Direction::S2c {
                     if header == b"\r\n" {
                         dbg!("header cb. header end");
@@ -999,24 +1011,34 @@ mod tests {
 
         let body_start_callback = {
             let current_body_clone = current_body.clone();
+            let current_te_clone = current_te.clone();
             move |_cb_ctx: *mut c_void, dir: Direction| {
                 if dir == Direction::S2c {
                     let mut body_guard = current_body_clone.borrow_mut();
                     *body_guard = Vec::new();
+
+                    let mut te_guard = current_te_clone.borrow_mut();
+                    *te_guard = None;
                 }
             }
         };
 
         let body_callback = {
             let current_body_clone = current_body.clone();
+            let current_te_clone = current_te.clone();
             move |body: &[u8],
                   _seq: u32,
                   _cb_ctx: *mut c_void,
                   dir: Direction,
-                  _te: Option<TransferEncoding>| {
+                  te: Option<TransferEncoding>| {
                 if dir == Direction::S2c {
                     let mut body_guard = current_body_clone.borrow_mut();
                     body_guard.extend_from_slice(body);
+
+                    if te.is_some() {
+                        let mut te_guard = current_te_clone.borrow_mut();
+                        *te_guard = te;
+                    }
                 }
             }
         };
@@ -1024,11 +1046,17 @@ mod tests {
         let body_stop_callback = {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
+            let current_te_clone = current_te.clone();
+            let tes_clone = captured_tes.clone();
             move |_cb_ctx: *mut c_void, dir: Direction| {
                 if dir == Direction::S2c {
                     let body_guard = current_body_clone.borrow();
                     let mut bodies_guard = bodies_clone.borrow_mut();
                     bodies_guard.push(body_guard.clone());
+
+                    let te_guard = current_te_clone.borrow();
+                    let mut tes_guard = tes_clone.borrow_mut();
+                    tes_guard.push(te_guard.clone());
                 }
             }
         };
@@ -1262,5 +1290,25 @@ mod tests {
             std::str::from_utf8(&srv_guard[18]).unwrap(),
             "A54 OK Search completed (0.001 + 0.000 secs).\r\n"
         );
+
+        let tes_guard = captured_tes.borrow();
+        assert_eq!(tes_guard.len(), 10);
+
+        let expected_tes = [
+            Some(TransferEncoding::QuotedPrintable),
+            Some(TransferEncoding::Base64),
+            Some(TransferEncoding::Base64),
+            Some(TransferEncoding::Base64),
+            Some(TransferEncoding::Base64),
+            Some(TransferEncoding::QuotedPrintable),
+            Some(TransferEncoding::Base64),
+            Some(TransferEncoding::Base64),
+            Some(TransferEncoding::Base64),
+            Some(TransferEncoding::Base64),
+        ];
+
+        for (idx, expected) in expected_tes.iter().enumerate() {
+            assert_eq!(tes_guard[idx], *expected);
+        }
     }
 }

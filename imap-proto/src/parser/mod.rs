@@ -16,7 +16,9 @@ pub mod rfc5256;
 pub mod rfc5464;
 pub mod rfc7162;
 
-pub use rfc3501::{parse_follow_rsp_fetch, parse_rsp_fetch, FetchRet};
+pub use bodystructure::BodyStructParser;
+pub use bodystructure::BodyStructParser2;
+pub use rfc3501::{follow_rsp_fetch, rsp_fetch, FetchRet};
 
 #[cfg(test)]
 mod tests;
