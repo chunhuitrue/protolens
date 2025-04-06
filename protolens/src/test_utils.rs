@@ -228,14 +228,25 @@ impl CapPacket {
                     return Err(PacketError::DecodeErr);
                 }
 
+                let payload_offset =
+                    headers.payload.as_ptr() as usize - self.data.as_ptr() as usize;
+                let mut payload_len = 0;
+                if let (Some(IpHeader::Version4(ipv4, _)), Some(TransportHeader::Tcp(tcp_header))) =
+                    (&headers.ip, &headers.transport)
+                {
+                    let ip_total_len = ipv4.total_len() as usize;
+                    let ip_header_len = ipv4.ihl() as usize * 4;
+                    let tcp_header_len = tcp_header.header_len() as usize;
+                    payload_len = ip_total_len - ip_header_len - tcp_header_len;
+                }
+
                 self.header.replace(Some(PktHeader {
                     link: headers.link,
                     vlan: headers.vlan,
                     ip: headers.ip,
                     transport: headers.transport,
-                    payload_offset: headers.payload.as_ptr() as usize - self.data.as_ptr() as usize,
-                    payload_len: self.data_len
-                        - (headers.payload.as_ptr() as usize - self.data.as_ptr() as usize),
+                    payload_offset,
+                    payload_len,
                     l7_proto: L7Proto::Unknown,
                     direction: Direction::C2s,
                 }));

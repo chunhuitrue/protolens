@@ -1311,4 +1311,53 @@ mod tests {
             assert_eq!(tes_guard[idx], *expected);
         }
     }
+
+    // 开始三个包中附带option和pad
+    #[test]
+    fn test_imap_fetch_pcap() {
+        let project_root = env::current_dir().unwrap();
+        let file_path = project_root.join("tests/pcap/imap_fetch.pcap");
+        let mut cap = Capture::init(file_path).unwrap();
+
+        let captured_clt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+
+        let clt_callback = {
+            let clt_clone = captured_clt.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut clt_guard = clt_clone.borrow_mut();
+                clt_guard.push(line.to_vec());
+            }
+        };
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut task = protolens.new_task();
+
+        protolens.set_cb_imap_clt(clt_callback);
+
+        loop {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let pkt = cap.next_packet(now);
+            if pkt.is_none() {
+                break;
+            }
+            let pkt = pkt.unwrap();
+            if pkt.decode().is_err() {
+                continue;
+            }
+            pkt.set_l7_proto(L7Proto::Imap);
+            if pkt.header.borrow().as_ref().unwrap().dport() == IMAP_PORT {
+                pkt.set_direction(Direction::C2s);
+            } else {
+                pkt.set_direction(Direction::S2c);
+            }
+
+            protolens.run_task(&mut task, pkt);
+        }
+
+        let clt_guard = captured_clt.borrow();
+        assert_eq!(std::str::from_utf8(&clt_guard[0]).unwrap(), "1 capability");
+    }
 }
