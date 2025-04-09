@@ -104,8 +104,31 @@ where
             }
 
             if retr_answer(line) {
-                pop3_mail(stm, &cb_pop3, cb_ctx).await?;
+                Self::parser_inner(stm, &cb_pop3, cb_ctx).await?;
             }
+        }
+        Ok(())
+    }
+
+    async fn parser_inner(
+        stm: &mut PktStrm<T, P>,
+        cb_pop3: &Callbacks,
+        cb_ctx: *mut c_void,
+    ) -> Result<(), ()> {
+        let (boundary, te) = header(stm, cb_pop3.header.as_ref(), cb_ctx, Direction::S2c).await?;
+        if let Some(bdry) = boundary {
+            multi_body(stm, &bdry, &bdry, cb_pop3, cb_ctx).await?;
+        } else {
+            body(
+                stm,
+                te,
+                cb_pop3.body_start.as_ref(),
+                cb_pop3.body.as_ref(),
+                cb_pop3.body_stop.as_ref(),
+                cb_ctx,
+                cb_pop3.dir,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -183,33 +206,6 @@ where
         parser.cb_srv = prolens.cb_pop3_srv.clone();
         parser
     }
-}
-
-async fn pop3_mail<T, P>(
-    stm: &mut PktStrm<T, P>,
-    cb_pop3: &Callbacks,
-    cb_ctx: *mut c_void,
-) -> Result<(), ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    let (boundary, te) = header(stm, cb_pop3.header.as_ref(), cb_ctx, Direction::S2c).await?;
-    if let Some(bdry) = boundary {
-        multi_body(stm, &bdry, &bdry, cb_pop3, cb_ctx).await?;
-    } else {
-        body(
-            stm,
-            te,
-            cb_pop3.body_start.as_ref(),
-            cb_pop3.body.as_ref(),
-            cb_pop3.body_stop.as_ref(),
-            cb_ctx,
-            cb_pop3.dir,
-        )
-        .await?;
-    }
-    Ok(())
 }
 
 fn retr_answer(input: &str) -> bool {

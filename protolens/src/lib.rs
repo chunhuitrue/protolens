@@ -29,6 +29,7 @@ use crate::CbHeader;
 use crate::config::*;
 use crate::enum_map::EnumMap;
 use crate::heap::*;
+use crate::http::*;
 use crate::imap::*;
 use crate::ordpacket::*;
 use crate::packet::*;
@@ -87,6 +88,11 @@ where
     cb_imap_body_stop: Option<CbBodyEvt>,
     cb_imap_clt: Option<CbClt>,
     cb_imap_srv: Option<CbSrv>,
+    cb_http_start_line: Option<CbStartLine>,
+    cb_http_header: Option<CbHeader>,
+    cb_http_body_start: Option<CbBodyEvt>,
+    cb_http_body: Option<CbHttpBody>,
+    cb_http_body_stop: Option<CbBodyEvt>,
 
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
@@ -149,6 +155,11 @@ where
             cb_imap_body_stop: None,
             cb_imap_clt: None,
             cb_imap_srv: None,
+            cb_http_start_line: None,
+            cb_http_header: None,
+            cb_http_body_start: None,
+            cb_http_body: None,
+            cb_http_body_stop: None,
         };
         prolens.regist_parsers();
         prolens
@@ -169,6 +180,8 @@ where
             .insert(L7Proto::Pop3, Box::new(Pop3Factory::<T, P>::new()));
         self.parsers
             .insert(L7Proto::Imap, Box::new(ImapFactory::<T, P>::new()));
+        self.parsers
+            .insert(L7Proto::Http, Box::new(HttpFactory::<T, P>::new()));
 
         #[cfg(test)]
         {
@@ -435,6 +448,41 @@ where
         F: DataCbFn + 'static,
     {
         self.cb_imap_srv = Some(Rc::new(RefCell::new(callback)) as CbSrv);
+    }
+
+    pub fn set_cb_http_start_line<F>(&mut self, callback: F)
+    where
+        F: DataCbDirFn + 'static,
+    {
+        self.cb_http_start_line = Some(Rc::new(RefCell::new(callback)) as CbStartLine);
+    }
+
+    pub fn set_cb_http_header<F>(&mut self, callback: F)
+    where
+        F: DataCbDirFn + 'static,
+    {
+        self.cb_http_header = Some(Rc::new(RefCell::new(callback)) as CbHeader);
+    }
+
+    pub fn set_cb_http_body_start<F>(&mut self, callback: F)
+    where
+        F: EvtCbFn + 'static,
+    {
+        self.cb_http_body_start = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
+
+    pub fn set_cb_http_body<F>(&mut self, callback: F)
+    where
+        F: HttpBodyCbFn + 'static,
+    {
+        self.cb_http_body = Some(Rc::new(RefCell::new(callback)) as CbHttpBody);
+    }
+
+    pub fn set_cb_http_body_stop<F>(&mut self, callback: F)
+    where
+        F: EvtCbFn + 'static,
+    {
+        self.cb_http_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
     }
 }
 

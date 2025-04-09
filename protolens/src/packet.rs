@@ -12,6 +12,7 @@ pub enum L7Proto {
     Smtp,
     Pop3,
     Imap,
+    Http,
 
     #[cfg(test)]
     RawPacket,

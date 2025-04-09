@@ -82,7 +82,7 @@ where
 
             let (is_append, mail_size) = append(line);
             if is_append && append_ok(stm).await? {
-                imap_mail(stm, mail_size, &cb_imap, cb_ctx).await?;
+                Self::append_mail(stm, mail_size, &cb_imap, cb_ctx).await?;
 
                 // command = tag SP (command-any / command-auth / command-nonauth /
                 //           command-select) CRLF
@@ -96,7 +96,7 @@ where
 
     async fn s2c_parser_inner(
         stream: *const PktStrm<T, P>,
-        cb: Callbacks,
+        cb_imap: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm: &mut PktStrm<T, P>;
@@ -108,7 +108,7 @@ where
         loop {
             let (line, seq) = stm.readline_str().await?;
 
-            if let Some(ref cb) = cb.srv {
+            if let Some(ref cb) = cb_imap.srv {
                 cb.borrow_mut()(line.as_bytes(), seq, cb_ctx);
             }
 
@@ -116,7 +116,7 @@ where
             if let Some(fetch_ret) = fetch_ret {
                 if let Some(data) = fetch_ret.data() {
                     let tail_seq = seq + line.len() as u32;
-                    quoted_body(data, tail_seq - data.len() as u32, &cb, cb_ctx)?;
+                    Self::quoted_body(data, tail_seq - data.len() as u32, &cb_imap, cb_ctx)?;
                 } else {
                     let size = fetch_ret.literal_size();
                     let header = fetch_ret.is_header();
@@ -147,10 +147,117 @@ where
                         _ => None,
                     });
 
-                    Self::handle_fetch_ret(stm, size, header, te, &cb, cb_ctx).await?;
+                    Self::handle_fetch_ret(stm, size, header, te, &cb_imap, cb_ctx).await?;
                 }
             }
         }
+    }
+
+    async fn append_mail(
+        stm: &mut PktStrm<T, P>,
+        mail_size: usize,
+        cb_imap: &Callbacks,
+        cb_ctx: *mut c_void,
+    ) -> Result<(), ()> {
+        let start_size = stm.get_read_size();
+        let (boundary, te) = header(stm, cb_imap.header.as_ref(), cb_ctx, Direction::C2s).await?;
+        if let Some(bdry) = boundary {
+            Self::multi_body(stm, mail_size, start_size, &bdry, &bdry, cb_imap, cb_ctx).await?;
+        } else {
+            let head_size = stm.get_read_size() - start_size;
+            let body_size = mail_size - head_size;
+            Self::size_body(stm, body_size, te, cb_imap, cb_ctx).await?;
+        }
+        Ok(())
+    }
+
+    async fn multi_body(
+        stm: &mut PktStrm<T, P>,
+        mail_size: usize,
+        start_size: usize,
+        out_bdry: &str,
+        bdry: &str,
+        cb: &Callbacks,
+        cb_ctx: *mut c_void,
+    ) -> Result<(), ()> {
+        preamble(stm, bdry).await?;
+        loop {
+            let (boundary, te) = header(stm, cb.header.as_ref(), cb_ctx, cb.dir).await?;
+
+            if let Some(new_bdry) = boundary {
+                Box::pin(Self::multi_body(
+                    stm, mail_size, start_size, out_bdry, &new_bdry, cb, cb_ctx,
+                ))
+                .await?;
+                continue;
+            } else {
+                let params = MimeBodyParams {
+                    te,
+                    bdry,
+                    cb_body_start: cb.body_start.as_ref(),
+                    cb_body: cb.body.as_ref(),
+                    cb_body_stop: cb.body_stop.as_ref(),
+                    cb_ctx,
+                    dir: cb.dir,
+                };
+                mime_body(stm, params).await?;
+            }
+
+            let (byte, _seq) = stm.readn(2).await?;
+            if byte == b"--" {
+                break;
+            } else if byte == b"\r\n" {
+                continue;
+            } else {
+                return Err(());
+            }
+        }
+        Self::epilogue(stm, out_bdry, mail_size, start_size).await?;
+        Ok(())
+    }
+
+    async fn size_body(
+        stm: &mut PktStrm<T, P>,
+        size: usize,
+        te: Option<TransferEncoding>,
+        cb_imap: &Callbacks,
+        cb_ctx: *mut c_void,
+    ) -> Result<bool, ()> {
+        let mut remain_size = size;
+
+        if let Some(cb) = &cb_imap.body_start {
+            cb.borrow_mut()(cb_ctx, cb_imap.dir);
+        }
+        while remain_size > 0 {
+            let (bytes, seq) = stm.read(remain_size).await?;
+            remain_size -= bytes.len();
+
+            if let Some(cb) = &cb_imap.body {
+                cb.borrow_mut()(bytes, seq, cb_ctx, cb_imap.dir, te.clone());
+            }
+        }
+        if let Some(cb) = &cb_imap.body_stop {
+            cb.borrow_mut()(cb_ctx, cb_imap.dir);
+        }
+        Ok(true)
+    }
+
+    fn quoted_body(
+        data: &[u8],
+        seq: u32,
+        cb_imap: &Callbacks,
+        cb_ctx: *mut c_void,
+    ) -> Result<(), ()> {
+        if let Some(cb) = &cb_imap.body_start {
+            cb.borrow_mut()(cb_ctx, cb_imap.dir);
+        }
+        if let Some(cb) = &cb_imap.body {
+            cb.borrow_mut()(data, seq, cb_ctx, cb_imap.dir, None);
+        }
+        if let Some(cb) = &cb_imap.body_stop {
+            cb.borrow_mut()(cb_ctx, cb_imap.dir);
+        }
+        Ok(())
     }
 
     async fn handle_fetch_ret(
@@ -167,14 +274,53 @@ where
         let literal_size = size.unwrap();
 
         if header {
-            fetch_header(stm, cb_imap, cb_ctx).await?;
+            Self::fetch_header(stm, cb_imap, cb_ctx).await?;
         } else {
-            size_body(stm, literal_size, te, cb_imap, cb_ctx).await?;
+            Self::size_body(stm, literal_size, te, cb_imap, cb_ctx).await?;
         }
 
         let (byte, _seq) = stm.readn(1).await?;
         if byte == b")" {
             return Ok(());
+        }
+        Ok(())
+    }
+
+    async fn fetch_header(
+        stm: &mut PktStrm<T, P>,
+        cb_imap: &Callbacks,
+        cb_ctx: *mut c_void,
+    ) -> Result<(), ()> {
+        loop {
+            let (line, seq) = stm.readline_str().await?;
+
+            if let Some(cb) = &cb_imap.header {
+                cb.borrow_mut()(line.as_bytes(), seq, cb_ctx, cb_imap.dir);
+            }
+
+            if line == "\r\n" {
+                return Ok(());
+            }
+        }
+    }
+
+    async fn epilogue(
+        stm: &mut PktStrm<T, P>,
+        bdry: &str,
+        mail_size: usize,
+        start_size: usize,
+    ) -> Result<(), ()> {
+        loop {
+            let remain_size = mail_size.saturating_sub(stm.get_read_size() - start_size);
+            if remain_size < bdry.len() && remain_size != 0 {
+                stm.readn(remain_size).await?;
+                break;
+            }
+
+            let (line, _seq) = stm.readline_str().await?;
+            if dash_bdry(line, bdry) {
+                break;
+            }
         }
         Ok(())
     }
@@ -254,145 +400,6 @@ where
     }
 }
 
-async fn imap_mail<T, P>(
-    stm: &mut PktStrm<T, P>,
-    mail_size: usize,
-    cb_imap: &Callbacks,
-    cb_ctx: *mut c_void,
-) -> Result<(), ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    let start_size = stm.get_read_size();
-    let (boundary, te) = header(stm, cb_imap.header.as_ref(), cb_ctx, Direction::C2s).await?;
-    if let Some(bdry) = boundary {
-        imap_multi_body(stm, mail_size, start_size, &bdry, &bdry, cb_imap, cb_ctx).await?;
-    } else {
-        let head_size = stm.get_read_size() - start_size;
-        let body_size = mail_size - head_size;
-        size_body(stm, body_size, te, cb_imap, cb_ctx).await?;
-    }
-    Ok(())
-}
-
-async fn imap_multi_body<T, P>(
-    stm: &mut PktStrm<T, P>,
-    mail_size: usize,
-    start_size: usize,
-    out_bdry: &str,
-    bdry: &str,
-    cb: &Callbacks,
-    cb_ctx: *mut c_void,
-) -> Result<(), ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    preamble(stm, bdry).await?;
-    loop {
-        let (boundary, te) = header(stm, cb.header.as_ref(), cb_ctx, cb.dir).await?;
-
-        if let Some(new_bdry) = boundary {
-            Box::pin(imap_multi_body(
-                stm, mail_size, start_size, out_bdry, &new_bdry, cb, cb_ctx,
-            ))
-            .await?;
-            continue;
-        } else {
-            let params = MimeBodyParams {
-                te,
-                bdry,
-                cb_body_start: cb.body_start.as_ref(),
-                cb_body: cb.body.as_ref(),
-                cb_body_stop: cb.body_stop.as_ref(),
-                cb_ctx,
-                dir: cb.dir,
-            };
-            mime_body(stm, params).await?;
-        }
-
-        let (byte, _seq) = stm.readn(2).await?;
-        if byte == b"--" {
-            break;
-        } else if byte == b"\r\n" {
-            continue;
-        } else {
-            return Err(());
-        }
-    }
-    imap_epilogue(stm, out_bdry, mail_size, start_size).await?;
-    Ok(())
-}
-
-async fn size_body<T, P>(
-    stm: &mut PktStrm<T, P>,
-    size: usize,
-    te: Option<TransferEncoding>,
-    cb_imap: &Callbacks,
-    cb_ctx: *mut c_void,
-) -> Result<bool, ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    let mut remain_size = size;
-
-    if let Some(cb) = &cb_imap.body_start {
-        cb.borrow_mut()(cb_ctx, cb_imap.dir);
-    }
-    while remain_size > 0 {
-        let (bytes, seq) = stm.read(remain_size).await?;
-        remain_size -= bytes.len();
-
-        if let Some(cb) = &cb_imap.body {
-            cb.borrow_mut()(bytes, seq, cb_ctx, cb_imap.dir, te.clone());
-        }
-    }
-    if let Some(cb) = &cb_imap.body_stop {
-        cb.borrow_mut()(cb_ctx, cb_imap.dir);
-    }
-    Ok(true)
-}
-
-fn quoted_body(data: &[u8], seq: u32, cb_imap: &Callbacks, cb_ctx: *mut c_void) -> Result<(), ()> {
-    if let Some(cb) = &cb_imap.body_start {
-        cb.borrow_mut()(cb_ctx, cb_imap.dir);
-    }
-    if let Some(cb) = &cb_imap.body {
-        cb.borrow_mut()(data, seq, cb_ctx, cb_imap.dir, None);
-    }
-    if let Some(cb) = &cb_imap.body_stop {
-        cb.borrow_mut()(cb_ctx, cb_imap.dir);
-    }
-    Ok(())
-}
-
-async fn imap_epilogue<T, P>(
-    stm: &mut PktStrm<T, P>,
-    bdry: &str,
-    mail_size: usize,
-    start_size: usize,
-) -> Result<(), ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    loop {
-        let remain_size = mail_size.saturating_sub(stm.get_read_size() - start_size);
-        if remain_size < bdry.len() && remain_size != 0 {
-            stm.readn(remain_size).await?;
-            break;
-        }
-
-        let (line, _seq) = stm.readline_str().await?;
-        if dash_bdry(line, bdry) {
-            break;
-        }
-    }
-    Ok(())
-}
-
 fn append(input: &str) -> (bool, usize) {
     // 解析命令ID（一个或多个非空白字符）
     fn command_id(input: &str) -> IResult<&str, &str> {
@@ -456,28 +463,6 @@ where
 {
     let line = stm.peekline_str().await?;
     Ok(line.contains(':'))
-}
-
-async fn fetch_header<T, P>(
-    stm: &mut PktStrm<T, P>,
-    cb_imap: &Callbacks,
-    cb_ctx: *mut c_void,
-) -> Result<(), ()>
-where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    loop {
-        let (line, seq) = stm.readline_str().await?;
-
-        if let Some(cb) = &cb_imap.header {
-            cb.borrow_mut()(line.as_bytes(), seq, cb_ctx, cb_imap.dir);
-        }
-
-        if line == "\r\n" {
-            return Ok(());
-        }
-    }
 }
 
 #[cfg(test)]

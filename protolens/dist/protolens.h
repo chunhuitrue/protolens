@@ -46,6 +46,24 @@ typedef enum {
     Base64,
 } CTransferEncoding;
 
+typedef enum {
+    ENone,
+    Compress,
+    Deflate,
+    Gzip,
+    Lzma,
+    Br,
+    Identity,
+    Chunked,
+} CEncoding;
+
+#define MAX_ENCODING 8
+struct CEncodingArray {
+    const CEncoding* ptr;
+    size_t len;
+    CEncoding buffer[MAX_ENCODING];
+};
+
 typedef struct {
     ProlensDirection (*direction)(void* pkt_ptr);
     L7Proto (*l7_proto)(void* pkt_ptr);
@@ -64,7 +82,9 @@ typedef void (*CbOrdPkt)(void *pkt_ptr, const void *ctx);
 typedef void (*CbData)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx);
 typedef void (*CbDirData)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx, ProlensDirection dir);
 typedef void (*CbDirEvt)(const void *ctx, ProlensDirection dir);
-typedef void (*CbBody)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx, ProlensDirection dir, CTransferEncoding te);    
+typedef void (*CbBody)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx, ProlensDirection dir, CTransferEncoding te);
+typedef void (*CbHttpBody)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx, ProlensDirection dir,
+                           struct CEncodingArray ce, struct CEncodingArray te);
 
 void        prolens_init_vtable(PacketVTable vtable);
 FfiProlens *prolens_new(void);
@@ -103,6 +123,11 @@ void prolens_set_cb_imap_body_stop(FfiProlens *prolens, CbDirEvt callback);
 void prolens_set_cb_imap_clt(FfiProlens *prolens, CbDirData callback);
 void prolens_set_cb_imap_srv(FfiProlens *prolens, CbDirData callback);
 
+void prolens_set_cb_http_start_line(FfiProlens *prolens, CbDirData callback);
+void prolens_set_cb_http_header(FfiProlens *prolens, CbDirData callback);
+void prolens_set_cb_http_body_start(FfiProlens *prolens, CbDirEvt callback);
+void prolens_set_cb_http_body(FfiProlens *prolens, CbHttpBody callback);
+void prolens_set_cb_imap_body_stop(FfiProlens *prolens, CbDirEvt callback);
 
 #ifdef __cplusplus
 }

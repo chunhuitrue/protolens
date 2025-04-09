@@ -1,3 +1,4 @@
+pub mod http;
 pub mod imap;
 pub mod ordpacket;
 pub mod pop3;
@@ -91,6 +92,30 @@ impl<F: FnMut(*mut c_void, Direction)> EvtCbFn for F {}
 pub trait BodyCbFn: FnMut(&[u8], u32, *mut c_void, Direction, Option<TransferEncoding>) {}
 impl<F: FnMut(&[u8], u32, *mut c_void, Direction, Option<TransferEncoding>)> BodyCbFn for F {}
 
+pub trait HttpBodyCbFn:
+    FnMut(
+    &[u8],
+    u32,
+    *mut c_void,
+    Direction,
+    &Option<Vec<Encoding>>,      // ce
+    &Option<Vec<Encoding>>,      // te
+)
+{
+}
+impl<
+    F: FnMut(
+        &[u8],
+        u32,
+        *mut c_void,
+        Direction,
+        &Option<Vec<Encoding>>, // ce
+        &Option<Vec<Encoding>>, // te
+    ),
+> HttpBodyCbFn for F
+{
+}
+
 pub(crate) type CbUser = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbPass = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbMailFrom = Rc<RefCell<dyn DataCbFn + 'static>>;
@@ -100,6 +125,8 @@ pub(crate) type CbClt = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbHeader = Rc<RefCell<dyn DataCbDirFn + 'static>>;
 pub(crate) type CbBodyEvt = Rc<RefCell<dyn EvtCbFn + 'static>>;
 pub(crate) type CbBody = Rc<RefCell<dyn BodyCbFn + 'static>>;
+pub(crate) type CbStartLine = Rc<RefCell<dyn DataCbDirFn + 'static>>;
+pub(crate) type CbHttpBody = Rc<RefCell<dyn HttpBodyCbFn + 'static>>;
 
 #[derive(Clone)]
 pub(crate) struct Callbacks {
@@ -123,51 +150,48 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
 {
     let mut cont_type = false;
-    let mut boundary = String::new();
+    let mut boundary = None;
     let mut te = None;
 
     loop {
         let (line, seq) = stm.readline_str().await?;
 
-        // 空行也回调。调用者知道header结束
         if let Some(cb) = cb_header {
             cb.borrow_mut()(line.as_bytes(), seq, cb_ctx, dir);
         }
 
         if line == "\r\n" {
-            let ret_bdry = if boundary.is_empty() {
-                None
-            } else {
-                Some(boundary)
-            };
-            return Ok((ret_bdry, te));
+            return Ok((boundary, te));
+        }
+
+        if te.is_none() {
+            te = transfer_encoding(line.as_bytes());
         }
 
         // content-type ext
         // 放在content-type前面是因为。只有content-type结束之后才能作这个判断。
         // 放在前面，cont_type 肯定为false
-        if cont_type && boundary.is_empty() {
+        if cont_type && boundary.is_none() {
             match content_type_ext(line) {
                 Ok((_, bdry)) => {
-                    boundary = bdry.to_string();
+                    boundary = Some(bdry.to_string());
+                    cont_type = false;
                 }
                 Err(_err) => {}
             }
         }
         // content-type
-        match content_type(line) {
-            Ok((_input, Some(bdry))) => {
-                cont_type = true;
-                boundary = bdry.to_string();
+        if boundary.is_none() {
+            match content_type(line) {
+                Ok((_input, Some(bdry))) => {
+                    cont_type = true;
+                    boundary = Some(bdry.to_string());
+                }
+                Ok((_input, None)) => {
+                    cont_type = true;
+                }
+                Err(_err) => {}
             }
-            Ok((_input, None)) => {
-                cont_type = true;
-            }
-            Err(_err) => {}
-        }
-
-        if te.is_none() {
-            te = transfer_encoding(line.as_bytes());
         }
     }
 }
@@ -334,7 +358,7 @@ pub(crate) fn dash_bdry(line: &str, bdry: &str) -> bool {
 // 如果是content type 不带bdry: Content-Type: multipart/mixed;
 // 返回: (input, None)
 // 如果不是content type 返回err
-fn content_type(input: &str) -> IResult<&str, Option<&str>> {
+pub(crate) fn content_type(input: &str) -> IResult<&str, Option<&str>> {
     let (input, _) = tag("Content-Type: ")(input)?;
 
     if let Some(start) = input.find("boundary=\"") {
@@ -345,16 +369,30 @@ fn content_type(input: &str) -> IResult<&str, Option<&str>> {
         let (input, _) = tag("\"")(input)?;
 
         Ok((input, Some(bdry)))
+    } else if let Some(start) = input.find("boundary=") {
+        let input = &input[start..];
+
+        let (input, _) = tag("boundary=")(input)?;
+        let (input, bdry) = take_till(|c| c == ';' || c == ' ' || c == '\r')(input)?;
+
+        Ok((input, Some(bdry)))
     } else {
         Ok((input, None))
     }
 }
 
-// \tboundary="----=_001_NextPart572182624333_=----"
-fn content_type_ext(input: &str) -> IResult<&str, &str> {
-    let (input, _) = tag("\tboundary=\"")(input)?;
-    let (input, bdry) = take_till(|c| c == '"')(input)?;
-    Ok((input, bdry))
+// \tboundary="----=_001_NextPart572182624333_=----" 或 \tboundary=----=_001_NextPart572182624333_=----
+pub(crate) fn content_type_ext(input: &str) -> IResult<&str, &str> {
+    if input.starts_with("\tboundary=\"") {
+        let (input, _) = tag("\tboundary=\"")(input)?;
+        let (input, bdry) = take_till(|c| c == '"')(input)?;
+        let (input, _) = tag("\"")(input)?;
+        Ok((input, bdry))
+    } else {
+        let (input, _) = tag("\tboundary=")(input)?;
+        let (input, bdry) = take_till(|c| c == ';' || c == ' ' || c == '\r')(input)?;
+        Ok((input, bdry))
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -364,6 +402,17 @@ pub enum TransferEncoding {
     Binary,
     QuotedPrintable,
     Base64,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Encoding {
+    Compress,
+    Deflate,
+    Gzip,
+    Lzma,
+    Br,
+    Identity,
+    Chunked,
 }
 
 fn transfer_encoding(input: &[u8]) -> Option<TransferEncoding> {
@@ -399,7 +448,15 @@ mod tests {
 
     #[test]
     fn test_content_type() {
-        // 测试用例1: 包含 boundary 的正常情况
+        // 不带引号,带\r\n
+        let input = "Content-Type: multipart/form-data; boundary=---------------------------43616034321\r\n";
+        let result = content_type(input);
+        assert!(result.is_ok());
+        let (rest, boundary) = result.unwrap();
+        assert_eq!(boundary, Some("---------------------------43616034321"));
+        assert_eq!(rest, "\r\n");
+
+        //  包含 boundary 的正常情况
         let input = "Content-Type: multipart/mixed; charset=utf-8; boundary=\"abc123\"";
         let result = content_type(input);
         assert!(result.is_ok());
@@ -407,7 +464,7 @@ mod tests {
         assert_eq!(boundary, Some("abc123"));
         assert!(rest.is_empty());
 
-        // 测试用例2: 包含 boundary 且后面还有其他参数
+        //  包含 boundary 且后面还有其他参数
         let input = "Content-Type: multipart/mixed; boundary=\"xyz789\"; other=value";
         let result = content_type(input);
         assert!(result.is_ok());
@@ -415,7 +472,7 @@ mod tests {
         assert_eq!(boundary, Some("xyz789"));
         assert_eq!(rest, "; other=value");
 
-        // 测试用例3: 不包含 boundary 的情况
+        // 不包含 boundary 的情况
         let input = "Content-Type: text/plain; charset=utf-8";
         let result = content_type(input);
         assert!(result.is_ok());
@@ -423,7 +480,7 @@ mod tests {
         assert_eq!(boundary, None);
         assert_eq!(rest, "text/plain; charset=utf-8");
 
-        // 测试用例4: 特殊字符的 boundary
+        //  特殊字符的 boundary
         let input = "Content-Type: multipart/mixed; boundary=\"----=_NextPart_000_0000_01D123456.789ABCDE\"";
         let result = content_type(input);
         assert!(result.is_ok());
@@ -431,9 +488,57 @@ mod tests {
         assert_eq!(boundary, Some("----=_NextPart_000_0000_01D123456.789ABCDE"));
         assert!(rest.is_empty());
 
-        // 测试用例5: 错误格式 - 不是以 Content-Type: 开头
+        // 不是以 Content-Type: 开头
         let input = "Wrong-Type: multipart/mixed; boundary=\"abc123\"";
         let result = content_type(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_content_type_ext() {
+        // 带引号的情况
+        let input = "\tboundary=\"----=_001_NextPart572182624333_=----\"";
+        let result = content_type_ext(input);
+        assert!(result.is_ok());
+        let (rest, boundary) = result.unwrap();
+        assert_eq!(boundary, "----=_001_NextPart572182624333_=----");
+        assert!(rest.is_empty());
+
+        // 不带引号的情况
+        let input = "\tboundary=----=_001_NextPart572182624333_=----";
+        let result = content_type_ext(input);
+        assert!(result.is_ok());
+        let (rest, boundary) = result.unwrap();
+        assert_eq!(boundary, "----=_001_NextPart572182624333_=----");
+        assert!(rest.is_empty());
+
+        // 不带引号且后面有分号的情况
+        let input = "\tboundary=----=_001_NextPart572182624333_=----;";
+        let result = content_type_ext(input);
+        assert!(result.is_ok());
+        let (rest, boundary) = result.unwrap();
+        assert_eq!(boundary, "----=_001_NextPart572182624333_=----");
+        assert_eq!(rest, ";");
+
+        // 不带引号且后面有空格的情况
+        let input = "\tboundary=----=_001_NextPart572182624333_=---- ";
+        let result = content_type_ext(input);
+        assert!(result.is_ok());
+        let (rest, boundary) = result.unwrap();
+        assert_eq!(boundary, "----=_001_NextPart572182624333_=----");
+        assert_eq!(rest, " ");
+
+        // 不带引号且后面有回车的情况
+        let input = "\tboundary=----=_001_NextPart572182624333_=----\r\n";
+        let result = content_type_ext(input);
+        assert!(result.is_ok());
+        let (rest, boundary) = result.unwrap();
+        assert_eq!(boundary, "----=_001_NextPart572182624333_=----");
+        assert_eq!(rest, "\r\n");
+
+        // 格式错误的情况
+        let input = "\twrong=----=_001_NextPart572182624333_=----";
+        let result = content_type_ext(input);
         assert!(result.is_err());
     }
 
