@@ -8,6 +8,7 @@ use crate::packet::Direction;
 use crate::packet::TransProto;
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::net::IpAddr;
 use std::rc::Rc;
 
 #[repr(C)]
@@ -355,6 +356,14 @@ type CbBody = extern "C" fn(
     ctx: *const c_void,
     dir: Direction,
     te: CTransferEncoding,
+);
+type CbFtpLink = extern "C" fn(
+    ip_ptr: *const u8,
+    ip_len: usize,
+    ip_type: u8, // 0表示无IP，1表示IPv4，2表示IPv6
+    port: u16,
+    ctx: *const c_void,
+    dir: Direction,
 );
 
 const MAX_ENCODING: usize = 8;
@@ -801,4 +810,64 @@ pub extern "C" fn prolens_set_cb_http_body_stop(
         callback.unwrap()(ctx, dir);
     };
     prolens.0.set_cb_http_body_stop(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_ftp_clt(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_ftp_clt(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_ftp_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_ftp_srv(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_ftp_link(prolens: *mut FfiProlens, callback: Option<CbFtpLink>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ip: Option<IpAddr>, port: u16, ctx: *mut c_void, dir: Direction| {
+        let mut ip_bytes: [u8; 16] = [0; 16];
+        let mut ip_len: usize = 0;
+        let mut ip_type: u8 = 0;
+
+        if let Some(addr) = ip {
+            match addr {
+                IpAddr::V4(ipv4) => {
+                    let octets = ipv4.octets();
+                    ip_bytes[..4].copy_from_slice(&octets);
+                    ip_len = 4;
+                    ip_type = 1;
+                }
+                IpAddr::V6(ipv6) => {
+                    let octets = ipv6.octets();
+                    ip_bytes.copy_from_slice(&octets);
+                    ip_len = 16;
+                    ip_type = 2;
+                }
+            }
+        }
+
+        callback.unwrap()(ip_bytes.as_ptr(), ip_len, ip_type, port, ctx, dir);
+    };
+    prolens.0.set_cb_ftp_link(wrapper);
 }

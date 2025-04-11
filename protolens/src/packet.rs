@@ -13,6 +13,8 @@ pub enum L7Proto {
     Pop3,
     Imap,
     Http,
+    FtpCmd,
+    FtpData,
 
     #[cfg(test)]
     RawPacket,

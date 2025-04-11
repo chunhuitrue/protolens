@@ -23,11 +23,9 @@ use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::CbBody;
-use crate::CbBodyEvt;
-use crate::CbHeader;
 use crate::config::*;
 use crate::enum_map::EnumMap;
+use crate::ftpcmd::*;
 use crate::heap::*;
 use crate::http::*;
 use crate::imap::*;
@@ -93,6 +91,9 @@ where
     cb_http_body_start: Option<CbBodyEvt>,
     cb_http_body: Option<CbHttpBody>,
     cb_http_body_stop: Option<CbBodyEvt>,
+    cb_ftp_clt: Option<CbClt>,
+    cb_ftp_srv: Option<CbSrv>,
+    cb_ftp_link: Option<CbFtpLink>,
 
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
@@ -160,6 +161,9 @@ where
             cb_http_body_start: None,
             cb_http_body: None,
             cb_http_body_stop: None,
+            cb_ftp_clt: None,
+            cb_ftp_srv: None,
+            cb_ftp_link: None,
         };
         prolens.regist_parsers();
         prolens
@@ -182,6 +186,8 @@ where
             .insert(L7Proto::Imap, Box::new(ImapFactory::<T, P>::new()));
         self.parsers
             .insert(L7Proto::Http, Box::new(HttpFactory::<T, P>::new()));
+        self.parsers
+            .insert(L7Proto::FtpCmd, Box::new(FtpCmdFactory::<T, P>::new()));
 
         #[cfg(test)]
         {
@@ -483,6 +489,27 @@ where
         F: EvtCbFn + 'static,
     {
         self.cb_http_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
+
+    pub fn set_cb_ftp_clt<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_ftp_clt = Some(Rc::new(RefCell::new(callback)) as CbClt);
+    }
+
+    pub fn set_cb_ftp_srv<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_ftp_srv = Some(Rc::new(RefCell::new(callback)) as CbSrv);
+    }
+
+    pub fn set_cb_ftp_link<F>(&mut self, callback: F)
+    where
+        F: FtpLinkCbFn + 'static,
+    {
+        self.cb_ftp_link = Some(Rc::new(RefCell::new(callback)) as CbFtpLink);
     }
 }
 

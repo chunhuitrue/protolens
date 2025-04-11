@@ -1,3 +1,4 @@
+pub mod ftpcmd;
 pub mod http;
 pub mod imap;
 pub mod ordpacket;
@@ -34,6 +35,7 @@ use nom::{
 };
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::rc::Rc;
 
@@ -116,6 +118,9 @@ impl<
 {
 }
 
+pub trait FtpLinkCbFn: FnMut(Option<IpAddr>, u16, *mut c_void, Direction) {}
+impl<F: FnMut(Option<IpAddr>, u16, *mut c_void, Direction)> FtpLinkCbFn for F {}
+
 pub(crate) type CbUser = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbPass = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbMailFrom = Rc<RefCell<dyn DataCbFn + 'static>>;
@@ -127,6 +132,7 @@ pub(crate) type CbBodyEvt = Rc<RefCell<dyn EvtCbFn + 'static>>;
 pub(crate) type CbBody = Rc<RefCell<dyn BodyCbFn + 'static>>;
 pub(crate) type CbStartLine = Rc<RefCell<dyn DataCbDirFn + 'static>>;
 pub(crate) type CbHttpBody = Rc<RefCell<dyn HttpBodyCbFn + 'static>>;
+pub(crate) type CbFtpLink = Rc<RefCell<dyn FtpLinkCbFn + 'static>>;
 
 #[derive(Clone)]
 pub(crate) struct Callbacks {
