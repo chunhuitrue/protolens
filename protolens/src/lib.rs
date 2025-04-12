@@ -26,6 +26,7 @@ use std::sync::Arc;
 use crate::config::*;
 use crate::enum_map::EnumMap;
 use crate::ftpcmd::*;
+use crate::ftpdata::*;
 use crate::heap::*;
 use crate::http::*;
 use crate::imap::*;
@@ -65,6 +66,7 @@ where
     _phantom: PhantomData<P>,
 
     cb_ord_pkt: Option<CbOrdPkt<T>>,
+
     cb_smtp_user: Option<CbUser>,
     cb_smtp_pass: Option<CbPass>,
     cb_smtp_mailfrom: Option<CbMailFrom>,
@@ -74,26 +76,34 @@ where
     cb_smtp_body: Option<CbBody>,
     cb_smtp_body_stop: Option<CbBodyEvt>,
     cb_smtp_srv: Option<CbSrv>,
+
     cb_pop3_header: Option<CbHeader>,
     cb_pop3_body_start: Option<CbBodyEvt>,
     cb_pop3_body: Option<CbBody>,
     cb_pop3_body_stop: Option<CbBodyEvt>,
     cb_pop3_clt: Option<CbClt>,
     cb_pop3_srv: Option<CbSrv>,
+
     cb_imap_header: Option<CbHeader>,
     cb_imap_body_start: Option<CbBodyEvt>,
     cb_imap_body: Option<CbBody>,
     cb_imap_body_stop: Option<CbBodyEvt>,
     cb_imap_clt: Option<CbClt>,
     cb_imap_srv: Option<CbSrv>,
+
     cb_http_start_line: Option<CbStartLine>,
     cb_http_header: Option<CbHeader>,
     cb_http_body_start: Option<CbBodyEvt>,
     cb_http_body: Option<CbHttpBody>,
     cb_http_body_stop: Option<CbBodyEvt>,
+
     cb_ftp_clt: Option<CbClt>,
     cb_ftp_srv: Option<CbSrv>,
     cb_ftp_link: Option<CbFtpLink>,
+
+    cb_ftp_body_start: Option<CbBodyEvt>,
+    cb_ftp_body: Option<CbFtpBody>,
+    cb_ftp_body_stop: Option<CbBodyEvt>,
 
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
@@ -164,6 +174,9 @@ where
             cb_ftp_clt: None,
             cb_ftp_srv: None,
             cb_ftp_link: None,
+            cb_ftp_body_start: None,
+            cb_ftp_body: None,
+            cb_ftp_body_stop: None,
         };
         prolens.regist_parsers();
         prolens
@@ -188,6 +201,8 @@ where
             .insert(L7Proto::Http, Box::new(HttpFactory::<T, P>::new()));
         self.parsers
             .insert(L7Proto::FtpCmd, Box::new(FtpCmdFactory::<T, P>::new()));
+        self.parsers
+            .insert(L7Proto::FtpData, Box::new(FtpDataFactory::<T, P>::new()));
 
         #[cfg(test)]
         {
@@ -510,6 +525,27 @@ where
         F: FtpLinkCbFn + 'static,
     {
         self.cb_ftp_link = Some(Rc::new(RefCell::new(callback)) as CbFtpLink);
+    }
+
+    pub fn set_cb_ftp_body_start<F>(&mut self, callback: F)
+    where
+        F: EvtCbFn + 'static,
+    {
+        self.cb_ftp_body_start = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
+
+    pub fn set_cb_ftp_body<F>(&mut self, callback: F)
+    where
+        F: DataCbDirFn + 'static,
+    {
+        self.cb_ftp_body = Some(Rc::new(RefCell::new(callback)) as CbFtpBody);
+    }
+
+    pub fn set_cb_ftp_body_stop<F>(&mut self, callback: F)
+    where
+        F: EvtCbFn + 'static,
+    {
+        self.cb_ftp_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
     }
 }
 

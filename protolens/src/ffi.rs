@@ -871,3 +871,48 @@ pub extern "C" fn prolens_set_cb_ftp_link(prolens: *mut FfiProlens, callback: Op
     };
     prolens.0.set_cb_ftp_link(wrapper);
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_ftp_body_start(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirEvt>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(ctx, dir);
+    };
+    prolens.0.set_cb_ftp_body_start(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_ftp_body(prolens: *mut FfiProlens, callback: Option<CbDirData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx, dir);
+    };
+    prolens.0.set_cb_ftp_body(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn prolens_set_cb_ftp_body_stop(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirEvt>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(ctx, dir);
+    };
+    prolens.0.set_cb_ftp_body_stop(wrapper);
+}

@@ -1,4 +1,5 @@
 pub mod ftpcmd;
+pub mod ftpdata;
 pub mod http;
 pub mod imap;
 pub mod ordpacket;
@@ -133,6 +134,7 @@ pub(crate) type CbBody = Rc<RefCell<dyn BodyCbFn + 'static>>;
 pub(crate) type CbStartLine = Rc<RefCell<dyn DataCbDirFn + 'static>>;
 pub(crate) type CbHttpBody = Rc<RefCell<dyn HttpBodyCbFn + 'static>>;
 pub(crate) type CbFtpLink = Rc<RefCell<dyn FtpLinkCbFn + 'static>>;
+pub(crate) type CbFtpBody = Rc<RefCell<dyn DataCbDirFn + 'static>>;
 
 #[derive(Clone)]
 pub(crate) struct Callbacks {

@@ -12,6 +12,12 @@ use std::rc::Rc;
 use std::task::Context;
 use std::task::Poll;
 
+#[derive(Debug, PartialEq)]
+pub(crate) enum ReadError {
+    Eof,    // 连接已结束
+    NoData, // 没有足够的数据
+}
+
 enum FillRet {
     OK,    // 填充正常,
     Final, // buff满(尝试太多next而没真正读取), 或者fin。无法填充
@@ -251,31 +257,67 @@ where
     }
 
     // 严格读到n个字节返回。但最大不超过MAX_READ_BUFF
-    pub(crate) async fn readn(&mut self, n: usize) -> Result<(&[u8], u32), ()> {
+    pub(crate) async fn readn_err(&mut self, n: usize) -> Result<(&[u8], u32), ReadError> {
         if n > MAX_READ_BUFF {
-            return Err(());
+            return Err(ReadError::NoData);
         }
 
         for _ in 0..n {
             match self.next().await {
                 Some(_byte) => {}
                 None => {
-                    return Err(());
+                    if self.fin {
+                        return Err(ReadError::Eof);
+                    }
+                    return Err(ReadError::NoData);
                 }
             }
         }
         self.get_buff_data(0)
     }
 
-    // n可以大于MAX_READ_BUFF，但最大返回MAX_READ_BUFF
-    // 比如读1M读数据。循环传入剩余总量，但每次返回最大MAX_READ_BUFF
-    #[allow(dead_code)]
-    pub(crate) async fn read(&mut self, n: usize) -> Result<(&[u8], u32), ()> {
-        let num = std::cmp::min(n, MAX_READ_BUFF);
-        self.readn(num).await
+    pub(crate) async fn readn(&mut self, n: usize) -> Result<(&[u8], u32), ()> {
+        match self.readn_err(n).await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(()),
+        }
     }
 
-    async fn readline_inner(&mut self, ignore: usize) -> Result<(&[u8], u32), ()> {
+    // n可以大于MAX_READ_BUFF，但最大返回MAX_READ_BUFF
+    // 比如读1M读数据。循环传入剩余总量，但每次返回最大MAX_READ_BUFF
+    pub(crate) async fn read_err(&mut self, n: usize) -> Result<(&[u8], u32), ReadError> {
+        let num = std::cmp::min(n, MAX_READ_BUFF);
+        self.readn_err(num).await
+    }
+
+    pub(crate) async fn read(&mut self, n: usize) -> Result<(&[u8], u32), ()> {
+        match self.read_err(n).await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(()),
+        }
+    }
+
+    pub(crate) async fn read2eof(&mut self) -> Result<(&[u8], u32), ReadError> {
+        if self.fin {
+            return Err(ReadError::Eof);
+        }
+
+        let mut get_byte = false;
+        for _ in 0..MAX_READ_BUFF {
+            match self.next().await {
+                Some(_byte) => get_byte = true,
+                None => break,
+            }
+        }
+
+        if get_byte {
+            self.get_buff_data(0)
+        } else {
+            Err(ReadError::NoData)
+        }
+    }
+
+    async fn readline_inner(&mut self, ignore: usize) -> Result<(&[u8], u32), ReadError> {
         // 0: 正常读取
         // 1: 读到\r
         let mut state = 0;
@@ -302,40 +344,71 @@ where
                             }
                         }
                         _ => {
-                            return Err(());
+                            return Err(ReadError::NoData);
                         }
                     }
                 }
                 None => {
-                    return Err(());
+                    if self.fin {
+                        return Err(ReadError::Eof);
+                    }
+                    return Err(ReadError::NoData);
                 }
             }
         }
-        Err(())
+        Err(ReadError::NoData)
     }
 
     // 包含\r\n
-    pub(crate) async fn readline(&mut self) -> Result<(&[u8], u32), ()> {
+    pub(crate) async fn readline_err(&mut self) -> Result<(&[u8], u32), ReadError> {
         self.readline_inner(0).await
     }
 
-    pub(crate) async fn readline_str(&mut self) -> Result<(&str, u32), ()> {
-        let (line, seq) = self.readline().await?;
+    pub(crate) async fn readline(&mut self) -> Result<(&[u8], u32), ()> {
+        match self.readline_err().await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(()),
+        }
+    }
+
+    pub(crate) async fn readline_str_err(&mut self) -> Result<(&str, u32), ReadError> {
+        let (line, seq) = self.readline_err().await?;
         Ok((unsafe { std::str::from_utf8_unchecked(line) }, seq))
+    }
+
+    pub(crate) async fn readline_str(&mut self) -> Result<(&str, u32), ()> {
+        match self.readline_str_err().await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(()),
+        }
     }
 
     // 不带\r\n
-    pub(crate) async fn read_clean_line(&mut self) -> Result<(&[u8], u32), ()> {
+    pub(crate) async fn read_clean_line_err(&mut self) -> Result<(&[u8], u32), ReadError> {
         self.readline_inner(2).await
     }
 
+    pub(crate) async fn read_clean_line(&mut self) -> Result<(&[u8], u32), ()> {
+        match self.read_clean_line_err().await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(()),
+        }
+    }
+
     // 在read_clean_line基础上，返回str而不是u8
-    pub(crate) async fn read_clean_line_str(&mut self) -> Result<(&str, u32), ()> {
-        let (line, seq) = self.read_clean_line().await?;
+    pub(crate) async fn read_clean_line_str_err(&mut self) -> Result<(&str, u32), ReadError> {
+        let (line, seq) = self.read_clean_line_err().await?;
         Ok((unsafe { std::str::from_utf8_unchecked(line) }, seq))
     }
 
-    pub(crate) async fn peekline_str(&mut self) -> Result<&str, ()> {
+    pub(crate) async fn read_clean_line_str(&mut self) -> Result<(&str, u32), ()> {
+        match self.read_clean_line_str_err().await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(()),
+        }
+    }
+
+    pub(crate) async fn peekline_str_err(&mut self) -> Result<&str, ReadError> {
         // 0: 正常读取
         // 1: 读到\r
         let mut state = 0;
@@ -366,26 +439,36 @@ where
                             }
                         }
                         _ => {
-                            return Err(());
+                            return Err(ReadError::NoData);
                         }
                     }
                 }
                 None => {
-                    return Err(());
+                    if self.fin {
+                        return Err(ReadError::Eof);
+                    }
+                    return Err(ReadError::NoData);
                 }
             }
         }
-        Err(())
+        Err(ReadError::NoData)
+    }
+
+    pub(crate) async fn peekline_str(&mut self) -> Result<&str, ()> {
+        match self.peekline_str_err().await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(()),
+        }
     }
 
     // 有或者没有octect
     // 有则读到\r\n--bdry
     // 没有则读到 --bdry
     // 但不包括bdry结束的\r\n
-    pub(crate) async fn read_mime_octet(
+    pub(crate) async fn read_mime_octet_err(
         &mut self,
         bdry: &str,
-    ) -> Result<(ReadRet, &[u8], u32), ()> {
+    ) -> Result<(ReadRet, &[u8], u32), ReadError> {
         // 0: 正常读取
         // 1: 读到\r
         // 2: 读到\n
@@ -475,7 +558,7 @@ where
                             }
                         }
                         _ => {
-                            return Err(());
+                            return Err(ReadError::NoData);
                         }
                     }
                 }
@@ -483,7 +566,10 @@ where
                     // for 循环buff长度过程中如果返回None，不会是到达buff边界，只能是fin
                     // 如果读到fin都没读到dash bdry。说明有错。
                     // 虽然此时buff中仍然有读到的数据。但直接出错，不返回数据
-                    return Err(());
+                    if self.fin {
+                        return Err(ReadError::Eof);
+                    }
+                    return Err(ReadError::NoData);
                 }
             }
         }
@@ -494,6 +580,16 @@ where
         }
         let (data, seq) = self.get_buff_data(0)?;
         Ok((ReadRet::Data, data, seq))
+    }
+
+    pub(crate) async fn read_mime_octet(
+        &mut self,
+        bdry: &str,
+    ) -> Result<(ReadRet, &[u8], u32), ()> {
+        match self.read_mime_octet_err(bdry).await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(()),
+        }
     }
 
     pub(crate) fn get_read_size(&self) -> usize {
@@ -531,7 +627,7 @@ where
 
     // 返回试读过的数据, start到next - 1
     // ignore: 忽略尾部的数据长度。比如boundary \r\n
-    fn get_buff_data(&mut self, ignore: usize) -> Result<(&[u8], u32), ()> {
+    fn get_buff_data(&mut self, ignore: usize) -> Result<(&[u8], u32), ReadError> {
         let seq = self.next_seq - self.buff_len as u32;
         let data_len = self.buff_next - self.buff_start;
         let data = &self.buff[self.buff_start..(self.buff_start + data_len - ignore)];

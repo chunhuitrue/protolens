@@ -515,14 +515,20 @@ mod tests {
             if pkt.decode().is_err() {
                 continue;
             }
-            pkt.set_l7_proto(L7Proto::FtpCmd);
-            if pkt.header.borrow().as_ref().unwrap().dport() == 21 {
-                pkt.set_direction(Direction::C2s);
-            } else {
-                pkt.set_direction(Direction::S2c);
-            }
 
-            protolens.run_task(&mut task, pkt);
+            if pkt.header.borrow().as_ref().unwrap().dport() == 21
+                || pkt.header.borrow().as_ref().unwrap().sport() == 21
+            {
+                pkt.set_l7_proto(L7Proto::FtpCmd);
+
+                if pkt.header.borrow().as_ref().unwrap().dport() == 21 {
+                    pkt.set_direction(Direction::C2s);
+                } else {
+                    pkt.set_direction(Direction::S2c);
+                }
+
+                protolens.run_task(&mut task, pkt);
+            }
         }
 
         let expected_clt = [

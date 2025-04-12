@@ -86,6 +86,7 @@ typedef void (*CbBody)(const uint8_t *data, size_t len, uint32_t seq, const void
 typedef void (*CbHttpBody)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx, ProlensDirection dir,
                            struct CEncodingArray ce, struct CEncodingArray te);
 typedef void (*CbFtpLink)(const uint8_t *ip_ptr, size_t ip_len, uint8_t ip_type, uint16_t port, const void *ctx, ProlensDirection dir);
+typedef void (*CbFtpBody)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx, ProlensDirection dir);
 
 void        prolens_init_vtable(PacketVTable vtable);
 FfiProlens *prolens_new(void);
@@ -133,6 +134,10 @@ void prolens_set_cb_http_body_stop(FfiProlens *prolens, CbDirEvt callback);
 void prolens_set_cb_ftp_clt(FfiProlens *prolens, CbDirData callback);
 void prolens_set_cb_ftp_srv(FfiProlens *prolens, CbDirData callback);
 void prolens_set_cb_ftp_link(FfiProlens *prolens, CbFtpLink callback);
+
+void prolens_set_cb_ftp_body_start(FfiProlens *prolens, CbDirEvt callback);
+void prolens_set_cb_ftp_body(FfiProlens *prolens, CbFtpBody callback);
+void prolens_set_cb_ftp_body_stop(FfiProlens *prolens, CbDirEvt callback);
 
 #ifdef __cplusplus
 }

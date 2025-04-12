@@ -54,22 +54,6 @@ where
         }
     }
 
-    async fn c2s_parser_inner(
-        stream: *const PktStrm<T, P>,
-        cb_http: HttpCallbacks,
-        cb_ctx: *mut c_void,
-    ) -> Result<(), ()> {
-        Self::parser_inner(stream, cb_http, cb_ctx, req_version).await
-    }
-
-    async fn s2c_parser_inner(
-        stream: *const PktStrm<T, P>,
-        cb_http: HttpCallbacks,
-        cb_ctx: *mut c_void,
-    ) -> Result<(), ()> {
-        Self::parser_inner(stream, cb_http, cb_ctx, rsp_version).await
-    }
-
     async fn parser_inner(
         stream: *const PktStrm<T, P>,
         cb_http: HttpCallbacks,
@@ -353,8 +337,12 @@ where
             body_stop: self.cb_body_stop.clone(),
             dir: Direction::C2s,
         };
-
-        Some(Box::pin(Self::c2s_parser_inner(stream, cb_http, cb_ctx)))
+        Some(Box::pin(Self::parser_inner(
+            stream,
+            cb_http,
+            cb_ctx,
+            req_version,
+        )))
     }
 
     fn s2c_parser(
@@ -370,8 +358,12 @@ where
             body_stop: self.cb_body_stop.clone(),
             dir: Direction::S2c,
         };
-
-        Some(Box::pin(Self::s2c_parser_inner(stream, cb_http, cb_ctx)))
+        Some(Box::pin(Self::parser_inner(
+            stream,
+            cb_http,
+            cb_ctx,
+            rsp_version,
+        )))
     }
 }
 
@@ -450,158 +442,158 @@ enum HttpVersion {
     Unknown,
 }
 
-fn parse_req_version(input: &[u8]) -> IResult<&[u8], HttpVersion> {
-    let (input, _) = nom::bytes::complete::take_until(" ")(input)?;
-    let (input, _) = tag(b" ")(input)?;
-
-    let (input, _) = nom::bytes::complete::take_until(" ")(input)?;
-    let (input, _) = tag(b" ")(input)?;
-
-    let (input, _) = tag_no_case(b"HTTP/")(input)?;
-
-    let (input, version) = take_while1(|c: u8| c.is_ascii_digit() || c == b'.')(input)?;
-
-    let version = match version {
-        b"1.0" => HttpVersion::Http10,
-        b"1.1" => HttpVersion::Http11,
-        b"2.0" => HttpVersion::Http20,
-        _ => HttpVersion::Unknown,
-    };
-
-    Ok((input, version))
-}
-
 fn req_version(line: &[u8]) -> HttpVersion {
+    fn parse_req_version(input: &[u8]) -> IResult<&[u8], HttpVersion> {
+        let (input, _) = nom::bytes::complete::take_until(" ")(input)?;
+        let (input, _) = tag(b" ")(input)?;
+
+        let (input, _) = nom::bytes::complete::take_until(" ")(input)?;
+        let (input, _) = tag(b" ")(input)?;
+
+        let (input, _) = tag_no_case(b"HTTP/")(input)?;
+
+        let (input, version) = take_while1(|c: u8| c.is_ascii_digit() || c == b'.')(input)?;
+
+        let version = match version {
+            b"1.0" => HttpVersion::Http10,
+            b"1.1" => HttpVersion::Http11,
+            b"2.0" => HttpVersion::Http20,
+            _ => HttpVersion::Unknown,
+        };
+
+        Ok((input, version))
+    }
+
     match parse_req_version(line) {
         Ok((_, version)) => version,
         Err(_) => HttpVersion::Unknown,
     }
 }
 
-fn parse_rsp_version(input: &[u8]) -> IResult<&[u8], HttpVersion> {
-    let (input, _) = tag_no_case(b"HTTP/")(input)?;
-
-    let (input, version) = take_while1(|c: u8| c.is_ascii_digit() || c == b'.')(input)?;
-
-    let version = match version {
-        b"1.0" => HttpVersion::Http10,
-        b"1.1" => HttpVersion::Http11,
-        b"2.0" => HttpVersion::Http20,
-        _ => HttpVersion::Unknown,
-    };
-
-    Ok((input, version))
-}
-
 fn rsp_version(line: &[u8]) -> HttpVersion {
+    fn parse_rsp_version(input: &[u8]) -> IResult<&[u8], HttpVersion> {
+        let (input, _) = tag_no_case(b"HTTP/")(input)?;
+
+        let (input, version) = take_while1(|c: u8| c.is_ascii_digit() || c == b'.')(input)?;
+
+        let version = match version {
+            b"1.0" => HttpVersion::Http10,
+            b"1.1" => HttpVersion::Http11,
+            b"2.0" => HttpVersion::Http20,
+            _ => HttpVersion::Unknown,
+        };
+
+        Ok((input, version))
+    }
+
     match parse_rsp_version(line) {
         Ok((_, version)) => version,
         Err(_) => HttpVersion::Unknown,
     }
 }
 
-fn parse_content_length(input: &str) -> IResult<&str, usize> {
-    let (input, _) = tag_no_case("content-length:")(input)?;
-
-    let (input, _) = nom::character::complete::space0(input)?;
-
-    let (input, length) = map_res(nom::character::complete::digit1, |s: &str| {
-        s.parse::<usize>()
-    })(input)?;
-
-    Ok((input, length))
-}
-
 fn content_length(line: &str) -> Option<usize> {
+    fn parse_content_length(input: &str) -> IResult<&str, usize> {
+        let (input, _) = tag_no_case("content-length:")(input)?;
+
+        let (input, _) = nom::character::complete::space0(input)?;
+
+        let (input, length) = map_res(nom::character::complete::digit1, |s: &str| {
+            s.parse::<usize>()
+        })(input)?;
+
+        Ok((input, length))
+    }
+
     match parse_content_length(line) {
         Ok((_, length)) => Some(length),
         Err(_) => None,
     }
 }
 
-fn parse_transfer_encoding(input: &str) -> IResult<&str, Vec<Encoding>> {
-    let (input, _) = tag_no_case("Transfer-Encoding:")(input)?;
-    let (input, _) = take_while(|c| c == ' ')(input)?;
+fn transfer_encoding(line: &str) -> Option<Vec<Encoding>> {
+    fn parse_transfer_encoding(input: &str) -> IResult<&str, Vec<Encoding>> {
+        let (input, _) = tag_no_case("Transfer-Encoding:")(input)?;
+        let (input, _) = take_while(|c| c == ' ')(input)?;
 
-    let mut encodings = Vec::new();
-    let mut remaining = input;
+        let mut encodings = Vec::new();
+        let mut remaining = input;
 
-    loop {
-        let (input, encoding) = terminated(
-            alt((
-                value(Encoding::Compress, tag_no_case("compress")),
-                value(Encoding::Deflate, tag_no_case("deflate")),
-                value(Encoding::Gzip, tag_no_case("gzip")),
-                value(Encoding::Lzma, tag_no_case("lzma")),
-                value(Encoding::Br, tag_no_case("br")),
-                value(Encoding::Chunked, tag_no_case("chunked")),
-            )),
-            take_while(|c| c == ' ' || c == ','),
-        )(remaining)?;
+        loop {
+            let (input, encoding) = terminated(
+                alt((
+                    value(Encoding::Compress, tag_no_case("compress")),
+                    value(Encoding::Deflate, tag_no_case("deflate")),
+                    value(Encoding::Gzip, tag_no_case("gzip")),
+                    value(Encoding::Lzma, tag_no_case("lzma")),
+                    value(Encoding::Br, tag_no_case("br")),
+                    value(Encoding::Chunked, tag_no_case("chunked")),
+                )),
+                take_while(|c| c == ' ' || c == ','),
+            )(remaining)?;
 
-        encodings.push(encoding);
-        remaining = input;
+            encodings.push(encoding);
+            remaining = input;
 
-        if remaining.starts_with("\r\n") {
-            let (input, _) = tag("\r\n")(remaining)?;
-            return Ok((input, encodings));
+            if remaining.starts_with("\r\n") {
+                let (input, _) = tag("\r\n")(remaining)?;
+                return Ok((input, encodings));
+            }
         }
     }
-}
 
-fn transfer_encoding(line: &str) -> Option<Vec<Encoding>> {
     match parse_transfer_encoding(line) {
         Ok((_, encodings)) => Some(encodings),
         Err(_) => None,
     }
 }
 
-fn parse_content_encoding(input: &str) -> IResult<&str, Vec<Encoding>> {
-    let (input, _) = tag_no_case("Content-Encoding:")(input)?;
-    let (input, _) = take_while(|c| c == ' ')(input)?;
+fn content_encoding(line: &str) -> Option<Vec<Encoding>> {
+    fn parse_content_encoding(input: &str) -> IResult<&str, Vec<Encoding>> {
+        let (input, _) = tag_no_case("Content-Encoding:")(input)?;
+        let (input, _) = take_while(|c| c == ' ')(input)?;
 
-    let mut encodings = Vec::new();
-    let mut remaining = input;
+        let mut encodings = Vec::new();
+        let mut remaining = input;
 
-    loop {
-        let (input, encoding) = terminated(
-            alt((
-                value(Encoding::Compress, tag_no_case("compress")),
-                value(Encoding::Deflate, tag_no_case("deflate")),
-                value(Encoding::Gzip, tag_no_case("gzip")),
-                value(Encoding::Lzma, tag_no_case("lzma")),
-                value(Encoding::Br, tag_no_case("br")),
-                value(Encoding::Identity, tag_no_case("identity")),
-            )),
-            take_while(|c| c == ' ' || c == ','),
-        )(remaining)?;
+        loop {
+            let (input, encoding) = terminated(
+                alt((
+                    value(Encoding::Compress, tag_no_case("compress")),
+                    value(Encoding::Deflate, tag_no_case("deflate")),
+                    value(Encoding::Gzip, tag_no_case("gzip")),
+                    value(Encoding::Lzma, tag_no_case("lzma")),
+                    value(Encoding::Br, tag_no_case("br")),
+                    value(Encoding::Identity, tag_no_case("identity")),
+                )),
+                take_while(|c| c == ' ' || c == ','),
+            )(remaining)?;
 
-        encodings.push(encoding);
-        remaining = input;
+            encodings.push(encoding);
+            remaining = input;
 
-        if remaining.starts_with("\r\n") {
-            let (input, _) = tag("\r\n")(remaining)?;
-            return Ok((input, encodings));
+            if remaining.starts_with("\r\n") {
+                let (input, _) = tag("\r\n")(remaining)?;
+                return Ok((input, encodings));
+            }
         }
     }
-}
 
-fn content_encoding(line: &str) -> Option<Vec<Encoding>> {
     match parse_content_encoding(line) {
         Ok((_, encodings)) => Some(encodings),
         Err(_) => None,
     }
 }
 
-fn parse_chunk_size(input: &str) -> IResult<&str, usize> {
-    let (input, size) = map_res(take_while1(|c: char| c.is_ascii_hexdigit()), |s: &str| {
-        usize::from_str_radix(s, 16)
-    })(input)?;
-
-    Ok((input, size))
-}
-
 fn chunk_size(line: &str) -> Result<usize, ()> {
+    fn parse_chunk_size(input: &str) -> IResult<&str, usize> {
+        let (input, size) = map_res(take_while1(|c: char| c.is_ascii_hexdigit()), |s: &str| {
+            usize::from_str_radix(s, 16)
+        })(input)?;
+
+        Ok((input, size))
+    }
+
     match parse_chunk_size(line.trim()) {
         Ok((_, size)) => Ok(size),
         Err(_) => Err(()),

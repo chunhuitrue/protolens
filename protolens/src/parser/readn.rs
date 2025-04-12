@@ -50,7 +50,7 @@ where
         }
 
         while !stm.fin() {
-            match stm.readn(read_size).await {
+            match stm.readn_err(read_size).await {
                 Ok((bytes, seq)) => {
                     if let Some(ref cb) = cb_readn {
                         cb.borrow_mut()(bytes, seq, cb_ctx);
