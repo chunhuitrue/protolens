@@ -3,6 +3,7 @@ use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::StmCbFn;
+use crate::config::Config;
 use crate::packet::*;
 use core::{
     pin::Pin,
@@ -35,10 +36,10 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
-    pub(crate) fn new(cb_ctx: *mut c_void) -> Self {
+    pub(crate) fn new(conf: &Config, cb_ctx: *mut c_void) -> Self {
         Task {
-            stream_c2s: PktStrm::new(cb_ctx),
-            stream_s2c: PktStrm::new(cb_ctx),
+            stream_c2s: PktStrm::new(conf.pkt_buff, conf.read_buff, cb_ctx),
+            stream_s2c: PktStrm::new(conf.pkt_buff, conf.read_buff, cb_ctx),
             c2s_parser: None,
             s2c_parser: None,
             bdir_parser: None,

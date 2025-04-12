@@ -1,26 +1,26 @@
-pub(crate) const MAX_PKT_HEAP: usize = if cfg!(feature = "pkt_buff_1024") {
-    1024
-} else if cfg!(feature = "pkt_buff_512") {
-    512
-} else if cfg!(feature = "pkt_buff_256") {
-    256
-} else {
-    128
-};
+pub(crate) const MAX_PKT_BUFF: usize = 128;
+pub(crate) const MAX_READ_BUFF: usize = 2048;
 
-pub(crate) const MAX_READ_BUFF: usize = if cfg!(feature = "read_buff_2048") {
-    2048
-} else if cfg!(feature = "read_buff_1024") {
-    1024
-} else {
-    512
-};
-
-#[derive(Clone, Debug, Default)]
-pub struct Config {}
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub pkt_buff: usize,
+    pub read_buff: usize,
+}
 
 impl Config {
     pub fn new() -> Self {
-        Config {}
+        Config {
+            pkt_buff: 0,
+            read_buff: 0,
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        let mut conf = Self::new();
+        conf.pkt_buff = MAX_PKT_BUFF;
+        conf.read_buff = MAX_READ_BUFF;
+        conf
     }
 }

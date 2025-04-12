@@ -1,5 +1,4 @@
 use crate::Heap;
-use crate::config::*;
 use crate::packet::*;
 use futures::Future;
 use futures::future::poll_fn;
@@ -40,9 +39,10 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
-    heap: Heap<PacketWrapper<T, P>, MAX_PKT_HEAP>,
+    heap: Heap<PacketWrapper<T, P>>,
 
-    buff: Box<[u8; MAX_READ_BUFF]>,
+    max_buff: usize,
+    buff: Vec<u8>,
     buff_start: usize, // 开始的index(绝对值)
     buff_len: usize,
     buff_next: usize, // pool next的待读取的index（绝对值）
@@ -63,11 +63,12 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
-    pub(crate) fn new(cb_ctx: *const c_void) -> Self {
+    pub(crate) fn new(max_pkt_buff: usize, max_read_buff: usize, cb_ctx: *const c_void) -> Self {
         PktStrm {
-            heap: Heap::new(),
+            heap: Heap::new(max_pkt_buff),
 
-            buff: Box::new([0u8; MAX_READ_BUFF]),
+            max_buff: max_read_buff,
+            buff: vec![0; max_read_buff],
             buff_start: 0,
             buff_len: 0,
             buff_next: 0,
@@ -96,7 +97,7 @@ where
         if packet.ptr.trans_proto() != TransProto::Tcp {
             return;
         }
-        if self.heap.len() >= MAX_PKT_HEAP {
+        if self.heap.len() >= self.heap.capacity() {
             return;
         }
 
@@ -256,9 +257,9 @@ where
         self.fin
     }
 
-    // 严格读到n个字节返回。但最大不超过MAX_READ_BUFF
+    // 严格读到n个字节返回。但最大不超过max_buff
     pub(crate) async fn readn_err(&mut self, n: usize) -> Result<(&[u8], u32), ReadError> {
-        if n > MAX_READ_BUFF {
+        if n > self.max_buff {
             return Err(ReadError::NoData);
         }
 
@@ -283,10 +284,10 @@ where
         }
     }
 
-    // n可以大于MAX_READ_BUFF，但最大返回MAX_READ_BUFF
-    // 比如读1M读数据。循环传入剩余总量，但每次返回最大MAX_READ_BUFF
+    // n可以大于MAX_BUFF，但最大返回MAX_BUFF
+    // 比如读1M读数据。循环传入剩余总量，但每次返回最大MAX_BUFF
     pub(crate) async fn read_err(&mut self, n: usize) -> Result<(&[u8], u32), ReadError> {
-        let num = std::cmp::min(n, MAX_READ_BUFF);
+        let num = std::cmp::min(n, self.max_buff);
         self.readn_err(num).await
     }
 
@@ -303,7 +304,7 @@ where
         }
 
         let mut get_byte = false;
-        for _ in 0..MAX_READ_BUFF {
+        for _ in 0..self.max_buff {
             match self.next().await {
                 Some(_byte) => get_byte = true,
                 None => break,
@@ -323,7 +324,7 @@ where
         let mut state = 0;
 
         // 一行最多不能超过buff大小
-        for _ in 0..MAX_READ_BUFF {
+        for _ in 0..self.max_buff {
             match self.next().await {
                 Some(byte) => {
                     match state {
@@ -413,7 +414,7 @@ where
         // 1: 读到\r
         let mut state = 0;
 
-        for i in 0..MAX_READ_BUFF {
+        for i in 0..self.max_buff {
             match self.next().await {
                 Some(byte) => {
                     match state {
@@ -479,7 +480,7 @@ where
         let mut bdry_index = 0;
         let mut match_len = 0;
 
-        for _ in 0..MAX_READ_BUFF {
+        for _ in 0..self.max_buff {
             match self.next().await {
                 Some(byte) => {
                     match state {
@@ -659,6 +660,7 @@ where
         let mut filled = false;
         let buff_start = self.buff_start;
         let mut buff_len = self.buff_len;
+        let max_buff = self.max_buff;
 
         while let Some((pkt, next_seq)) = self.peek_ord_data_with_seq() {
             let seq = pkt.seq();
@@ -666,7 +668,7 @@ where
             let payload_len = payload.len();
             let payload_off = (next_seq - seq) as usize;
 
-            let space = MAX_READ_BUFF - (buff_start + buff_len);
+            let space = max_buff - (buff_start + buff_len);
             if space == 0 {
                 break;
             }
@@ -702,18 +704,18 @@ where
         // case 3: 后面没有空间，前面有空间，需要移动，并填充后面的空间。移动后就是case 2。
 
         // case 1
-        if self.buff_len >= MAX_READ_BUFF {
+        if self.buff_len >= self.max_buff {
             return FillRet::Final;
         }
 
         // 尽量避免移动，如果后面有空间，只填充后面即可
         // case 2
-        if self.buff_start + self.buff_len < MAX_READ_BUFF {
+        if self.buff_start + self.buff_len < self.max_buff {
             return self.fill_bottom();
         }
 
         // case 3
-        if self.buff_start + self.buff_len >= MAX_READ_BUFF && self.buff_start > 0 {
+        if self.buff_start + self.buff_len >= self.max_buff && self.buff_start > 0 {
             unsafe {
                 std::ptr::copy(
                     self.buff.as_ptr().add(self.buff_start),
@@ -798,6 +800,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::*;
     use crate::test_utils::*;
     use std::marker::PhantomData;
     use std::ptr;
@@ -814,7 +817,8 @@ mod tests {
 
     #[test]
     fn test_pktstrm_push() {
-        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<CapPacket, Rc<CapPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
 
         let pkt1 = make_pkt_data(123);
         let _ = pkt1.decode();
@@ -835,7 +839,8 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek() {
-        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut pkt_strm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -875,7 +880,8 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek_push_clone() {
-        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut pkt_strm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -915,7 +921,8 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek2() {
-        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
 
         let pkt1 = MyPacket::new(L7Proto::Unknown, 1, false);
         stm.push(PacketWrapper {
@@ -946,7 +953,8 @@ mod tests {
 
     #[test]
     fn test_pktstrm_pop() {
-        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut pkt_strm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -1034,7 +1042,8 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek_ord() {
-        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut pkt_strm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -1116,7 +1125,8 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek_ord2() {
-        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
@@ -1152,7 +1162,8 @@ mod tests {
     // 插入的包有完整重传
     #[test]
     fn test_pktstrm_peek_ord_retrans() {
-        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
@@ -1212,7 +1223,8 @@ mod tests {
     // 插入的包有覆盖重传
     #[test]
     fn test_pktstrm_peek_ord_cover() {
-        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
@@ -1271,7 +1283,8 @@ mod tests {
     // 有中间丢包
     #[test]
     fn test_pktstrm_peek_drop() {
-        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
@@ -1307,7 +1320,8 @@ mod tests {
     // 带数据，带fin。是否可以set fin标记？
     #[test]
     fn test_pkt_fin() {
-        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, true);
@@ -1326,7 +1340,8 @@ mod tests {
     // 用pop_ord_data，才会设置fin
     #[test]
     fn test_3pkt_fin() {
-        let mut stm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         // 1 - 10
         let seq1 = 1;
         let pkt1 = MyPacket::new(L7Proto::Unknown, seq1, false);
@@ -1364,7 +1379,8 @@ mod tests {
 
     #[test]
     fn test_pktstrm_pop_ord() {
-        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut pkt_strm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -1468,7 +1484,8 @@ mod tests {
 
     #[test]
     fn test_pktstrm_peek_ord_data() {
-        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut pkt_strm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -1540,7 +1557,8 @@ mod tests {
 
     #[test]
     fn test_pktstrm_pop_ord_data() {
-        let mut pkt_strm = PktStrm::<MyPacket, Rc<MyPacket>>::new(ptr::null_mut());
+        let mut pkt_strm =
+            PktStrm::<MyPacket, Rc<MyPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -1628,7 +1646,8 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<CapPacket, Rc<CapPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         stm.push(PacketWrapper {
             ptr: Rc::new(syn_pkt.clone()),
             _phantom: PhantomData,
@@ -1656,7 +1675,8 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<CapPacket, Rc<CapPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         stm.push(PacketWrapper {
             ptr: Rc::new(syn_pkt.clone()),
             _phantom: PhantomData,
@@ -1684,7 +1704,8 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<CapPacket, Rc<CapPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         stm.push(PacketWrapper {
             ptr: Rc::new(syn_pkt.clone()),
             _phantom: PhantomData,
@@ -1714,7 +1735,8 @@ mod tests {
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
 
-        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<CapPacket, Rc<CapPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         stm.push(PacketWrapper {
             ptr: Rc::new(syn_pkt.clone()),
             _phantom: PhantomData,
@@ -1756,7 +1778,8 @@ mod tests {
         let pkt4 = build_pkt_fin(seq4);
         let _ = pkt4.decode();
 
-        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<CapPacket, Rc<CapPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         stm.push(PacketWrapper {
             ptr: Rc::new(syn_pkt.clone()),
             _phantom: PhantomData,
@@ -1802,7 +1825,8 @@ mod tests {
         let pkt2 = build_pkt_fin(seq2);
         let _ = pkt2.decode();
 
-        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<CapPacket, Rc<CapPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         stm.push(PacketWrapper {
             ptr: Rc::new(pkt1.clone()),
             _phantom: PhantomData,
@@ -1846,7 +1870,8 @@ mod tests {
         let fin_pkt = build_pkt_fin(fin_seq);
         let _ = fin_pkt.decode();
 
-        let mut stm = PktStrm::<CapPacket, Rc<CapPacket>>::new(ptr::null_mut());
+        let mut stm =
+            PktStrm::<CapPacket, Rc<CapPacket>>::new(MAX_PKT_BUFF, MAX_READ_BUFF, ptr::null_mut());
         stm.push(PacketWrapper {
             ptr: Rc::new(syn_pkt.clone()),
             _phantom: PhantomData,

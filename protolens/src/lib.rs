@@ -60,7 +60,7 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
-    config: Config,
+    conf: Config,
     stats: Stats,
     parsers: EnumMap<Box<dyn ParserFactory<T, P>>>,
     _phantom: PhantomData<P>,
@@ -125,9 +125,9 @@ where
     P: PtrWrapper<T> + PtrNew<T> + 'static,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
-    pub fn new(config: &Config) -> Self {
+    pub fn new(conf: Config) -> Self {
         let mut prolens = Prolens {
-            config: config.clone(),
+            conf,
             stats: Stats::new(),
             parsers: EnumMap::new(),
             _phantom: PhantomData,
@@ -183,7 +183,7 @@ where
     }
 
     pub fn config(&self) -> &Config {
-        &self.config
+        &self.conf
     }
 
     fn regist_parsers(&mut self) {
@@ -234,7 +234,7 @@ where
     }
 
     pub(crate) fn new_task_ffi(&self, cb_ctx: *mut c_void) -> Box<Task<T, P>> {
-        Box::new(Task::new(cb_ctx))
+        Box::new(Task::new(&self.conf, cb_ctx))
     }
 
     pub fn run_task(&mut self, task: &mut Task<T, P>, pkt: T) -> Option<Result<(), ()>> {
@@ -556,8 +556,8 @@ where
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
     fn default() -> Self {
-        let config = Config::default();
-        Self::new(&config)
+        let conf = Config::default();
+        Self::new(conf)
     }
 }
 
@@ -570,7 +570,10 @@ mod tests {
 
     #[test]
     fn test_protolens_basic() {
-        let mut protolens = ProlensRc::<MyPacket>::default();
+        let mut conf = Config::new();
+        conf.pkt_buff = MAX_PKT_BUFF;
+        conf.read_buff = MAX_READ_BUFF;
+        let mut protolens = ProlensRc::<MyPacket>::new(conf);
 
         let mut task = protolens.new_task();
 

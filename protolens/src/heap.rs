@@ -2,27 +2,29 @@
 use std::cmp::Ordering;
 use std::mem::MaybeUninit;
 
-/// 基于定长数组的二叉堆实现
 #[derive(Debug)]
-pub(crate) struct Heap<T, const N: usize> {
-    data: Box<[MaybeUninit<T>; N]>,
+pub(crate) struct Heap<T> {
+    data: Vec<MaybeUninit<T>>,
     len: usize,
+    max_size: usize,
 }
 
-impl<T: Ord, const N: usize> Heap<T, N> {
-    pub(crate) fn new() -> Self {
-        let data = Box::new(unsafe {
-            std::mem::MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init()
-        });
-        Heap { data, len: 0 }
-    }
+impl<T: Ord> Heap<T> {
+    pub(crate) fn new(max_size: usize) -> Self {
+        let mut data = Vec::with_capacity(max_size);
+        for _ in 0..max_size {
+            data.push(MaybeUninit::uninit());
+        }
 
-    pub(crate) fn array_size() -> usize {
-        std::mem::size_of::<[MaybeUninit<T>; N]>()
+        Heap {
+            data,
+            len: 0,
+            max_size,
+        }
     }
 
     pub(crate) fn capacity(&self) -> usize {
-        N
+        self.max_size
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -38,7 +40,7 @@ impl<T: Ord, const N: usize> Heap<T, N> {
     }
 
     pub(crate) fn push(&mut self, item: T) -> bool {
-        if self.len >= N {
+        if self.len >= self.max_size {
             return false;
         }
         self.data[self.len].write(item);
@@ -133,13 +135,13 @@ mod tests {
 
     #[test]
     fn test_memory_size() {
-        let heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>, 32>::new();
+        let heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>>::new(32);
         assert_eq!(heap.capacity(), 32);
     }
 
     #[test]
     fn test_push_pop() {
-        let mut heap = Heap::<_, 5>::new();
+        let mut heap = Heap::<_>::new(5);
 
         assert!(heap.push(3));
         assert!(heap.push(1));
@@ -159,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_packet_ordering() {
-        let mut heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>, 5>::new();
+        let mut heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>>::new(5);
 
         let packet1 = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -212,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_packet_ordering_with_syn_fin() {
-        let mut heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>, 5>::new();
+        let mut heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>>::new(5);
 
         let syn_packet = MyPacket {
             l7_proto: L7Proto::Unknown,
@@ -274,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_heap_capacity_overflow() {
-        let mut heap = Heap::<_, 2>::new();
+        let mut heap = Heap::<_>::new(2);
 
         assert!(heap.push(1)); // ok, returns true
         assert!(heap.push(2)); // ok, returns true
