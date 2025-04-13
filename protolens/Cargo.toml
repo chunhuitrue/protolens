@@ -13,8 +13,13 @@ futures         = "0.3.31"
 futures-util    = "0.3.31"
 futures-channel = "0.3.31"
 nom             = "7.1.3"
-imap-proto = { path = "../imap-proto/", version = "0.16.5"}
+imap-proto      = { path = "../imap-proto/", version = "0.16.5"}
 
 [dev-dependencies]
 pcap       = "2.2.0"
 etherparse = "0.13.0"
+criterion  = "0.5.1"
+
+[[bench]]
+name    = "benchmark"
+harness = false

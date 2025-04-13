@@ -255,6 +255,16 @@ where
         task.run(wrapper)
     }
 
+    /// Returns a reference to the parser factory for the given protocol.
+    ///
+    /// Note: This method is primarily intended for testing and benchmarking.
+    /// It should not be used in production code.
+    #[doc(hidden)]
+    #[allow(unused)]
+    pub fn get_parser_factory(&self, proto: L7Proto) -> Option<&dyn ParserFactory<T, P>> {
+        self.parsers.get(&proto).map(|v| &**v)
+    }
+
     pub fn set_cb_task_c2s<F>(&self, task: &mut Task<T, P>, callback: F)
     where
         F: StmCbFn + 'static,
