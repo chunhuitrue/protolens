@@ -116,11 +116,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use nom::AsBytes;
-
     use super::*;
     use crate::config::MAX_READ_BUFF;
     use crate::test_utils::*;
+    use nom::AsBytes;
 
     #[test]
     fn test_readline_single_line() {

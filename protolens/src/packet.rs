@@ -22,7 +22,7 @@ pub enum L7Proto {
     Byte,
     #[cfg(test)]
     Read,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "bench"))]
     Readline,
     #[cfg(test)]
     Readn,

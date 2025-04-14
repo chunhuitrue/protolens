@@ -42,10 +42,7 @@ use std::rc::Rc;
 
 pub(crate) type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 
-/// Note: This trait is made public primarily for testing and benchmarking purposes.
-/// It is not intended to be implemented outside of this crate.
-#[doc(hidden)]
-pub trait Parser {
+pub(crate) trait Parser {
     type PacketType: PacketBind;
     type PtrType: PtrWrapper<Self::PacketType> + PtrNew<Self::PacketType>;
 
@@ -75,12 +72,7 @@ pub trait Parser {
     }
 }
 
-/// Parser factory trait for creating protocol parsers.
-///
-/// Note: This trait is made public primarily for testing and benchmarking purposes.
-/// It is not intended to be implemented outside of this crate.
-#[doc(hidden)]
-pub trait ParserFactory<T, P>
+pub(crate) trait ParserFactory<T, P>
 where
     T: PacketBind,
     P: PtrWrapper<T> + PtrNew<T>,

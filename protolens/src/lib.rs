@@ -7,21 +7,21 @@ mod parser;
 mod pktstrm;
 mod stats;
 mod task;
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 mod test_utils;
 
-pub use crate::packet::Direction;
-pub use crate::packet::L7Proto;
-pub use crate::packet::Packet;
-pub use crate::packet::TransProto;
-pub use crate::task::Task;
-
-use std::cell::RefCell;
-use std::ffi::c_void;
-use std::marker::PhantomData;
-use std::ptr;
-use std::rc::Rc;
-use std::sync::Arc;
+#[cfg(test)]
+use crate::byte::*;
+#[cfg(test)]
+use crate::octet::*;
+#[cfg(test)]
+use crate::rawpacket::*;
+#[cfg(test)]
+use crate::read::*;
+#[cfg(test)]
+use crate::readline::*;
+#[cfg(test)]
+use crate::readn::*;
 
 use crate::config::*;
 use crate::enum_map::EnumMap;
@@ -37,19 +37,18 @@ use crate::pktstrm::*;
 use crate::pop3::*;
 use crate::smtp::*;
 use crate::stats::*;
+use std::cell::RefCell;
+use std::ffi::c_void;
+use std::marker::PhantomData;
+use std::ptr;
+use std::rc::Rc;
+use std::sync::Arc;
 
-#[cfg(test)]
-use crate::byte::*;
-#[cfg(test)]
-use crate::octet::*;
-#[cfg(test)]
-use crate::rawpacket::*;
-#[cfg(test)]
-use crate::read::*;
-#[cfg(test)]
-use crate::readline::*;
-#[cfg(test)]
-use crate::readn::*;
+pub use crate::packet::Direction;
+pub use crate::packet::L7Proto;
+pub use crate::packet::Packet;
+pub use crate::packet::TransProto;
+pub use crate::task::Task;
 
 pub type ProlensRc<T> = Prolens<T, Rc<T>>;
 pub type ProlensArc<T> = Prolens<T, Arc<T>>;
@@ -253,16 +252,6 @@ where
             _phantom: PhantomData,
         };
         task.run(wrapper)
-    }
-
-    /// Returns a reference to the parser factory for the given protocol.
-    ///
-    /// Note: This method is primarily intended for testing and benchmarking.
-    /// It should not be used in production code.
-    #[doc(hidden)]
-    #[allow(unused)]
-    pub fn get_parser_factory(&self, proto: L7Proto) -> Option<&dyn ParserFactory<T, P>> {
-        self.parsers.get(&proto).map(|v| &**v)
     }
 
     pub fn set_cb_task_c2s<F>(&self, task: &mut Task<T, P>, callback: F)
@@ -738,5 +727,159 @@ mod tests {
             42 as *mut c_void,
             "Callback context should match"
         );
+    }
+}
+
+#[cfg(feature = "bench")]
+pub mod bench {
+    use super::*;
+    use crate::test_utils::Capture;
+    use crate::test_utils::build_pkt_payload;
+    use criterion::{Criterion, Throughput, black_box};
+    use std::env;
+    use std::rc::Rc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use test_utils::CapPacket;
+
+    pub fn task_new(c: &mut Criterion) {
+        let protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let mut group = c.benchmark_group("task_new");
+        group.throughput(Throughput::Elements(1));
+        group.bench_function("task_new", |b| b.iter(|| black_box(protolens.new_task())));
+        group.finish();
+    }
+
+    pub fn task_init(c: &mut Criterion) {
+        let protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let mut group = c.benchmark_group("task_init");
+        group.throughput(Throughput::Elements(1));
+        group.bench_function("task_init", |b| {
+            b.iter(|| {
+                let mut task = black_box(protolens.new_task());
+
+                if let Some(factory) = black_box(protolens.get_parser_factory(L7Proto::Http)) {
+                    let parser = factory.create(&protolens);
+                    task.init_parser(parser);
+                }
+            })
+        });
+        group.finish();
+    }
+
+    pub fn readline(c: &mut Criterion) {
+        let mut payload = Vec::with_capacity(100);
+        for _ in 0..10 {
+            payload.extend_from_slice(&[b'A'; 8]);
+            payload.extend_from_slice(b"\r\n");
+        }
+
+        let mut packets = Vec::with_capacity(100);
+        let mut seq = 1000;
+        for _ in 0..100 {
+            let pkt = build_pkt_payload(seq, &payload);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Readline);
+            packets.push(pkt);
+            seq += payload.len() as u32;
+        }
+
+        let mut protolens = black_box(Prolens::<CapPacket, Rc<CapPacket>>::default());
+        let mut task = black_box(protolens.new_task());
+
+        let mut group = c.benchmark_group("readline");
+        group.throughput(Throughput::Bytes(10000));
+        group.bench_function("readline", |b| {
+            b.iter_with_setup(
+                || packets.clone(),
+                |packets| {
+                    for pkt in packets {
+                        black_box(protolens.run_task(&mut task, pkt));
+                    }
+                },
+            )
+        });
+        group.finish();
+    }
+
+    fn bench_proto(c: &mut Criterion, name: &str, pcap_name: &str, proto: L7Proto, port: u16) {
+        let project_root = env::current_dir().unwrap();
+        let file_path = project_root.join(format!("tests/pcap/{}.pcap", pcap_name));
+        let mut cap = Capture::init(file_path).unwrap();
+
+        let mut total_bytes = 0;
+        let mut packets = Vec::new();
+        loop {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let pkt = cap.next_packet(now);
+            if pkt.is_none() {
+                break;
+            }
+            let pkt = pkt.unwrap();
+            if pkt.decode().is_err() {
+                continue;
+            }
+            pkt.set_l7_proto(proto);
+
+            if pkt.header.borrow().as_ref().unwrap().dport() == port {
+                pkt.set_direction(Direction::C2s);
+            } else {
+                pkt.set_direction(Direction::S2c);
+            }
+
+            total_bytes += pkt.payload_len();
+            packets.push(pkt);
+        }
+
+        let mut protolens = black_box(Prolens::<CapPacket, Rc<CapPacket>>::default());
+        let mut task = black_box(protolens.new_task());
+
+        let mut group = c.benchmark_group(name);
+        group.throughput(Throughput::Bytes(total_bytes.into()));
+        group.bench_function(name, |b| {
+            b.iter_with_setup(
+                || packets.clone(),
+                |packets| {
+                    for pkt in packets {
+                        black_box(protolens.run_task(&mut task, pkt));
+                    }
+                },
+            )
+        });
+        group.finish();
+    }
+
+    pub fn http(c: &mut Criterion) {
+        bench_proto(c, "http", "http_mime", L7Proto::Http, 80);
+    }
+
+    pub fn smtp(c: &mut Criterion) {
+        bench_proto(c, "smtp", "smtp", L7Proto::Smtp, 25);
+    }
+
+    pub fn pop3(c: &mut Criterion) {
+        bench_proto(c, "pop3", "pop3", L7Proto::Pop3, 110);
+    }
+
+    pub fn imap(c: &mut Criterion) {
+        bench_proto(c, "imap", "imap", L7Proto::Imap, 143);
+    }
+
+    impl<T, P> Prolens<T, P>
+    where
+        T: PacketBind,
+        P: PtrWrapper<T> + PtrNew<T> + 'static,
+        PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+    {
+        pub(crate) fn get_parser_factory(
+            &self,
+            proto: L7Proto,
+        ) -> Option<&dyn ParserFactory<T, P>> {
+            self.parsers.get(&proto).map(|v| &**v)
+        }
     }
 }
