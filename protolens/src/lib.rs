@@ -768,9 +768,24 @@ pub mod bench {
         group.finish();
     }
 
-    pub fn readline(c: &mut Criterion) {
-        let mut payload = Vec::with_capacity(100);
-        for _ in 0..10 {
+    pub fn readline100(c: &mut Criterion) {
+        readline(c, 100);
+    }
+
+    pub fn readline500(c: &mut Criterion) {
+        readline(c, 500);
+    }
+
+    pub fn readline1000(c: &mut Criterion) {
+        readline(c, 1000);
+    }
+
+    fn readline(c: &mut Criterion, pkt_len: usize) {
+        let pkt_len = pkt_len.max(100);
+        let lines_per_pkt = pkt_len / 10;
+
+        let mut payload = Vec::with_capacity(pkt_len);
+        for _ in 0..lines_per_pkt {
             payload.extend_from_slice(&[b'A'; 8]);
             payload.extend_from_slice(b"\r\n");
         }
@@ -789,8 +804,8 @@ pub mod bench {
         let mut task = black_box(protolens.new_task());
 
         let mut group = c.benchmark_group("readline");
-        group.throughput(Throughput::Bytes(10000));
-        group.bench_function("readline", |b| {
+        group.throughput(Throughput::Bytes((payload.len() * 100) as u64));
+        group.bench_function(format!("readline{}", pkt_len), |b| {
             b.iter_with_setup(
                 || packets.clone(),
                 |packets| {
@@ -801,6 +816,22 @@ pub mod bench {
             )
         });
         group.finish();
+    }
+
+    pub fn http(c: &mut Criterion) {
+        bench_proto(c, "http", "http_mime", L7Proto::Http, 80);
+    }
+
+    pub fn smtp(c: &mut Criterion) {
+        bench_proto(c, "smtp", "smtp", L7Proto::Smtp, 25);
+    }
+
+    pub fn pop3(c: &mut Criterion) {
+        bench_proto(c, "pop3", "pop3", L7Proto::Pop3, 110);
+    }
+
+    pub fn imap(c: &mut Criterion) {
+        bench_proto(c, "imap", "imap", L7Proto::Imap, 143);
     }
 
     fn bench_proto(c: &mut Criterion, name: &str, pcap_name: &str, proto: L7Proto, port: u16) {
@@ -851,22 +882,6 @@ pub mod bench {
             )
         });
         group.finish();
-    }
-
-    pub fn http(c: &mut Criterion) {
-        bench_proto(c, "http", "http_mime", L7Proto::Http, 80);
-    }
-
-    pub fn smtp(c: &mut Criterion) {
-        bench_proto(c, "smtp", "smtp", L7Proto::Smtp, 25);
-    }
-
-    pub fn pop3(c: &mut Criterion) {
-        bench_proto(c, "pop3", "pop3", L7Proto::Pop3, 110);
-    }
-
-    pub fn imap(c: &mut Criterion) {
-        bench_proto(c, "imap", "imap", L7Proto::Imap, 143);
     }
 
     impl<T, P> Prolens<T, P>
