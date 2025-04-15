@@ -1,4 +1,3 @@
-#![allow(unused)]
 use std::cmp::Ordering;
 use std::mem::MaybeUninit;
 

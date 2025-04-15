@@ -33,7 +33,7 @@ pub trait StmCbFn: FnMut(&[u8], u32, *const c_void) {}
 impl<F> StmCbFn for F where F: FnMut(&[u8], u32, *const c_void) {}
 pub type CbStrm = Rc<RefCell<dyn StmCbFn + 'static>>;
 
-pub struct PktStrm<T, P>
+pub(crate) struct PktStrm<T, P>
 where
     T: Packet,
     P: PtrWrapper<T> + PtrNew<T>,

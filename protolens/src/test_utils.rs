@@ -1,5 +1,6 @@
 #![allow(unused)]
-
+use crate::Direction;
+use crate::{L7Proto, Packet, TransProto};
 use etherparse::*;
 use pcap::Capture as PcapCap;
 use pcap::Offline;
@@ -7,73 +8,11 @@ use std::cell::RefCell;
 use std::fmt;
 use std::ops::Deref;
 use std::path::Path;
-use std::rc::Rc;
-
-use crate::Direction;
-use crate::{L7Proto, Packet, TransProto};
 
 pub(crate) const SMTP_PORT: u16 = 25;
 pub(crate) const POP3_PORT: u16 = 110;
 pub(crate) const IMAP_PORT: u16 = 143;
 pub(crate) const HTTP_PORT: u16 = 80;
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct PacketRef<T>
-where
-    T: Packet,
-{
-    inner: Rc<T>,
-}
-
-impl<T: Packet> PacketRef<T> {
-    fn new(pkt: T) -> Self {
-        Self {
-            inner: Rc::new(pkt),
-        }
-    }
-}
-
-impl<T: Packet> Packet for PacketRef<T> {
-    fn seq(&self) -> u32 {
-        self.inner.seq()
-    }
-
-    fn tu_sport(&self) -> u16 {
-        self.inner.tu_sport()
-    }
-
-    fn tu_dport(&self) -> u16 {
-        self.inner.tu_dport()
-    }
-
-    fn syn(&self) -> bool {
-        self.inner.syn()
-    }
-
-    fn fin(&self) -> bool {
-        self.inner.fin()
-    }
-
-    fn payload(&self) -> &[u8] {
-        self.inner.payload()
-    }
-
-    fn payload_len(&self) -> usize {
-        self.inner.payload_len()
-    }
-
-    fn trans_proto(&self) -> TransProto {
-        TransProto::Tcp
-    }
-
-    fn l7_proto(&self) -> L7Proto {
-        self.inner.l7_proto()
-    }
-
-    fn direction(&self) -> Direction {
-        self.inner.direction()
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct MyPacket {
@@ -317,7 +256,7 @@ impl Packet for CapPacket {
     }
 
     fn trans_proto(&self) -> TransProto {
-        if let Some(TransportHeader::Tcp(tcph)) = &self.header.borrow().as_ref().unwrap().transport
+        if let Some(TransportHeader::Tcp(_tcph)) = &self.header.borrow().as_ref().unwrap().transport
         {
             TransProto::Tcp
         } else {
@@ -459,7 +398,7 @@ pub(crate) fn build_pkt_nodata(seq: u32, fin: bool) -> CapPacket {
 // 独立的ack包，没有载荷
 pub(crate) fn build_pkt_ack(seq: u32, ack_seq: u32) -> CapPacket {
     //setup the packet headers
-    let mut builder = PacketBuilder::ethernet2(
+    let builder = PacketBuilder::ethernet2(
         [1, 2, 3, 4, 5, 6], //source mac
         [7, 8, 9, 10, 11, 12],
     ) //destionation mac
@@ -500,7 +439,7 @@ pub(crate) fn build_pkt_ack(seq: u32, ack_seq: u32) -> CapPacket {
 // 独立的syn包，没有载荷
 pub(crate) fn build_pkt_syn(seq: u32) -> CapPacket {
     //setup the packet headers
-    let mut builder = PacketBuilder::ethernet2(
+    let builder = PacketBuilder::ethernet2(
         [1, 2, 3, 4, 5, 6], //source mac
         [7, 8, 9, 10, 11, 12],
     ) //destionation mac
@@ -644,9 +583,6 @@ pub(crate) fn build_pkt_payload_fin(seq: u32, payload: &[u8]) -> CapPacket {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::*;
-    use crate::*;
-    use pcap::Packet;
 
     #[test]
     fn test_build_pkt() {

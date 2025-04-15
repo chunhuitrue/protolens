@@ -1,5 +1,3 @@
-#![allow(unused)]
-use crate::ParserFactory;
 use crate::packet::*;
 
 pub(crate) const MAX_ENUM: usize = 128;
@@ -43,7 +41,6 @@ impl<V> EnumMap<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::MyPacket;
 
     #[test]
     fn test_l7proto_values() {
@@ -105,7 +102,6 @@ mod tests {
 
     #[test]
     fn test_enum_map_multiple_types() {
-        // 测试不同类型的值
         let mut map_string = EnumMap::<String>::new();
         let mut map_vec = EnumMap::<Vec<i32>>::new();
 
