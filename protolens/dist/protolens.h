@@ -65,9 +65,15 @@ struct CEncodingArray {
 };
 
 typedef struct {
-    ProlensDirection (*direction)(void* pkt_ptr);
+    uint8_t ip_type;  // 0: Invalid, 1: IPv4, 2: IPv6
+    uint8_t octets[16];
+} CIpAddr;
+
+typedef struct {
     L7Proto (*l7_proto)(void* pkt_ptr);
     TransProto (*trans_proto)(void* pkt_ptr);
+    CIpAddr (*sip)(void* pkt_ptr);
+    CIpAddr (*dip)(void* pkt_ptr);
     uint16_t (*tu_sport)(void* pkt_ptr);
     uint16_t (*tu_dport)(void* pkt_ptr);
     uint32_t (*seq)(void* pkt_ptr);
@@ -78,7 +84,7 @@ typedef struct {
 } PacketVTable;
 
 typedef void (*CbStm)(const uint8_t *data, size_t data_len, uint32_t seq, const void *ctx);
-typedef void (*CbOrdPkt)(void *pkt_ptr, const void *ctx);
+typedef void (*CbOrdPkt)(void *pkt_ptr, const void *ctx, ProlensDirection dir);
 typedef void (*CbData)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx);
 typedef void (*CbDirData)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx, ProlensDirection dir);
 typedef void (*CbDirEvt)(const void *ctx, ProlensDirection dir);

@@ -38,14 +38,14 @@ where
     }
 
     async fn c2s_parser_inner(
-        stream: *const PktStrm<T, P>,
+        strm: *const PktStrm<T, P>,
         cb_next_byte: Option<CbByte>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
-        }
+            stm = &mut *(strm as *mut PktStrm<T, P>);
+        };
 
         while let Some(byte) = stm.next().await {
             if let Some(ref cb) = cb_next_byte {
@@ -74,13 +74,9 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn c2s_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
-            stream,
+            strm,
             self.cb_next_byte.clone(),
             cb_ctx,
         )))
@@ -118,7 +114,6 @@ mod tests {
 
     #[test]
     fn test_stream_next_single_packet() {
-        // 1 - 10
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, true);
         let _ = pkt1.decode();
@@ -143,9 +138,9 @@ mod tests {
     #[test]
     fn test_stream_next_multiple_packets() {
         let seq1 = 1;
-        let pkt1 = build_pkt(seq1, false); // 第一个包不带 fin
+        let pkt1 = build_pkt(seq1, false);
         let seq2 = 11;
-        let pkt2 = build_pkt(seq2, true); // 第二个包带 fin
+        let pkt2 = build_pkt(seq2, true);
         let _ = pkt1.decode();
         let _ = pkt2.decode();
         pkt1.set_l7_proto(L7Proto::Byte);
@@ -163,7 +158,6 @@ mod tests {
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
 
-        // 验证收到了两组相同的字节序列 (1-10, 1-10)
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         assert_eq!(*vec.borrow(), expected);
     }
@@ -186,25 +180,21 @@ mod tests {
 
         protolens.run_task(&mut task, pkt);
 
-        // 验证没有收到任何字节
         assert_eq!(vec.borrow().len(), 0);
     }
 
     // 测试多个连续包加一个fin包的情况
     #[test]
     fn test_stream_next_sequential_with_fin() {
-        // 创建三个带数据的包
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, false);
         let seq2 = 11;
         let pkt2 = build_pkt(seq2, false);
         let seq3 = 21;
         let pkt3 = build_pkt(seq3, false);
-        // 创建一个不带数据的fin包
         let seq4 = 31;
         let pkt4 = build_pkt_nodata(seq4, true);
 
-        // 解码所有包
         let _ = pkt1.decode();
         pkt1.set_l7_proto(L7Proto::Byte);
         let _ = pkt2.decode();
@@ -240,7 +230,6 @@ mod tests {
     // 测试带有纯ACK包的连续数据流
     #[test]
     fn test_stream_next_with_pure_ack() {
-        // 创建两个带数据的包
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, false);
         let seq2 = 11;

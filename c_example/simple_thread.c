@@ -8,15 +8,13 @@
 // 模拟一个简单的数据包结构
 typedef struct {
     uint32_t       seq;
+    uint32_t       sip;
+    uint32_t       dip;
     uint16_t       sport;
     uint16_t       dport;
     const uint8_t *payload;
     size_t         payload_len;
 } TestPacket;
-
-ProlensDirection packet_direction(void* packet) {
-    return C2S;
-}
 
 L7Proto packet_l7_proto(void* packet) {
     return SMTP;
@@ -24,6 +22,34 @@ L7Proto packet_l7_proto(void* packet) {
 
 TransProto packet_trans_proto(void* packet) {
     return TCP;
+}
+
+CIpAddr packet_sip(void* packet) {
+    TestPacket *pkt = (TestPacket*)packet;
+    CIpAddr addr = {
+        .ip_type = 1,  // IPv4
+        .octets = {0}
+    };
+
+    addr.octets[0] = (pkt->sip >> 24) & 0xFF;
+    addr.octets[1] = (pkt->sip >> 16) & 0xFF;
+    addr.octets[2] = (pkt->sip >> 8) & 0xFF;
+    addr.octets[3] = pkt->sip & 0xFF;
+    return addr;
+}
+
+CIpAddr packet_dip(void* packet) {
+    TestPacket *pkt = (TestPacket*)packet;
+    CIpAddr addr = {
+        .ip_type = 1,  // IPv4
+        .octets = {0}
+    };
+
+    addr.octets[0] = (pkt->dip >> 24) & 0xFF;
+    addr.octets[1] = (pkt->dip >> 16) & 0xFF;
+    addr.octets[2] = (pkt->dip >> 8) & 0xFF;
+    addr.octets[3] = pkt->dip & 0xFF;
+    return addr;
 }
 
 uint16_t packet_sport(void* packet) {
@@ -62,6 +88,8 @@ const uint8_t* packet_payload(void* packet) {
 static uint8_t payload[] = "EHLO\r\nAUTH LOGIN\r\nUSER root\r\nPASS 1234\r\n";
 static TestPacket test_packet = {
     .seq         = 1,
+    .sip         = 0x0A000001,  // 10.0.0.1
+    .dip         = 0x0A000002,  // 10.0.0.2
     .sport       = 12345,
     .dport       = 25,
     .payload     = payload,
@@ -85,9 +113,10 @@ void* thread_main(void* arg) {
     printf("Thread %d started\n", thread_id);
 
     PacketVTable vtable = {
-        .direction   = packet_direction,
         .l7_proto    = packet_l7_proto,
         .trans_proto = packet_trans_proto,
+        .sip         = packet_sip,
+        .dip         = packet_dip,
         .tu_sport    = packet_sport,
         .tu_dport    = packet_dport,
         .seq         = packet_seq,

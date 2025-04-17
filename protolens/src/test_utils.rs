@@ -6,13 +6,12 @@ use pcap::Capture as PcapCap;
 use pcap::Offline;
 use std::cell::RefCell;
 use std::fmt;
+use std::net::IpAddr;
 use std::ops::Deref;
 use std::path::Path;
 
-pub(crate) const SMTP_PORT: u16 = 25;
-pub(crate) const POP3_PORT: u16 = 110;
-pub(crate) const IMAP_PORT: u16 = 143;
-pub(crate) const HTTP_PORT: u16 = 80;
+pub(crate) const TEST_UTILS_SPORT: u16 = 5000;
+pub(crate) const TEST_UTILS_DPORT: u16 = 4000;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct MyPacket {
@@ -40,16 +39,20 @@ impl MyPacket {
 }
 
 impl Packet for MyPacket {
-    fn direction(&self) -> Direction {
-        Direction::C2s
-    }
-
     fn l7_proto(&self) -> L7Proto {
         self.l7_proto
     }
 
     fn trans_proto(&self) -> TransProto {
         TransProto::Tcp
+    }
+
+    fn sip(&self) -> IpAddr {
+        IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1))
+    }
+
+    fn dip(&self) -> IpAddr {
+        IpAddr::V4(std::net::Ipv4Addr::new(2, 2, 2, 2))
     }
 
     fn tu_sport(&self) -> u16 {
@@ -247,10 +250,6 @@ impl CapPacket {
 }
 
 impl Packet for CapPacket {
-    fn direction(&self) -> Direction {
-        self.header.borrow().as_ref().unwrap().direction
-    }
-
     fn l7_proto(&self) -> L7Proto {
         self.header.borrow().as_ref().unwrap().l7_proto
     }
@@ -261,6 +260,22 @@ impl Packet for CapPacket {
             TransProto::Tcp
         } else {
             TransProto::Udp
+        }
+    }
+
+    fn sip(&self) -> std::net::IpAddr {
+        match &self.header.borrow().as_ref().unwrap().ip {
+            Some(IpHeader::Version4(ipv4h, _)) => IpAddr::from(ipv4h.source),
+            Some(IpHeader::Version6(ipv6h, _)) => IpAddr::from(ipv6h.source),
+            None => IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+        }
+    }
+
+    fn dip(&self) -> std::net::IpAddr {
+        match &self.header.borrow().as_ref().unwrap().ip {
+            Some(IpHeader::Version4(ipv4h, _)) => IpAddr::from(ipv4h.destination),
+            Some(IpHeader::Version6(ipv6h, _)) => IpAddr::from(ipv6h.destination),
+            None => IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
         }
     }
 
@@ -364,9 +379,9 @@ pub(crate) fn build_pkt_nodata(seq: u32, fin: bool) -> CapPacket {
         20,
     ) //time to life
     .tcp(
-        25,   //source port
-        4000, //desitnation port
-        seq,  //sequence number
+        TEST_UTILS_SPORT, //source port
+        TEST_UTILS_DPORT, //desitnation port
+        seq,              //sequence number
         1024,
     ) //window size
     //set additional tcp header fields
@@ -408,9 +423,9 @@ pub(crate) fn build_pkt_ack(seq: u32, ack_seq: u32) -> CapPacket {
         20,
     ) //time to life
     .tcp(
-        25,   //source port
-        4000, //desitnation port
-        seq,  //sequence number
+        TEST_UTILS_SPORT, //source port
+        TEST_UTILS_DPORT, //desitnation port
+        seq,              //sequence number
         1024,
     ) //window size
     //set additional tcp header fields
@@ -449,9 +464,9 @@ pub(crate) fn build_pkt_syn(seq: u32) -> CapPacket {
         20,
     ) //time to life
     .tcp(
-        25,   //source port
-        4000, //desitnation port
-        seq,  //sequence number
+        TEST_UTILS_SPORT, //source port
+        TEST_UTILS_DPORT, //desitnation port
+        seq,              //sequence number
         1024,
     ) //window size
     //set additional tcp header fields
@@ -490,9 +505,9 @@ pub(crate) fn build_pkt(seq: u32, fin: bool) -> CapPacket {
         20,
     ) //time to life
     .tcp(
-        25,   //source port
-        4000, //desitnation port
-        seq,  //sequence number
+        TEST_UTILS_SPORT, //source port
+        TEST_UTILS_DPORT, //desitnation port
+        seq,              //sequence number
         1024,
     ) //window size
     //set additional tcp header fields
@@ -531,7 +546,13 @@ pub(crate) fn make_pkt_data(seq: u32) -> CapPacket {
 }
 
 // 接受任意长度的payload数组
-fn build_pkt_payload_inner(seq: u32, payload: &[u8], fin: bool) -> CapPacket {
+fn build_pkt_payload_inner(
+    seq: u32,
+    payload: &[u8],
+    sport: u16,
+    dport: u16,
+    fin: bool,
+) -> CapPacket {
     //setup the packet headers
     let mut builder = PacketBuilder::ethernet2(
         [1, 2, 3, 4, 5, 6],    //source mac
@@ -543,10 +564,10 @@ fn build_pkt_payload_inner(seq: u32, payload: &[u8], fin: bool) -> CapPacket {
         20,               //time to life
     )
     .tcp(
-        25,   //source port
-        4000, //desitnation port
-        seq,  //sequence number
-        1024, //window size
+        sport, //source port
+        dport, //desitnation port
+        seq,   //sequence number
+        1024,  //window size
     )
     //set additional tcp header fields
     .ns() //set the ns flag
@@ -573,11 +594,21 @@ fn build_pkt_payload_inner(seq: u32, payload: &[u8], fin: bool) -> CapPacket {
 
 // 接受任意长度的payload数组
 pub(crate) fn build_pkt_payload(seq: u32, payload: &[u8]) -> CapPacket {
-    build_pkt_payload_inner(seq, payload, false)
+    build_pkt_payload_inner(seq, payload, TEST_UTILS_SPORT, TEST_UTILS_DPORT, false)
 }
 
 pub(crate) fn build_pkt_payload_fin(seq: u32, payload: &[u8]) -> CapPacket {
-    build_pkt_payload_inner(seq, payload, true)
+    build_pkt_payload_inner(seq, payload, TEST_UTILS_SPORT, TEST_UTILS_DPORT, true)
+}
+
+pub(crate) fn build_pkt_payload2(
+    seq: u32,
+    payload: &[u8],
+    sport: u16,
+    dport: u16,
+    fin: bool,
+) -> CapPacket {
+    build_pkt_payload_inner(seq, payload, sport, dport, fin)
 }
 
 #[cfg(test)]
@@ -595,8 +626,8 @@ mod tests {
         // 验证 fin 标志 (通过 trait 方法)
         assert!(crate::Packet::fin(&pkt1));
         // 验证端口 (通过 trait 方法)
-        assert_eq!(25, crate::Packet::tu_sport(&pkt1));
-        assert_eq!(4000, crate::Packet::tu_dport(&pkt1));
+        assert_eq!(TEST_UTILS_SPORT, crate::Packet::tu_sport(&pkt1));
+        assert_eq!(TEST_UTILS_DPORT, crate::Packet::tu_dport(&pkt1));
 
         // 验证 IP (通过 header 获取)
         if let Some(IpHeader::Version4(ipv4, _)) = &pkt1.header.borrow().as_ref().unwrap().ip {
@@ -621,8 +652,8 @@ mod tests {
         // 验证 fin 标志 (通过 trait 方法)
         assert!(crate::Packet::fin(&pkt1));
         // 验证端口 (通过 trait 方法)
-        assert_eq!(25, crate::Packet::tu_sport(&pkt1));
-        assert_eq!(4000, crate::Packet::tu_dport(&pkt1));
+        assert_eq!(TEST_UTILS_SPORT, crate::Packet::tu_sport(&pkt1));
+        assert_eq!(TEST_UTILS_DPORT, crate::Packet::tu_dport(&pkt1));
         // 验证 IP (通过 header 获取)
         if let Some(IpHeader::Version4(ipv4, _)) = &pkt1.header.borrow().as_ref().unwrap().ip {
             assert_eq!([192, 168, 1, 1], ipv4.source);
@@ -643,8 +674,8 @@ mod tests {
         // 验证序列号 (通过 trait 方法)
         assert_eq!(1, crate::Packet::seq(&pkt1));
         // 验证端口 (通过 trait 方法)
-        assert_eq!(25, crate::Packet::tu_sport(&pkt1));
-        assert_eq!(4000, crate::Packet::tu_dport(&pkt1));
+        assert_eq!(TEST_UTILS_SPORT, crate::Packet::tu_sport(&pkt1));
+        assert_eq!(TEST_UTILS_DPORT, crate::Packet::tu_dport(&pkt1));
         // 先获取 header 的引用
         let header = pkt1.header.borrow();
         let header_ref = header.as_ref().unwrap();
@@ -673,8 +704,8 @@ mod tests {
         // 验证序列号 (通过 trait 方法)
         assert_eq!(1, crate::Packet::seq(&pkt1));
         // 验证端口 (通过 trait 方法)
-        assert_eq!(25, crate::Packet::tu_sport(&pkt1));
-        assert_eq!(4000, crate::Packet::tu_dport(&pkt1));
+        assert_eq!(TEST_UTILS_SPORT, crate::Packet::tu_sport(&pkt1));
+        assert_eq!(TEST_UTILS_DPORT, crate::Packet::tu_dport(&pkt1));
         // 先获取 header 的引用
         let header = pkt1.header.borrow();
         let header_ref = header.as_ref().unwrap();
@@ -707,8 +738,8 @@ mod tests {
         // 验证序列号 (通过 trait 方法)
         assert_eq!(1, crate::Packet::seq(&pkt1));
         // 验证端口 (通过 trait 方法)
-        assert_eq!(25, crate::Packet::tu_sport(&pkt1));
-        assert_eq!(4000, crate::Packet::tu_dport(&pkt1));
+        assert_eq!(TEST_UTILS_SPORT, crate::Packet::tu_sport(&pkt1));
+        assert_eq!(TEST_UTILS_DPORT, crate::Packet::tu_dport(&pkt1));
         // 先获取 header 的引用
         let header = pkt1.header.borrow();
         let header_ref = header.as_ref().unwrap();
@@ -776,8 +807,8 @@ mod tests {
         // 验证序列号 (通过 trait 方法)
         assert_eq!(1, crate::Packet::seq(&pkt1));
         // 验证端口 (通过 trait 方法)
-        assert_eq!(25, crate::Packet::tu_sport(&pkt1));
-        assert_eq!(4000, crate::Packet::tu_dport(&pkt1));
+        assert_eq!(TEST_UTILS_SPORT, crate::Packet::tu_sport(&pkt1));
+        assert_eq!(TEST_UTILS_DPORT, crate::Packet::tu_dport(&pkt1));
         // 先获取 header 的引用
         let header = pkt1.header.borrow();
         let header_ref = header.as_ref().unwrap();

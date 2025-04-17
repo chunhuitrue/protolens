@@ -46,9 +46,19 @@ pub(crate) trait Parser {
     type PacketType: PacketBind;
     type PtrType: PtrWrapper<Self::PacketType> + PtrNew<Self::PacketType>;
 
+    fn dir_confirm(
+        &self,
+        _c2s_strm: *const PktStrm<Self::PacketType, Self::PtrType>,
+        _s2c_strm: *const PktStrm<Self::PacketType, Self::PtrType>,
+        _c2s_port: u16,
+        _s2c_port: u16,
+    ) -> bool {
+        true // 默认先到的包就是c2s
+    }
+
     fn c2s_parser(
         &self,
-        _stream: *const PktStrm<Self::PacketType, Self::PtrType>,
+        _strm: *const PktStrm<Self::PacketType, Self::PtrType>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
@@ -56,7 +66,7 @@ pub(crate) trait Parser {
 
     fn s2c_parser(
         &self,
-        _stream: *const PktStrm<Self::PacketType, Self::PtrType>,
+        _strm: *const PktStrm<Self::PacketType, Self::PtrType>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
@@ -64,8 +74,8 @@ pub(crate) trait Parser {
 
     fn bdir_parser(
         &self,
-        _c2s_stream: *const PktStrm<Self::PacketType, Self::PtrType>,
-        _s2c_stream: *const PktStrm<Self::PacketType, Self::PtrType>,
+        _c2s_strm: *const PktStrm<Self::PacketType, Self::PtrType>,
+        _s2c_strm: *const PktStrm<Self::PacketType, Self::PtrType>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
@@ -82,6 +92,9 @@ where
         Self: Sized;
     fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>>;
 }
+
+pub trait OrdPktCbFn<T>: FnMut(T, *mut c_void, Direction) {}
+impl<F, T> OrdPktCbFn<T> for F where F: FnMut(T, *mut c_void, Direction) {}
 
 pub trait DataCbFn: FnMut(&[u8], u32, *mut c_void) {}
 impl<F: FnMut(&[u8], u32, *mut c_void)> DataCbFn for F {}
@@ -122,6 +135,7 @@ impl<
 pub trait FtpLinkCbFn: FnMut(Option<IpAddr>, u16, *mut c_void, Direction) {}
 impl<F: FnMut(Option<IpAddr>, u16, *mut c_void, Direction)> FtpLinkCbFn for F {}
 
+pub(crate) type CbOrdPkt<T> = Rc<RefCell<dyn OrdPktCbFn<T> + 'static>>;
 pub(crate) type CbUser = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbPass = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbMailFrom = Rc<RefCell<dyn DataCbFn + 'static>>;

@@ -38,16 +38,16 @@ where
     }
 
     async fn parser_inner(
-        stream: *const PktStrm<T, P>,
+        strm: *const PktStrm<T, P>,
         cb_body_start: Option<CbBodyEvt>,
         cb_body: Option<CbFtpBody>,
         cb_body_stop: Option<CbBodyEvt>,
         dir: Direction,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T, P>);
         }
 
         if let Some(cb) = cb_body_start {
@@ -83,13 +83,9 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn c2s_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::parser_inner(
-            stream,
+            strm,
             self.cb_body_start.clone(),
             self.cb_body.clone(),
             self.cb_body_stop.clone(),
@@ -98,13 +94,9 @@ where
         )))
     }
 
-    fn s2c_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+    fn s2c_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::parser_inner(
-            stream,
+            strm,
             self.cb_body_start.clone(),
             self.cb_body.clone(),
             self.cb_body_stop.clone(),
@@ -161,9 +153,10 @@ mod tests {
         let body_start_callback = {
             let current_body_clone = current_body.clone();
             move |_cb_ctx: *mut c_void, dir: Direction| {
-                if dir == Direction::S2c {
+                if dir == Direction::C2s {
                     let mut body_guard = current_body_clone.borrow_mut();
                     *body_guard = Vec::new();
+                    dbg!("body start");
                 }
             }
         };
@@ -171,9 +164,10 @@ mod tests {
         let body_callback = {
             let current_body_clone = current_body.clone();
             move |body: &[u8], _seq: u32, _cb_ctx: *mut c_void, dir: Direction| {
-                if dir == Direction::S2c {
+                if dir == Direction::C2s {
                     let mut body_guard = current_body_clone.borrow_mut();
                     body_guard.extend_from_slice(body);
+                    dbg!("body ", body.len());
                 }
             }
         };
@@ -182,10 +176,11 @@ mod tests {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
             move |_cb_ctx: *mut c_void, dir: Direction| {
-                if dir == Direction::S2c {
+                if dir == Direction::C2s {
                     let body_guard = current_body_clone.borrow();
                     let mut bodies_guard = bodies_clone.borrow_mut();
                     bodies_guard.push(body_guard.clone());
+                    dbg!("body end");
                 }
             }
         };
@@ -215,7 +210,6 @@ mod tests {
                 && pkt.header.borrow().as_ref().unwrap().sport() == 22578
             {
                 pkt.set_l7_proto(L7Proto::FtpData);
-                pkt.set_direction(Direction::S2c);
                 protolens.run_task(&mut task, pkt);
             }
         }

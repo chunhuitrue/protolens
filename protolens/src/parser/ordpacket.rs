@@ -1,17 +1,12 @@
+use crate::CbOrdPkt;
 use crate::Parser;
 use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
 use crate::packet::*;
-use std::cell::RefCell;
 use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::rc::Rc;
-
-pub trait OrdPktCbFn<T>: FnMut(T, *mut c_void) {}
-impl<F, T> OrdPktCbFn<T> for F where F: FnMut(T, *mut c_void) {}
-pub(crate) type CbOrdPkt<T> = Rc<RefCell<dyn OrdPktCbFn<T> + 'static>>;
 
 pub(crate) struct OrdPacketParser<T, P>
 where
@@ -34,21 +29,23 @@ where
         }
     }
 
-    async fn c2s_parser_inner(
+    async fn parser_inner(
         cb_ord_pkt: Option<CbOrdPkt<T>>,
-        stream: *const PktStrm<T, P>,
+        strm: *const PktStrm<T, P>,
+        dir: Direction,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T, P>);
         }
 
         while !stm.fin() {
             let pkt = stm.next_ord_pkt().await;
+
             if let Some(ref cb) = cb_ord_pkt {
                 if let Some(wrapper) = pkt {
-                    cb.borrow_mut()((*wrapper.ptr).clone(), cb_ctx);
+                    cb.borrow_mut()((*wrapper.ptr).clone(), cb_ctx, dir);
                 }
             }
         }
@@ -74,14 +71,20 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn c2s_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
-        Some(Box::pin(Self::c2s_parser_inner(
+    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+        Some(Box::pin(Self::parser_inner(
             self.cb_ord_pkt.clone(),
-            stream,
+            strm,
+            Direction::C2s,
+            cb_ctx,
+        )))
+    }
+
+    fn s2c_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+        Some(Box::pin(Self::parser_inner(
+            self.cb_ord_pkt.clone(),
+            strm,
+            Direction::S2c,
             cb_ctx,
         )))
     }
@@ -114,7 +117,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SMTP_PORT;
     use crate::test_utils::*;
+    use std::cell::RefCell;
     use std::env;
     use std::rc::Rc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -129,7 +134,7 @@ mod tests {
         let count = Rc::new(RefCell::new(0));
         let count_clone = count.clone();
 
-        let callback = move |pkt: CapPacket, _cb_ctx: *mut c_void| {
+        let callback = move |pkt: CapPacket, _cb_ctx: *mut c_void, _dir: Direction| {
             println!("Callback triggered with packet seq: {}", pkt.seq());
             let mut count = count_clone.borrow_mut();
             *count += 1;
@@ -211,7 +216,7 @@ mod tests {
         let vec = Rc::new(RefCell::new(Vec::<u8>::new()));
 
         let vec_clone = Rc::clone(&vec);
-        let callback = move |pkt: CapPacket, _cb_ctx: *mut c_void| {
+        let callback = move |pkt: CapPacket, _cb_ctx: *mut c_void, _dir: Direction| {
             // 获取包的payload并添加到结果向量中
             vec_clone.borrow_mut().extend(pkt.payload());
         };
@@ -256,7 +261,7 @@ mod tests {
         let vec = Rc::new(RefCell::new(Vec::<u8>::new()));
 
         let vec_clone = Rc::clone(&vec);
-        let callback = move |pkt: CapPacket, _cb_ctx: *mut c_void| {
+        let callback = move |pkt: CapPacket, _cb_ctx: *mut c_void, _dir: Direction| {
             // 获取包的payload并添加到结果向量中
             vec_clone.borrow_mut().extend(pkt.payload());
         };

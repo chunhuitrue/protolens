@@ -2,12 +2,15 @@
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <stdint.h>
 #include "../protolens/dist/protolens.h"
 
 #define SMTP_PCAP "../protolens/tests/pcap/smtp.pcap"
 
 typedef struct {
     uint32_t       seq;
+    uint32_t       sip;
+    uint32_t       dip;
     uint16_t       sport;
     uint16_t       dport;
     const uint8_t *payload;
@@ -25,6 +28,34 @@ ProlensDirection packet_direction(void* packet) {
 L7Proto packet_l7_proto(void* packet) {
     PcapPacket *pkt = (PcapPacket*)packet;
     return pkt->l7_proto;
+}
+
+CIpAddr packet_sip(void* packet) {
+    PcapPacket *pkt = (PcapPacket*)packet;
+    CIpAddr addr = {
+        .ip_type = 1,  // IPv4
+        .octets = {0}
+    };
+
+    addr.octets[0] = (pkt->sip >> 24) & 0xFF;
+    addr.octets[1] = (pkt->sip >> 16) & 0xFF;
+    addr.octets[2] = (pkt->sip >> 8) & 0xFF;
+    addr.octets[3] = pkt->sip & 0xFF;
+    return addr;
+}
+
+CIpAddr packet_dip(void* packet) {
+    PcapPacket *pkt = (PcapPacket*)packet;
+    CIpAddr addr = {
+        .ip_type = 1,  // IPv4
+        .octets = {0}
+    };
+
+    addr.octets[0] = (pkt->dip >> 24) & 0xFF;
+    addr.octets[1] = (pkt->dip >> 16) & 0xFF;
+    addr.octets[2] = (pkt->dip >> 8) & 0xFF;
+    addr.octets[3] = pkt->dip & 0xFF;
+    return addr;
 }
 
 TransProto packet_trans_proto(void* packet) {
@@ -112,6 +143,8 @@ void packet_handler(u_char *user_data, const struct pcap_pkthdr *pkthdr, const u
 
     // 填充数据包结构
     pcap_packet.seq         = ntohl(tcp_header->th_seq);
+    pcap_packet.sip         = ntohl(ip_header->ip_src.s_addr);
+    pcap_packet.dip         = ntohl(ip_header->ip_dst.s_addr);
     pcap_packet.sport       = ntohs(tcp_header->th_sport);
     pcap_packet.dport       = ntohs(tcp_header->th_dport);
     pcap_packet.payload     = payload;
@@ -143,9 +176,10 @@ int main(void) {
 
     // 设置 vtable
     PacketVTable vtable = {
-        .direction   = packet_direction,
         .l7_proto    = packet_l7_proto,
         .trans_proto = packet_trans_proto,
+        .sip         = packet_sip,
+        .dip         = packet_dip,
         .tu_sport    = packet_sport,
         .tu_dport    = packet_dport,
         .seq         = packet_seq,

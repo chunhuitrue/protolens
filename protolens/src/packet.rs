@@ -1,6 +1,7 @@
 use std::cmp::{Ord, Ordering, PartialOrd};
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::net::IpAddr;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -54,12 +55,13 @@ pub enum Direction {
 }
 
 pub trait Packet: Clone {
-    fn direction(&self) -> Direction;
     fn l7_proto(&self) -> L7Proto;
     fn trans_proto(&self) -> TransProto;
-    // tcp或者udp的源端口。否则为0
+    fn sip(&self) -> IpAddr;
+    fn dip(&self) -> IpAddr;
+    // tcp或者udp的源端口。否则为0。主机字节序
     fn tu_sport(&self) -> u16;
-    // tcp或者udp的目的端口。否则为0
+    // tcp或者udp的目的端口。否则为0。主机字节序
     fn tu_dport(&self) -> u16;
     // tcp 的原始seq。否则为0
     fn seq(&self) -> u32;
@@ -72,7 +74,6 @@ pub trait Packet: Clone {
 pub trait PacketBind: Packet + Ord + Debug + 'static {}
 impl<T: Packet + Ord + Debug + 'static> PacketBind for T {}
 
-// 表示可以用作包装器的智能指针
 pub trait PtrWrapper<T: ?Sized>: Clone + Deref<Target = T> {}
 impl<T: ?Sized> PtrWrapper<T> for Rc<T> {}
 impl<T: ?Sized> PtrWrapper<T> for Arc<T> {}

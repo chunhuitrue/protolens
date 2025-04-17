@@ -237,12 +237,11 @@ where
     }
 
     pub fn run_task(&mut self, task: &mut Task<T, P>, pkt: T) -> Option<Result<(), ()>> {
+        let mut parser = None;
         if !task.parser_inited && pkt.l7_proto() != L7Proto::Unknown {
             let proto = pkt.l7_proto();
             if self.parsers.contains_key(&proto) {
-                if let Some(factory) = self.parsers.get(&proto) {
-                    task.init_parser(factory.create(self));
-                }
+                parser = self.parsers.get(&proto).map(|factory| factory.create(self));
             }
         }
 
@@ -251,7 +250,7 @@ where
             ptr: P::new(pkt),
             _phantom: PhantomData,
         };
-        task.run(wrapper)
+        task.run(wrapper, parser)
     }
 
     pub fn set_cb_task_c2s<F>(&self, task: &mut Task<T, P>, callback: F)
@@ -600,7 +599,7 @@ mod tests {
         let vec_clone = Rc::clone(&vec);
 
         let mut protolens = ProlensRc::<MyPacket>::default();
-        protolens.set_cb_ord_pkt(move |pkt, _cb_ctx: *mut c_void| {
+        protolens.set_cb_ord_pkt(move |pkt, _cb_ctx: *mut c_void, _dir: Direction| {
             vec_clone.borrow_mut().push(pkt.seq());
         });
         let mut task = protolens.new_task();
@@ -627,7 +626,7 @@ mod tests {
 
         // pkt2之后识别成功，设置 parser
         let parser = SmtpParser::<MyPacket, Rc<MyPacket>>::new();
-        task.init_parser(Box::new(parser));
+        task.init_parser(Some(Box::new(parser)));
 
         // 继续处理数据包
         let pkt3 = MyPacket::new(L7Proto::Unknown, 3, false);
@@ -641,7 +640,7 @@ mod tests {
         // 设置 OrdPacket 回调（可选）
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
-        protolens.set_cb_ord_pkt(move |pkt, _| {
+        protolens.set_cb_ord_pkt(move |pkt, _, _dir| {
             vec_clone.borrow_mut().push(pkt.seq());
         });
 
@@ -660,7 +659,6 @@ mod tests {
         // 从原始指针恢复
         let mut recovered_task = unsafe { Box::from_raw(raw_ptr) };
 
-        // 继续处理新数据包验证功能正常
         let pkt3 = MyPacket::new(L7Proto::OrdPacket, 3, true);
         let result = protolens.run_task(&mut recovered_task, pkt3);
         assert!(
@@ -668,7 +666,6 @@ mod tests {
             "Should get parsing result after conversion"
         );
 
-        // 验证最终状态和回调结果
         assert_eq!(
             *vec.borrow(),
             vec![1, 2, 3],
@@ -686,7 +683,7 @@ mod tests {
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
 
-        protolens.set_cb_ord_pkt(move |pkt, cb_ctx| {
+        protolens.set_cb_ord_pkt(move |pkt, cb_ctx, _dir| {
             *ctx_clone.borrow_mut() = cb_ctx;
             vec_clone.borrow_mut().push(pkt.seq());
         });
@@ -706,7 +703,6 @@ mod tests {
         // 从原始指针恢复
         let mut recovered_task = unsafe { Box::from_raw(raw_ptr) };
 
-        // 继续处理新数据包验证功能正常
         let pkt3 = MyPacket::new(L7Proto::OrdPacket, 3, true);
         let result = protolens.run_task(&mut recovered_task, pkt3);
         assert!(
@@ -714,14 +710,12 @@ mod tests {
             "Should get parsing result after conversion"
         );
 
-        // 验证最终状态和回调结果
         assert_eq!(
             *vec.borrow(),
             vec![1, 2, 3],
             "Should collect all sequence numbers"
         );
 
-        // 检查共享的上下文指针
         assert_eq!(
             *ctx.borrow(),
             42 as *mut c_void,
@@ -760,7 +754,7 @@ pub mod bench {
                 let mut task = black_box(protolens.new_task());
 
                 if let Some(factory) = black_box(protolens.get_parser_factory(L7Proto::Http)) {
-                    let parser = factory.create(&protolens);
+                    let parser = Some(factory.create(&protolens));
                     task.init_parser(parser);
                 }
             })
@@ -834,7 +828,7 @@ pub mod bench {
         bench_proto(c, "imap", "imap", L7Proto::Imap, 143);
     }
 
-    fn bench_proto(c: &mut Criterion, name: &str, pcap_name: &str, proto: L7Proto, port: u16) {
+    fn bench_proto(c: &mut Criterion, name: &str, pcap_name: &str, proto: L7Proto, _port: u16) {
         let project_root = env::current_dir().unwrap();
         let file_path = project_root.join(format!("tests/pcap/{}.pcap", pcap_name));
         let mut cap = Capture::init(file_path).unwrap();
@@ -855,12 +849,6 @@ pub mod bench {
                 continue;
             }
             pkt.set_l7_proto(proto);
-
-            if pkt.header.borrow().as_ref().unwrap().dport() == port {
-                pkt.set_direction(Direction::C2s);
-            } else {
-                pkt.set_direction(Direction::S2c);
-            }
 
             total_bytes += pkt.payload_len();
             packets.push(pkt);

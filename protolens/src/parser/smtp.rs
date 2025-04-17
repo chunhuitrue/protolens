@@ -14,6 +14,7 @@ use crate::ParserFactory;
 use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
+use crate::SMTP_PORT;
 use crate::body;
 use crate::header;
 use crate::multi_body;
@@ -75,14 +76,14 @@ where
     }
 
     async fn c2s_parser_inner(
-        stream: *const PktStrm<T, P>,
+        strm: *const PktStrm<T, P>,
         cb: Callbacks,
         cb_smtp: SmtpCallbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T, P>);
         }
 
         // 验证起始HELO/EHLO命令, 如果命令不正确，则返回错误，无法继续解析
@@ -152,13 +153,13 @@ where
     }
 
     async fn s2c_parser_inner(
-        stream: *const PktStrm<T, P>,
+        strm: *const PktStrm<T, P>,
         cb_srv: Option<CbSrv>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T, P>);
         }
 
         loop {
@@ -184,11 +185,58 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn c2s_parser(
+    fn dir_confirm(
         &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+        c2s_strm: *const PktStrm<T, P>,
+        s2c_strm: *const PktStrm<T, P>,
+        c2s_port: u16,
+        s2c_port: u16,
+    ) -> bool {
+        let stm_c2s;
+        let stm_s2c;
+        unsafe {
+            stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
+            stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
+        }
+
+        if s2c_port == SMTP_PORT {
+            return true;
+        } else if c2s_port == SMTP_PORT {
+            return false;
+        }
+
+        if let Ok(payload) = stm_s2c.peek_payload() {
+            if payload.len() >= 4
+                && (payload.starts_with(b"220 ")
+                    || payload.starts_with(b"220-")
+                    || payload.starts_with(b"421 ")
+                    || payload.starts_with(b"421-"))
+            {
+                return true;
+            }
+
+            if payload.len() >= 4
+                && (payload.starts_with(b"HELO ") || payload.starts_with(b"EHLO "))
+            {
+                return false;
+            }
+        }
+
+        if let Ok(payload) = stm_c2s.peek_payload() {
+            if payload.len() >= 4
+                && (payload.starts_with(b"220 ")
+                    || payload.starts_with(b"220-")
+                    || payload.starts_with(b"421 ")
+                    || payload.starts_with(b"421-"))
+            {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         let cb_smtp = SmtpCallbacks {
             user: self.cb_user.clone(),
             pass: self.cb_pass.clone(),
@@ -205,18 +253,12 @@ where
             dir: Direction::C2s,
         };
 
-        Some(Box::pin(Self::c2s_parser_inner(
-            stream, cb, cb_smtp, cb_ctx,
-        )))
+        Some(Box::pin(Self::c2s_parser_inner(strm, cb, cb_smtp, cb_ctx)))
     }
 
-    fn s2c_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+    fn s2c_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::s2c_parser_inner(
-            stream,
+            strm,
             self.cb_srv.clone(),
             cb_ctx,
         )))
@@ -353,6 +395,7 @@ fn starts_with_helo(input: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SMTP_PORT;
     use crate::TransferEncoding;
     use crate::test_utils::*;
     use std::cell::RefCell;
@@ -427,7 +470,7 @@ mod tests {
     fn test_smtp_helo_ehlo() {
         let seq1 = 1;
         let wrong_command = *b"HELO tes\r\n";
-        let pkt1 = build_pkt_payload(seq1, &wrong_command);
+        let pkt1 = build_pkt_payload2(seq1, &wrong_command, 4000, SMTP_PORT, false);
         let _ = pkt1.decode();
         pkt1.set_l7_proto(L7Proto::Smtp);
 
@@ -439,14 +482,116 @@ mod tests {
 
         let seq2 = 1;
         let correct_commands = *b"EHLO tes\r\n";
-        let pkt2 = build_pkt_payload(seq2, &correct_commands);
+        let pkt2 = build_pkt_payload2(seq2, &correct_commands, 4000, SMTP_PORT, false);
         let _ = pkt2.decode();
+        pkt2.set_l7_proto(L7Proto::Smtp);
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         let mut task = protolens.new_task();
 
         let result = protolens.run_task(&mut task, pkt2);
         assert_eq!(result, None, "none is ok");
+    }
+
+    #[test]
+    fn test_smtp_not_smtp_port() {
+        let lines = [
+            "EHLO client.example.com\r\n",
+            "AUTH LOGIN\r\n",
+            "c2VuZGVyQGV4YW1wbGUuY29t\r\n", // user
+            "cGFzc3dvcmQxMjM=\r\n",         // pass
+        ];
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
+
+        let user_callback = {
+            let user_clone = captured_user.clone();
+            move |user: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut user_guard = user_clone.borrow_mut();
+                *user_guard = user.to_vec();
+            }
+        };
+
+        let pass_callback = {
+            let pass_clone = captured_pass.clone();
+            move |pass: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut pass_guard = pass_clone.borrow_mut();
+                *pass_guard = pass.to_vec();
+            }
+        };
+
+        let mut task = protolens.new_task();
+
+        protolens.set_cb_smtp_user(user_callback);
+        protolens.set_cb_smtp_pass(pass_callback);
+
+        let mut seq = 1000;
+        for line in lines {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload2(seq, line_bytes, 4000, 2500, false);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Smtp);
+
+            protolens.run_task(&mut task, pkt);
+            seq += line_bytes.len() as u32;
+        }
+
+        assert_eq!(
+            std::str::from_utf8(&captured_user.borrow()).unwrap(),
+            "c2VuZGVyQGV4YW1wbGUuY29t"
+        );
+        assert_eq!(
+            std::str::from_utf8(&captured_pass.borrow()).unwrap(),
+            "cGFzc3dvcmQxMjM="
+        );
+    }
+
+    #[test]
+    fn test_smtp_only_server() {
+        let lines = [
+            "220 smtp.qq.com Esmtp QQ QMail Server\r\n",
+            "250-smtp.qq.com\r\n",
+            "250-PIPELINING\r\n",
+        ];
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let captured_srv = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+
+        let srv_callback = {
+            let srv_clone = captured_srv.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut srv_guard = srv_clone.borrow_mut();
+                srv_guard.push(line.to_vec());
+            }
+        };
+
+        let mut task = protolens.new_task();
+
+        protolens.set_cb_smtp_srv(srv_callback);
+
+        let mut seq = 1000;
+        for line in lines {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload2(seq, line_bytes, 2500, 5000, false);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Smtp);
+
+            protolens.run_task(&mut task, pkt);
+            seq += line_bytes.len() as u32;
+        }
+
+        let srv_guard = captured_srv.borrow();
+        assert_eq!(srv_guard.len(), lines.len());
+        for (idx, expected) in lines.iter().enumerate() {
+            assert_eq!(
+                std::str::from_utf8(&srv_guard[idx]).unwrap(),
+                expected.trim_end()
+            );
+        }
     }
 
     #[test]
@@ -570,7 +715,7 @@ mod tests {
         let mut seq = 1000;
         for line in lines {
             let line_bytes = line.as_bytes();
-            let pkt = build_pkt_payload(seq, line_bytes);
+            let pkt = build_pkt_payload2(seq, line_bytes, 4000, SMTP_PORT, false);
             let _ = pkt.decode();
             pkt.set_l7_proto(L7Proto::Smtp);
 
@@ -855,7 +1000,6 @@ mod tests {
             pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
-
             seq += line_bytes.len() as u32;
         }
 
@@ -1001,7 +1145,6 @@ mod tests {
         let body_start_callback = {
             let current_body_clone = current_body.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
                 println!("Body start callback triggered");
@@ -1015,7 +1158,6 @@ mod tests {
                   _cb_ctx: *mut c_void,
                   _dir: Direction,
                   _te: Option<TransferEncoding>| {
-                // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
                 println!("Body callback: {} bytes", body.len());
@@ -1026,7 +1168,6 @@ mod tests {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
                 bodies_guard.push(body_guard.clone());
@@ -1277,7 +1418,6 @@ mod tests {
         let body_start_callback = {
             let current_body_clone = current_body.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
                 println!("Body start callback triggered");
@@ -1291,19 +1431,16 @@ mod tests {
                   _cb_ctx: *mut c_void,
                   _dir: Direction,
                   _te: Option<TransferEncoding>| {
-                // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
                 println!("Body callback: {} bytes", body.len());
             }
         };
 
-        // 新增：body_stop回调
         let body_stop_callback = {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
                 bodies_guard.push(body_guard.clone());
@@ -1516,7 +1653,6 @@ mod tests {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
                 bodies_guard.push(body_guard.clone());
@@ -1563,11 +1699,6 @@ mod tests {
                 continue;
             }
             pkt.set_l7_proto(L7Proto::Smtp);
-            if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT {
-                pkt.set_direction(Direction::C2s);
-            } else {
-                pkt.set_direction(Direction::S2c);
-            }
 
             protolens.run_task(&mut task, pkt);
         }

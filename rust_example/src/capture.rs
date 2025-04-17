@@ -1,13 +1,12 @@
 use etherparse::*;
 use pcap::Capture as PcapCap;
 use pcap::Offline;
-use protolens::{Direction, L7Proto, Packet, TransProto};
+use protolens::{L7Proto, Packet, TransProto};
 use std::cell::RefCell;
 use std::fmt;
+use std::net::IpAddr;
 use std::ops::Deref;
 use std::path::Path;
-
-use crate::recognize::SMTP_PORT_NET;
 
 pub const MAX_PACKET_LEN: usize = 2048;
 
@@ -156,14 +155,6 @@ impl CapPacket {
 }
 
 impl Packet for CapPacket {
-    fn direction(&self) -> Direction {
-        if self.tu_dport() == SMTP_PORT_NET {
-            Direction::C2s
-        } else {
-            Direction::S2c
-        }
-    }
-
     fn l7_proto(&self) -> L7Proto {
         self.header.borrow().as_ref().unwrap().l7_proto
     }
@@ -174,6 +165,22 @@ impl Packet for CapPacket {
             TransProto::Tcp
         } else {
             TransProto::Udp
+        }
+    }
+
+    fn sip(&self) -> std::net::IpAddr {
+        match &self.header.borrow().as_ref().unwrap().ip {
+            Some(IpHeader::Version4(ipv4h, _)) => IpAddr::from(ipv4h.source),
+            Some(IpHeader::Version6(ipv6h, _)) => IpAddr::from(ipv6h.source),
+            None => IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+        }
+    }
+
+    fn dip(&self) -> std::net::IpAddr {
+        match &self.header.borrow().as_ref().unwrap().ip {
+            Some(IpHeader::Version4(ipv4h, _)) => IpAddr::from(ipv4h.destination),
+            Some(IpHeader::Version6(ipv6h, _)) => IpAddr::from(ipv6h.destination),
+            None => IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
         }
     }
 

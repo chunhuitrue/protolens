@@ -197,7 +197,6 @@ where
     }
 
     // 严格有序。peek出一个带数据的严格有序的包。否则为none
-    #[allow(dead_code)]
     pub(crate) fn peek_ord_data(&mut self) -> Option<&T> {
         if let Some((pkt, _nex_seq)) = self.peek_ord_data_with_seq() {
             Some(pkt)
@@ -224,7 +223,7 @@ where
     }
 
     // 严格有序。pop一个带数据的严格有序的包。否则为none
-    #[allow(dead_code)]
+    #[allow(unused)]
     pub(crate) fn pop_ord_data(&mut self) -> Option<PacketWrapper<T, P>> {
         if self.fin {
             return None;
@@ -255,6 +254,15 @@ where
 
     pub(crate) fn fin(&self) -> bool {
         self.fin
+    }
+
+    // peek第一个有序数据包的payload
+    pub(crate) fn peek_payload(&mut self) -> Result<&[u8], ()> {
+        if let Some(pkt) = self.peek_ord_data() {
+            Ok(pkt.payload())
+        } else {
+            Err(())
+        }
     }
 
     // 严格读到n个字节返回。但最大不超过max_buff
@@ -812,7 +820,10 @@ mod tests {
         assert_eq!(72, pkt1.data_len);
         assert_eq!(62, pkt1.header.borrow().as_ref().unwrap().payload_offset);
         assert_eq!(10, pkt1.header.borrow().as_ref().unwrap().payload_len);
-        assert_eq!(25, pkt1.header.borrow().as_ref().unwrap().sport());
+        assert_eq!(
+            TEST_UTILS_SPORT,
+            pkt1.header.borrow().as_ref().unwrap().sport()
+        );
     }
 
     #[test]

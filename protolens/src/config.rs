@@ -1,6 +1,12 @@
 pub(crate) const MAX_PKT_BUFF: usize = 128;
 pub(crate) const MAX_READ_BUFF: usize = 2048;
 
+pub(crate) const SMTP_PORT: u16 = 25;
+pub(crate) const POP3_PORT: u16 = 110;
+pub(crate) const IMAP_PORT: u16 = 143;
+pub(crate) const HTTP_PORT: u16 = 80;
+pub(crate) const FTP_PORT: u16 = 21;
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub pkt_buff: usize,

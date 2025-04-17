@@ -41,12 +41,12 @@ where
     async fn c2s_parser_inner(
         cb_readn: Option<CbReadn>,
         read_size: usize,
-        stream: *const PktStrm<T, P>,
+        strm: *const PktStrm<T, P>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T, P>);
         }
 
         while !stm.fin() {
@@ -81,15 +81,11 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn c2s_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
             self.cb_readn.clone(),
             MAX_READN,
-            stream,
+            strm,
             cb_ctx,
         )))
     }

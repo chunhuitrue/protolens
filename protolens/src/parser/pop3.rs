@@ -5,6 +5,7 @@ use crate::CbClt;
 use crate::CbHeader;
 use crate::CbSrv;
 use crate::Direction;
+use crate::POP3_PORT;
 use crate::Parser;
 use crate::ParserFactory;
 use crate::ParserFuture;
@@ -142,6 +143,45 @@ where
     type PacketType = T;
     type PtrType = P;
 
+    fn dir_confirm(
+        &self,
+        c2s_strm: *const PktStrm<T, P>,
+        s2c_strm: *const PktStrm<T, P>,
+        c2s_port: u16,
+        s2c_port: u16,
+    ) -> bool {
+        let stm_c2s;
+        let stm_s2c;
+        unsafe {
+            stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
+            stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
+        }
+
+        if s2c_port == POP3_PORT {
+            return true;
+        } else if c2s_port == POP3_PORT {
+            return false;
+        }
+
+        if let Ok(payload) = stm_s2c.peek_payload() {
+            if payload.len() >= 4 && (payload.starts_with(b"+OK ")) {
+                return true;
+            }
+
+            if payload.len() >= 4 && (payload.starts_with(b"USER ")) {
+                return false;
+            }
+        }
+
+        if let Ok(payload) = stm_c2s.peek_payload() {
+            if payload.len() >= 4 && (payload.starts_with(b"+OK ")) {
+                return false;
+            }
+        }
+
+        true
+    }
+
     fn c2s_parser(
         &self,
         stream: *const PktStrm<T, P>,
@@ -156,7 +196,6 @@ where
             srv: None,
             dir: Direction::C2s,
         };
-
         Some(Box::pin(Self::c2s_parser_inner(stream, cb_pop3, cb_ctx)))
     }
 
@@ -174,7 +213,6 @@ where
             srv: self.cb_srv.clone(),
             dir: Direction::S2c,
         };
-
         Some(Box::pin(Self::s2c_parser_inner(stream, cb_pop3, cb_ctx)))
     }
 }
@@ -249,6 +287,7 @@ fn stls_answer(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::POP3_PORT;
     use crate::TransferEncoding;
     use crate::test_utils::*;
     use std::cell::RefCell;
@@ -284,6 +323,54 @@ mod tests {
         assert!(!stls_answer("+OK Ready to proceed"));
         assert!(!stls_answer("-ERR TLS not available"));
         assert!(!stls_answer(""));
+    }
+
+    #[test]
+    fn test_pop3_confirm_dir() {
+        let lines = [
+            "USER xiaomingming@163.com\r\n",
+            "PASS 1234567890123456\r\n",
+            "STAT\r\n",
+        ];
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let captured_clt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+
+        let clt_callback = {
+            let clt_clone = captured_clt.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut clt_guard = clt_clone.borrow_mut();
+                clt_guard.push(line.to_vec());
+            }
+        };
+
+        let mut task = protolens.new_task();
+
+        protolens.set_cb_pop3_clt(clt_callback);
+
+        let mut seq = 1000;
+        for line in lines.iter() {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload2(seq, line_bytes, 5000, 4000, false);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Pop3);
+
+            protolens.run_task(&mut task, pkt);
+            seq += line_bytes.len() as u32;
+        }
+
+        let clt_guard = captured_clt.borrow();
+        assert_eq!(clt_guard.len(), 3);
+        assert_eq!(
+            std::str::from_utf8(&clt_guard[0]).unwrap(),
+            "USER xiaomingming@163.com"
+        );
+        assert_eq!(
+            std::str::from_utf8(&clt_guard[1]).unwrap(),
+            "PASS 1234567890123456"
+        );
+        assert_eq!(std::str::from_utf8(&clt_guard[2]).unwrap(), "STAT");
     }
 
     #[test]
@@ -338,10 +425,9 @@ mod tests {
         let mut seq = 1000;
         for line in lines {
             let line_bytes = line.as_bytes();
-            let pkt = build_pkt_payload(seq, line_bytes);
+            let pkt = build_pkt_payload2(seq, line_bytes, POP3_PORT, 4000, false);
             let _ = pkt.decode();
             pkt.set_l7_proto(L7Proto::Pop3);
-            pkt.set_direction(Direction::S2c);
 
             protolens.run_task(&mut task, pkt);
             seq += line_bytes.len() as u32;
@@ -361,7 +447,16 @@ mod tests {
     }
 
     #[test]
-    fn test_pop3_multi_retr() {
+    fn test_pop3_multi_retr_pop3_port() {
+        test_pop3_multi_retr(POP3_PORT);
+    }
+
+    #[test]
+    fn test_pop3_multi_retr_not_pop3_port() {
+        test_pop3_multi_retr(1100);
+    }
+
+    fn test_pop3_multi_retr(port: u16) {
         let lines = [
             "+OK 111 octets\r\n",
             "From: sender@example.com\r\n",
@@ -410,7 +505,6 @@ mod tests {
         let body_start_callback = {
             let current_body_clone = current_body.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
                 println!("Body start callback triggered");
@@ -424,7 +518,6 @@ mod tests {
                   _cb_ctx: *mut c_void,
                   _dir: Direction,
                   _te: Option<TransferEncoding>| {
-                // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
                 println!("Body callback: {} bytes", body.len());
@@ -435,7 +528,6 @@ mod tests {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
                 bodies_guard.push(body_guard.clone());
@@ -452,13 +544,11 @@ mod tests {
         let mut seq = 1000;
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
-            let pkt = build_pkt_payload(seq, line_bytes);
+            let pkt = build_pkt_payload2(seq, line_bytes, port, 4000, false);
             let _ = pkt.decode();
             pkt.set_l7_proto(L7Proto::Pop3);
-            pkt.set_direction(Direction::S2c);
 
             protolens.run_task(&mut task, pkt);
-
             seq += line_bytes.len() as u32;
         }
 
@@ -543,7 +633,7 @@ mod tests {
                   te: Option<TransferEncoding>| {
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
-                // dbg!(te.clone(), std::str::from_utf8(body).unwrap());
+                dbg!(te.clone(), std::str::from_utf8(body).unwrap());
 
                 let mut current_te = current_te.borrow_mut();
                 if current_te.is_none() {
@@ -559,7 +649,6 @@ mod tests {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
                 bodies_guard.push(body_guard.clone());
@@ -578,7 +667,7 @@ mod tests {
         let srv_callback = {
             let srv_clone = captured_srv.clone();
             move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                // dbg!("in clt callback", std::str::from_utf8(line).unwrap());
+                dbg!("in clt callback", std::str::from_utf8(line).unwrap());
                 let mut srv_guard = srv_clone.borrow_mut();
                 srv_guard.push(line.to_vec());
             }
@@ -608,11 +697,6 @@ mod tests {
                 continue;
             }
             pkt.set_l7_proto(L7Proto::Pop3);
-            if pkt.header.borrow().as_ref().unwrap().dport() == POP3_PORT {
-                pkt.set_direction(Direction::C2s);
-            } else {
-                pkt.set_direction(Direction::S2c);
-            }
 
             protolens.run_task(&mut task, pkt);
         }

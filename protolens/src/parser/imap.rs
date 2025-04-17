@@ -5,6 +5,7 @@ use crate::CbClt;
 use crate::CbHeader;
 use crate::CbSrv;
 use crate::Direction;
+use crate::IMAP_PORT;
 use crate::MimeBodyParams;
 use crate::Parser;
 use crate::ParserFactory;
@@ -68,7 +69,7 @@ where
         cb_imap: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm;
         unsafe {
             stm = &mut *(stream as *mut PktStrm<T, P>);
         }
@@ -99,7 +100,7 @@ where
         cb_imap: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm;
         unsafe {
             stm = &mut *(stream as *mut PktStrm<T, P>);
         }
@@ -334,6 +335,45 @@ where
     type PacketType = T;
     type PtrType = P;
 
+    fn dir_confirm(
+        &self,
+        c2s_strm: *const PktStrm<T, P>,
+        s2c_strm: *const PktStrm<T, P>,
+        c2s_port: u16,
+        s2c_port: u16,
+    ) -> bool {
+        let stm_c2s;
+        let stm_s2c;
+        unsafe {
+            stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
+            stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
+        }
+
+        if s2c_port == IMAP_PORT {
+            return true;
+        } else if c2s_port == IMAP_PORT {
+            return false;
+        }
+
+        if let Ok(payload) = stm_s2c.peek_payload() {
+            if payload.len() >= 5 && (payload.starts_with(b"* OK ")) {
+                return true;
+            }
+
+            if payload.len() >= 10 && clt_cmd(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                return false;
+            }
+        }
+
+        if let Ok(payload) = stm_c2s.peek_payload() {
+            if payload.len() >= 5 && (payload.starts_with(b"* OK ")) {
+                return false;
+            }
+        }
+
+        true
+    }
+
     fn c2s_parser(
         &self,
         stream: *const PktStrm<T, P>,
@@ -348,7 +388,6 @@ where
             srv: None,
             dir: Direction::C2s,
         };
-
         Some(Box::pin(Self::c2s_parser_inner(stream, cb_imap, cb_ctx)))
     }
 
@@ -366,7 +405,6 @@ where
             srv: self.cb_srv.clone(),
             dir: Direction::S2c,
         };
-
         Some(Box::pin(Self::s2c_parser_inner(stream, cb_imap, cb_ctx)))
     }
 }
@@ -401,17 +439,14 @@ where
 }
 
 fn append(input: &str) -> (bool, usize) {
-    // 解析命令ID（一个或多个非空白字符）
     fn command_id(input: &str) -> IResult<&str, &str> {
         take_while1(|c: char| !c.is_whitespace())(input)
     }
 
-    // 解析APPEND命令
     fn append_command(input: &str) -> IResult<&str, &str> {
         tag("APPEND")(input)
     }
 
-    // 解析大小信息 {数字}
     fn size_info(input: &str) -> IResult<&str, usize> {
         delimited(
             char('{'),
@@ -420,7 +455,6 @@ fn append(input: &str) -> (bool, usize) {
         )(input)
     }
 
-    // 尝试从字符串末尾解析大小信息
     fn extract_size(input: &str) -> Option<usize> {
         let trimmed = input.trim_end();
         if !trimmed.ends_with('}') {
@@ -437,13 +471,10 @@ fn append(input: &str) -> (bool, usize) {
         None
     }
 
-    // 组合解析器：命令ID + 空格 + APPEND
     fn is_append_command(input: &str) -> bool {
-        // dbg!(input);
         tuple((command_id, space1, append_command))(input).is_ok()
     }
 
-    // 判断是否是APPEND命令并提取大小
     let is_append = is_append_command(input);
     let size = if is_append {
         extract_size(input).unwrap_or(0)
@@ -465,6 +496,29 @@ where
     Ok(line.contains(':'))
 }
 
+fn clt_cmd(input: &str) -> bool {
+    if input.is_empty() {
+        return false;
+    }
+
+    if !input.chars().next().unwrap().is_alphanumeric() {
+        return false;
+    }
+
+    if let Some(space_pos) = input.chars().take(10).position(|c| c == ' ') {
+        let tag = &input[..space_pos];
+        let rest = &input[space_pos + 1..];
+        !tag.is_empty()
+            && tag
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '.' || c == '+' || c == '-')
+            && !rest.is_empty()
+            && rest.chars().next().unwrap().is_uppercase()
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,8 +529,21 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn test_is_imap_command() {
+        assert!(clt_cmd("a001 LOGIN user pass"));
+        assert!(clt_cmd("001 LOGIN user pass"));
+        assert!(clt_cmd("tag1 FETCH 1:* ALL"));
+        assert!(clt_cmd("A123.456 SELECT INBOX"));
+        assert!(clt_cmd("B-789 LOGOUT"));
+
+        assert!(!clt_cmd(""));
+        assert!(!clt_cmd("LOGIN user pass"));
+        assert!(!clt_cmd(" tag FETCH"));
+        assert!(!clt_cmd("tag@1 SELECT"));
+    }
+
+    #[test]
     fn test_append() {
-        // 测试有效的APPEND命令
         assert_eq!(
             append("C59 APPEND \"Drafts\" (\\Seen) \"26-Jul-2022 17:49:09 +0800\" {2142}"),
             (true, 2142)
@@ -490,7 +557,6 @@ mod tests {
             (true, 1024)
         );
 
-        // 测试无效的命令或格式错误
         assert_eq!(append("B append inbox {100}"), (false, 0)); // 小写命令
         assert_eq!(append("C59 STORE 1:* +FLAGS (\\Seen)"), (false, 0)); // 不是APPEND命令
         assert_eq!(append("A02 SELECT INBOX"), (false, 0)); // 不是APPEND命令
@@ -499,6 +565,49 @@ mod tests {
         assert_eq!(append("APPEND mailbox {100}"), (false, 0)); // 缺少命令ID
         assert_eq!(append("tag"), (false, 0)); // 不完整的命令
         assert_eq!(append(""), (false, 0)); // 空字符串
+    }
+
+    #[test]
+    fn test_imap_s2c() {
+        let lines = [
+            "* OK IMAP4\r\n",
+            "* LIST (\\HasNoChildren) \"/\" INBOX\r\n",
+            "* 1 EXISTS\r\n",
+        ];
+
+        let captured_srv = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+
+        let srv_callback = {
+            let srv_clone = captured_srv.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                dbg!("in srv callback", std::str::from_utf8(line).unwrap());
+                let mut srv_guard = srv_clone.borrow_mut();
+                srv_guard.push(line.to_vec());
+            }
+        };
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut task = protolens.new_task();
+
+        protolens.set_cb_imap_srv(srv_callback);
+
+        let mut seq = 1000;
+        for line in lines.iter() {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload(seq, line_bytes);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::Imap);
+
+            protolens.run_task(&mut task, pkt);
+
+            seq += line_bytes.len() as u32;
+        }
+
+        let clt_guard = captured_srv.borrow();
+        assert_eq!(clt_guard.len(), lines.len());
+        for (idx, expected) in lines.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&clt_guard[idx]).unwrap(), *expected);
+        }
     }
 
     #[test]
@@ -531,7 +640,6 @@ mod tests {
         let body_start_callback = {
             let current_body_clone = current_body.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 创建新的body缓冲区
                 let mut body_guard = current_body_clone.borrow_mut();
                 *body_guard = Vec::new();
                 println!("Body start callback triggered");
@@ -545,7 +653,6 @@ mod tests {
                   _cb_ctx: *mut c_void,
                   _dir: Direction,
                   _te: Option<TransferEncoding>| {
-                // 将内容追加到当前body
                 let mut body_guard = current_body_clone.borrow_mut();
                 body_guard.extend_from_slice(body);
                 println!("Body callback: {} bytes", body.len());
@@ -556,7 +663,6 @@ mod tests {
             let current_body_clone = current_body.clone();
             let bodies_clone = captured_bodies.clone();
             move |_cb_ctx: *mut c_void, _dir: Direction| {
-                // 将当前body添加到bodies列表
                 let body_guard = current_body_clone.borrow();
                 let mut bodies_guard = bodies_clone.borrow_mut();
                 bodies_guard.push(body_guard.clone());
@@ -570,7 +676,7 @@ mod tests {
         let clt_callback = {
             let clt_clone = captured_clt.clone();
             move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-                // dbg!("in clt callback", std::str::from_utf8(line).unwrap());
+                dbg!("in clt callback", std::str::from_utf8(line).unwrap());
                 let mut clt_guard = clt_clone.borrow_mut();
                 clt_guard.push(line.to_vec());
             }
@@ -591,7 +697,6 @@ mod tests {
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
             pkt.set_l7_proto(L7Proto::Imap);
-            pkt.set_direction(Direction::C2s);
 
             protolens.run_task(&mut task, pkt);
 
@@ -710,11 +815,6 @@ mod tests {
                 continue;
             }
             pkt.set_l7_proto(L7Proto::Imap);
-            if pkt.header.borrow().as_ref().unwrap().dport() == IMAP_PORT {
-                pkt.set_direction(Direction::C2s);
-            } else {
-                pkt.set_direction(Direction::S2c);
-            }
 
             protolens.run_task(&mut task, pkt);
         }
@@ -769,7 +869,6 @@ mod tests {
 
         let clt_guard = captured_clt.borrow();
         assert_eq!(clt_guard.len(), 33);
-
         assert_eq!(
             std::str::from_utf8(&clt_guard[14]).unwrap(),
             "C59 APPEND \"Drafts\" (\\Seen) \"26-Jul-2022 17:49:09 +0800\" {2142}"
@@ -896,7 +995,6 @@ mod tests {
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
             pkt.set_l7_proto(L7Proto::Imap);
-            pkt.set_direction(Direction::C2s);
 
             protolens.run_task(&mut task, pkt);
 
@@ -1086,11 +1184,6 @@ mod tests {
                 continue;
             }
             pkt.set_l7_proto(L7Proto::Imap);
-            if pkt.header.borrow().as_ref().unwrap().dport() == IMAP_PORT {
-                pkt.set_direction(Direction::C2s);
-            } else {
-                pkt.set_direction(Direction::S2c);
-            }
 
             protolens.run_task(&mut task, pkt);
         }
@@ -1333,11 +1426,6 @@ mod tests {
                 continue;
             }
             pkt.set_l7_proto(L7Proto::Imap);
-            if pkt.header.borrow().as_ref().unwrap().dport() == IMAP_PORT {
-                pkt.set_direction(Direction::C2s);
-            } else {
-                pkt.set_direction(Direction::S2c);
-            }
 
             protolens.run_task(&mut task, pkt);
         }

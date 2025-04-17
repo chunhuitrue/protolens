@@ -1,6 +1,7 @@
 use crate::CbClt;
 use crate::CbFtpLink;
 use crate::CbSrv;
+use crate::FTP_PORT;
 use crate::Parser;
 use crate::ParserFactory;
 use crate::ParserFuture;
@@ -14,6 +15,7 @@ use nom::{
     combinator::map_res,
     sequence::{preceded, tuple},
 };
+use phf::phf_set;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -47,14 +49,14 @@ where
     }
 
     async fn c2s_parser_inner(
-        stream: *const PktStrm<T, P>,
+        strm: *const PktStrm<T, P>,
         cb_clt: Option<CbClt>,
         cb_link: Option<CbFtpLink>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T, P>);
         }
 
         loop {
@@ -81,14 +83,14 @@ where
     }
 
     async fn s2c_parser_inner(
-        stream: *const PktStrm<T, P>,
+        strm: *const PktStrm<T, P>,
         cb_srv: Option<CbSrv>,
         cb_link: Option<CbFtpLink>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T, P>);
         }
 
         loop {
@@ -123,26 +125,57 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn c2s_parser(
+    fn dir_confirm(
         &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+        c2s_strm: *const PktStrm<T, P>,
+        s2c_strm: *const PktStrm<T, P>,
+        c2s_port: u16,
+        s2c_port: u16,
+    ) -> bool {
+        let stm_c2s;
+        let stm_s2c;
+        unsafe {
+            stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
+            stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
+        }
+
+        if s2c_port == FTP_PORT {
+            return true;
+        } else if c2s_port == FTP_PORT {
+            return false;
+        }
+
+        if let Ok(payload) = stm_s2c.peek_payload() {
+            if payload.len() >= 4 && srv_cmd(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                return true;
+            }
+
+            if payload.len() >= 4 && clt_cmd(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                return false;
+            }
+        }
+
+        if let Ok(payload) = stm_c2s.peek_payload() {
+            if payload.len() >= 4 && srv_cmd(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
-            stream,
+            strm,
             self.cb_clt.clone(),
             self.cb_link.clone(),
             cb_ctx,
         )))
     }
 
-    fn s2c_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+    fn s2c_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::s2c_parser_inner(
-            stream,
+            strm,
             self.cb_srv.clone(),
             self.cb_link.clone(),
             cb_ctx,
@@ -325,6 +358,47 @@ fn eprt_cmd(input: &str) -> Option<(IpAddr, u16)> {
     }
 }
 
+fn srv_cmd(input: &str) -> bool {
+    if input.len() < 4 {
+        return false;
+    }
+
+    let code = &input[..3];
+
+    if !input[3..].starts_with(' ') && !input[3..].starts_with('-') {
+        return false;
+    }
+
+    if let Ok(num) = code.parse::<u16>() {
+        (200..=500).contains(&num)
+    } else {
+        false
+    }
+}
+
+static FTP_COMMANDS: phf::Set<&'static str> = phf_set! {
+    "ABOR", "ACCT", "ALLO", "APPE", "CDUP", "CWD", "DELE", "EPRT", "EPSV", "FEAT",
+    "HELP", "LANG", "LIST", "MAIL", "MDTM", "MKD", "MLFL", "MLSD", "MLST", "MODE",
+    "MRCP", "MRSQ", "MSAM", "MSND", "MSOM", "NLST", "NOOP", "OPTS", "PASS", "PASV",
+    "PORT", "PWD", "QUIT", "REIN", "REST", "RETR", "RMD", "RNFR", "RNTO", "SITE",
+    "SIZE", "SMNT", "STAT", "STOR", "STOU", "STRU", "SYST", "TYPE", "USER", "XCUP",
+    "XMKD", "XPWD", "XRMD"
+};
+
+fn clt_cmd(input: &str) -> bool {
+    if input.len() < 3 {
+        return false;
+    }
+
+    let search_range = &input[..input.len().min(10)];
+    let cmd = match search_range.split_once(|c| [' ', '\r', '\n'].contains(&c)) {
+        Some((cmd, _)) => cmd,
+        None => search_range,
+    };
+
+    FTP_COMMANDS.contains(cmd)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +407,38 @@ mod tests {
     use std::env;
     use std::rc::Rc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn test_clt_cmd() {
+        assert!(clt_cmd("USER anonymous"));
+        assert!(clt_cmd("PASS password"));
+        assert!(clt_cmd("CWD /home"));
+        assert!(clt_cmd("RETR file.txt"));
+        assert!(clt_cmd("PWD"));
+        assert!(clt_cmd("MKD "));
+        assert!(clt_cmd("XPWD"));
+        assert!(clt_cmd("XMKD\r\n"));
+
+        assert!(!clt_cmd(""));
+        assert!(!clt_cmd("ABC"));
+        assert!(!clt_cmd("220 Welcome"));
+        assert!(!clt_cmd("500 Error"));
+    }
+
+    #[test]
+    fn test_srv_cmd() {
+        assert!(srv_cmd("220 (vsFTPd 2.2.0)"));
+        assert!(srv_cmd("230 Login successful"));
+        assert!(srv_cmd("331-Please specify the password"));
+        assert!(srv_cmd("500 Unknown command"));
+
+        assert!(!srv_cmd("USER anonymous"));
+        assert!(!srv_cmd("PASS password"));
+        assert!(!srv_cmd("150"));
+        assert!(!srv_cmd("600 Invalid code"));
+        assert!(!srv_cmd("abc Invalid format"));
+        assert!(!srv_cmd("2xx Invalid format"));
+    }
 
     #[test]
     fn test_pasv_rsp() {
@@ -462,6 +568,86 @@ mod tests {
     }
 
     #[test]
+    fn test_ftp_only_srv() {
+        let lines = [
+            "220 (vsFTPd 2.2.0)\r\n",
+            "331 Please specify the password.\r\n",
+            "227 Entering Passive Mode (5,5,5,149,88,50).\r\n",
+        ];
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let captured_srv = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+
+        let srv_callback = {
+            let srv_clone = captured_srv.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut srv_guard = srv_clone.borrow_mut();
+                srv_guard.push(line.to_vec());
+            }
+        };
+
+        let mut task = protolens.new_task();
+
+        protolens.set_cb_ftp_srv(srv_callback);
+
+        let mut seq = 1000;
+        for line in lines {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload2(seq, line_bytes, 2500, 5000, false);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::FtpCmd);
+
+            protolens.run_task(&mut task, pkt);
+            seq += line_bytes.len() as u32;
+        }
+
+        let srv_guard = captured_srv.borrow();
+        assert_eq!(srv_guard.len(), lines.len());
+        for (idx, expected) in lines.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&srv_guard[idx]).unwrap(), *expected);
+        }
+    }
+
+    #[test]
+    fn test_ftp_only_clt() {
+        let lines = ["USER root\r\n", "PASS net123\r\n", "OPTS UTF8 ON\r\n"];
+
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let captured_clt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+
+        let clt_callback = {
+            let clt_clone = captured_clt.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut clt_guard = clt_clone.borrow_mut();
+                clt_guard.push(line.to_vec());
+            }
+        };
+
+        let mut task = protolens.new_task();
+
+        protolens.set_cb_ftp_clt(clt_callback);
+
+        let mut seq = 1000;
+        for line in lines {
+            let line_bytes = line.as_bytes();
+            let pkt = build_pkt_payload2(seq, line_bytes, 2500, 5000, false);
+            let _ = pkt.decode();
+            pkt.set_l7_proto(L7Proto::FtpCmd);
+
+            protolens.run_task(&mut task, pkt);
+            seq += line_bytes.len() as u32;
+        }
+
+        let clt_guard = captured_clt.borrow();
+        assert_eq!(clt_guard.len(), lines.len());
+        for (idx, expected) in lines.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&clt_guard[idx]).unwrap(), *expected);
+        }
+    }
+
+    #[test]
     fn test_ftp_cmd() {
         let project_root = env::current_dir().unwrap();
         let file_path = project_root.join("tests/pcap/ftp_pasv.pcap");
@@ -520,13 +706,6 @@ mod tests {
                 || pkt.header.borrow().as_ref().unwrap().sport() == 21
             {
                 pkt.set_l7_proto(L7Proto::FtpCmd);
-
-                if pkt.header.borrow().as_ref().unwrap().dport() == 21 {
-                    pkt.set_direction(Direction::C2s);
-                } else {
-                    pkt.set_direction(Direction::S2c);
-                }
-
                 protolens.run_task(&mut task, pkt);
             }
         }

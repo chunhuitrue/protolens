@@ -4,6 +4,7 @@ use crate::CbHttpBody;
 use crate::CbStartLine;
 use crate::Direction;
 use crate::Encoding;
+use crate::HTTP_PORT;
 use crate::Parser;
 use crate::ParserFactory;
 use crate::ParserFuture;
@@ -20,6 +21,7 @@ use nom::{
     combinator::{map_res, value},
     sequence::terminated,
 };
+use phf::phf_set;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 
@@ -55,14 +57,14 @@ where
     }
 
     async fn parser_inner(
-        stream: *const PktStrm<T, P>,
+        strm: *const PktStrm<T, P>,
         cb_http: HttpCallbacks,
         cb_ctx: *mut c_void,
         start_line_parser: fn(&[u8]) -> HttpVersion,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T, P>);
         }
 
         loop {
@@ -324,11 +326,46 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn c2s_parser(
+    fn dir_confirm(
         &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+        c2s_strm: *const PktStrm<T, P>,
+        s2c_strm: *const PktStrm<T, P>,
+        c2s_port: u16,
+        s2c_port: u16,
+    ) -> bool {
+        let stm_c2s;
+        let stm_s2c;
+        unsafe {
+            stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
+            stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
+        }
+
+        if s2c_port == HTTP_PORT {
+            return true;
+        } else if c2s_port == HTTP_PORT {
+            return false;
+        }
+
+        if let Ok(payload) = stm_c2s.peek_payload() {
+            if payload.len() >= 4 && req(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                return true;
+            }
+
+            if payload.len() >= 7 && rsp(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                return false;
+            }
+        }
+
+        if let Ok(payload) = stm_s2c.peek_payload() {
+            if payload.len() >= 4 && req(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         let cb_http = HttpCallbacks {
             start_line: self.cb_start_line.clone(),
             header: self.cb_header.clone(),
@@ -338,18 +375,14 @@ where
             dir: Direction::C2s,
         };
         Some(Box::pin(Self::parser_inner(
-            stream,
+            strm,
             cb_http,
             cb_ctx,
             req_version,
         )))
     }
 
-    fn s2c_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+    fn s2c_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         let cb_http = HttpCallbacks {
             start_line: self.cb_start_line.clone(),
             header: self.cb_header.clone(),
@@ -359,7 +392,7 @@ where
             dir: Direction::S2c,
         };
         Some(Box::pin(Self::parser_inner(
-            stream,
+            strm,
             cb_http,
             cb_ctx,
             rsp_version,
@@ -600,6 +633,38 @@ fn chunk_size(line: &str) -> Result<usize, ()> {
     }
 }
 
+static HTTP_METHODS: phf::Set<&'static str> = phf_set! {
+    "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH",
+    "COPY", "LINK", "UNLINK", "PURGE", "LOCK", "UNLOCK", "PROPFIND", "VIEW",
+    "MOVE", "MKCOL", "PROPPATCH", "REPORT", "CHECKOUT", "CHECKIN", "VERSION-CONTROL",
+    "MERGE", "MKWORKSPACE", "MKACTIVITY", "BASELINE-CONTROL", "SEARCH"
+};
+
+fn req(input: &str) -> bool {
+    if input.len() < 3 {
+        return false;
+    }
+
+    let search_range = &input[..input.len().min(10)];
+    let method = match search_range.split_once(|c| [' ', '\r', '\n'].contains(&c)) {
+        Some((method, _)) => method,
+        None => search_range,
+    };
+
+    HTTP_METHODS.contains(method)
+}
+
+fn rsp(input: &str) -> bool {
+    if input.len() < 7 {
+        return false;
+    }
+
+    if input.starts_with("HTTP/1.") || input.starts_with("http/1.") {
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,6 +673,37 @@ mod tests {
     use std::env;
     use std::rc::Rc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn test_req() {
+        assert!(req("GET /index.html HTTP/1.1\r\n"));
+        assert!(req("POST /api/data HTTP/1.1\r\n"));
+        assert!(req("HEAD / HTTP/1.1\r\n"));
+        assert!(req("OPTIONS * HTTP/1.1\r\n"));
+        assert!(req("CONNECT example.com:443 HTTP/1.1\r\n"));
+        assert!(req("PROPFIND /path HTTP/1.1\r\n"));
+        assert!(req("MKCOL /new-collection HTTP/1.1\r\n"));
+
+        assert!(!req(""));
+        assert!(!req("ABC"));
+        assert!(!req("HTTP/1.1 200 OK\r\n"));
+        assert!(!req("INVALID /path HTTP/1.1\r\n"));
+        assert!(!req("   GET /path HTTP/1.1\r\n"));
+    }
+    #[test]
+    fn test_rsp() {
+        assert!(rsp("HTTP/1.1 200 OK\r\n"));
+        assert!(rsp("HTTP/1.0 404 Not Found\r\n"));
+        assert!(rsp("http/1.1 200 OK\r\n"));
+
+        assert!(!rsp("HTTP/2.0 200 OK\r\n"));
+        assert!(!rsp(""));
+        assert!(!rsp("GET /index.html HTTP/1.1\r\n"));
+        assert!(!rsp("HTTP/3.0 200 OK\r\n"));
+        assert!(!rsp("HTTPS/1.1 200 OK\r\n"));
+        assert!(!rsp("HTT"));
+        assert!(!rsp("     HTTP/1.1 200 OK\r\n"));
+    }
 
     #[test]
     fn test_http_req_version() {
@@ -843,11 +939,6 @@ mod tests {
                 continue;
             }
             pkt.set_l7_proto(L7Proto::Http);
-            if pkt.header.borrow().as_ref().unwrap().dport() == HTTP_PORT {
-                pkt.set_direction(Direction::C2s);
-            } else {
-                pkt.set_direction(Direction::S2c);
-            }
 
             protolens.run_task(&mut task, pkt);
         }
@@ -1025,11 +1116,6 @@ mod tests {
                 continue;
             }
             pkt.set_l7_proto(L7Proto::Http);
-            if pkt.header.borrow().as_ref().unwrap().dport() == 9002 {
-                pkt.set_direction(Direction::C2s);
-            } else {
-                pkt.set_direction(Direction::S2c);
-            }
 
             protolens.run_task(&mut task, pkt);
         }
@@ -1211,7 +1297,6 @@ mod tests {
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
             pkt.set_l7_proto(L7Proto::Http);
-            pkt.set_direction(Direction::S2c);
 
             protolens.run_task(&mut task, pkt);
 

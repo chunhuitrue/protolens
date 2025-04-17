@@ -13,10 +13,18 @@ use std::rc::Rc;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct CIpAddr {
+    pub ip_type: u8, // 0: Invalid, 1: IPv4, 2: IPv6
+    pub octets: [u8; 16],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct PacketVTable {
-    pub direction: extern "C" fn(*mut std::ffi::c_void) -> Direction,
     pub l7_proto: extern "C" fn(*mut std::ffi::c_void) -> L7Proto,
     pub trans_proto: extern "C" fn(*mut std::ffi::c_void) -> TransProto,
+    pub sip: extern "C" fn(*mut std::ffi::c_void) -> CIpAddr,
+    pub dip: extern "C" fn(*mut std::ffi::c_void) -> CIpAddr,
     pub tu_sport: extern "C" fn(*mut std::ffi::c_void) -> u16,
     pub tu_dport: extern "C" fn(*mut std::ffi::c_void) -> u16,
     pub seq: extern "C" fn(*mut std::ffi::c_void) -> u32,
@@ -26,16 +34,19 @@ pub struct PacketVTable {
     pub payload: extern "C" fn(*mut std::ffi::c_void) -> *const u8,
 }
 
-extern "C" fn missing_direction(_: *mut std::ffi::c_void) -> Direction {
-    panic!("VTABLE not initialized")
-}
-
 extern "C" fn missing_l7proto(_: *mut std::ffi::c_void) -> L7Proto {
     panic!("VTABLE not initialized")
 }
 
 extern "C" fn missing_trans_proto(_: *mut std::ffi::c_void) -> TransProto {
     panic!("VTABLE not initialized")
+}
+
+extern "C" fn missing_ip(_: *mut std::ffi::c_void) -> CIpAddr {
+    CIpAddr {
+        ip_type: 0,
+        octets: [0; 16],
+    }
 }
 
 extern "C" fn missing_u16(_: *mut std::ffi::c_void) -> u16 {
@@ -60,9 +71,10 @@ extern "C" fn missing_ptr(_: *mut std::ffi::c_void) -> *const u8 {
 
 thread_local! {
     static VTABLE: RefCell<PacketVTable> = RefCell::new(PacketVTable {
-        direction: missing_direction,
         l7_proto: missing_l7proto,
         trans_proto: missing_trans_proto,
+        sip: missing_ip,
+        dip: missing_ip,
         tu_sport: missing_u16,
         tu_dport: missing_u16,
         seq: missing_u32,
@@ -86,16 +98,40 @@ pub struct FfiPacket {
 }
 
 impl crate::Packet for FfiPacket {
-    fn direction(&self) -> Direction {
-        VTABLE.with(|vtable| (vtable.borrow().direction)(self.packet_ptr))
-    }
-
     fn l7_proto(&self) -> L7Proto {
         VTABLE.with(|vtable| (vtable.borrow().l7_proto)(self.packet_ptr))
     }
 
     fn trans_proto(&self) -> TransProto {
         VTABLE.with(|vtable| (vtable.borrow().trans_proto)(self.packet_ptr))
+    }
+
+    fn sip(&self) -> IpAddr {
+        let c_ip = VTABLE.with(|vtable| (vtable.borrow().sip)(self.packet_ptr));
+        match c_ip.ip_type {
+            1 => IpAddr::V4(std::net::Ipv4Addr::from([
+                c_ip.octets[0],
+                c_ip.octets[1],
+                c_ip.octets[2],
+                c_ip.octets[3],
+            ])),
+            2 => IpAddr::V6(std::net::Ipv6Addr::from(c_ip.octets)),
+            _ => IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+        }
+    }
+
+    fn dip(&self) -> IpAddr {
+        let c_ip = VTABLE.with(|vtable| (vtable.borrow().dip)(self.packet_ptr));
+        match c_ip.ip_type {
+            1 => IpAddr::V4(std::net::Ipv4Addr::from([
+                c_ip.octets[0],
+                c_ip.octets[1],
+                c_ip.octets[2],
+                c_ip.octets[3],
+            ])),
+            2 => IpAddr::V6(std::net::Ipv6Addr::from(c_ip.octets)),
+            _ => IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+        }
     }
 
     fn tu_sport(&self) -> u16 {
@@ -278,7 +314,7 @@ pub extern "C" fn prolens_set_cb_task_s2c(
     std::mem::forget(task);
 }
 
-type CbOrdPkt = extern "C" fn(pkt_ptr: *mut c_void, ctx: *const c_void);
+type CbOrdPkt = extern "C" fn(pkt_ptr: *mut c_void, ctx: *const c_void, dir: Direction);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn prolens_set_cb_ord_pkt(prolens: *mut FfiProlens, callback: Option<CbOrdPkt>) {
@@ -287,8 +323,8 @@ pub extern "C" fn prolens_set_cb_ord_pkt(prolens: *mut FfiProlens, callback: Opt
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |pkt: FfiPacket, ctx: *mut c_void| {
-        callback.unwrap()(pkt.packet_ptr, ctx);
+    let wrapper = move |pkt: FfiPacket, ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(pkt.packet_ptr, ctx, dir);
     };
     prolens.0.set_cb_ord_pkt(wrapper);
 }

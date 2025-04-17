@@ -11,6 +11,7 @@ use core::{
 };
 use std::ffi::c_void;
 use std::fmt;
+use std::net::IpAddr;
 
 pub struct Task<T, P>
 where
@@ -18,15 +19,22 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
-    stream_c2s: PktStrm<T, P>,
-    stream_s2c: PktStrm<T, P>,
+    strm_c2s_ip: Option<IpAddr>,
+    strm_s2c_ip: Option<IpAddr>,
+    strm_c2s_port: u16,
+    strm_s2c_port: u16,
+    strm_c2s: PktStrm<T, P>,
+    strm_s2c: PktStrm<T, P>,
+
     c2s_parser: Option<ParserFuture>,
     s2c_parser: Option<ParserFuture>,
     bdir_parser: Option<ParserFuture>,
+
     pub(crate) parser_inited: bool,
     c2s_state: TaskState,
     s2c_state: TaskState,
     bdir_state: TaskState,
+
     cb_ctx: *mut c_void,
 }
 
@@ -38,15 +46,22 @@ where
 {
     pub(crate) fn new(conf: &Config, cb_ctx: *mut c_void) -> Self {
         Task {
-            stream_c2s: PktStrm::new(conf.pkt_buff, conf.read_buff, cb_ctx),
-            stream_s2c: PktStrm::new(conf.pkt_buff, conf.read_buff, cb_ctx),
+            strm_c2s_ip: None,
+            strm_s2c_ip: None,
+            strm_c2s_port: 0,
+            strm_s2c_port: 0,
+            strm_c2s: PktStrm::new(conf.pkt_buff, conf.read_buff, cb_ctx),
+            strm_s2c: PktStrm::new(conf.pkt_buff, conf.read_buff, cb_ctx),
+
             c2s_parser: None,
             s2c_parser: None,
             bdir_parser: None,
             parser_inited: false,
+
             c2s_state: TaskState::Start,
             s2c_state: TaskState::Start,
             bdir_state: TaskState::Start,
+
             cb_ctx,
         }
     }
@@ -71,48 +86,87 @@ where
         }
     }
 
-    pub(crate) fn init_parser(&mut self, parser: Box<dyn Parser<PacketType = T, PtrType = P>>) {
-        let p_stream_c2s: *const PktStrm<T, P> = &self.stream_c2s;
-        let p_stream_s2c: *const PktStrm<T, P> = &self.stream_s2c;
-
-        self.c2s_parser = parser.c2s_parser(p_stream_c2s, self.cb_ctx);
-        self.s2c_parser = parser.s2c_parser(p_stream_s2c, self.cb_ctx);
-        self.bdir_parser = parser.bdir_parser(p_stream_c2s, p_stream_s2c, self.cb_ctx);
-
-        self.parser_inited = true;
-    }
-
     pub(crate) fn set_cb_c2s<F>(&mut self, callback: F)
     where
         F: StmCbFn + 'static,
     {
-        self.stream_c2s.set_cb(callback);
+        self.strm_c2s.set_cb(callback);
     }
 
     pub(crate) fn set_cb_s2c<F>(&mut self, callback: F)
     where
         F: StmCbFn + 'static,
     {
-        self.stream_s2c.set_cb(callback);
+        self.strm_s2c.set_cb(callback);
+    }
+
+    pub(crate) fn init_parser(
+        &mut self,
+        parser: Option<Box<dyn Parser<PacketType = T, PtrType = P>>>,
+    ) {
+        if let Some(parser) = parser {
+            if !parser.dir_confirm(
+                &self.strm_c2s,
+                &self.strm_s2c,
+                self.strm_c2s_port,
+                self.strm_s2c_port,
+            ) {
+                std::mem::swap(&mut self.strm_c2s_ip, &mut self.strm_s2c_ip);
+                std::mem::swap(&mut self.strm_c2s_port, &mut self.strm_s2c_port);
+                std::mem::swap(&mut self.strm_c2s, &mut self.strm_s2c);
+                std::mem::swap(&mut self.c2s_state, &mut self.s2c_state);
+            }
+
+            self.c2s_parser = parser.c2s_parser(&self.strm_c2s, self.cb_ctx);
+            self.s2c_parser = parser.s2c_parser(&self.strm_s2c, self.cb_ctx);
+            self.bdir_parser = parser.bdir_parser(&self.strm_c2s, &self.strm_s2c, self.cb_ctx);
+            self.parser_inited = true;
+        }
     }
 
     // None - 表示解析器还在pending状态或没有parser
     // Some(Ok(())) - 表示解析成功完成
     // Some(Err(())) - 表示解析遇到错误
-    pub(crate) fn run(&mut self, pkt: PacketWrapper<T, P>) -> Option<Result<(), ()>> {
-        match pkt.ptr.direction() {
-            Direction::C2s => {
-                self.stream_c2s.push(pkt);
-                return self.c2s_run();
+    pub(crate) fn run(
+        &mut self,
+        pkt: PacketWrapper<T, P>,
+        parser: Option<Box<dyn Parser<PacketType = T, PtrType = P>>>,
+    ) -> Option<Result<(), ()>> {
+        if self.strm_c2s_ip.is_none() {
+            self.strm_c2s_ip = Some(pkt.ptr.sip());
+            self.strm_s2c_ip = Some(pkt.ptr.dip());
+            self.strm_c2s_port = pkt.ptr.tu_sport();
+            self.strm_s2c_port = pkt.ptr.tu_dport();
+        }
+        let pkt_sip = pkt.ptr.sip();
+        let pkt_sport = pkt.ptr.tu_sport();
+
+        if pkt_sip == self.strm_c2s_ip.unwrap() && pkt_sport == self.strm_c2s_port {
+            self.strm_c2s.push(pkt);
+        } else {
+            self.strm_s2c.push(pkt);
+        }
+
+        if !self.parser_inited {
+            self.init_parser(parser);
+        }
+
+        if let Some(strm_c2s_ip) = self.strm_c2s_ip.as_ref() {
+            let is_c2s = pkt_sip == *strm_c2s_ip && pkt_sport == self.strm_c2s_port;
+            match (
+                is_c2s,
+                self.c2s_parser.as_ref(),
+                self.s2c_parser.as_ref(),
+                self.bdir_parser.as_ref(),
+            ) {
+                (true, Some(_), _, _) => self.c2s_run(),
+                (false, _, Some(_), _) => self.s2c_run(),
+                (_, _, _, Some(_)) => self.bdir_run(),
+                _ => None,
             }
-            Direction::S2c => {
-                self.stream_s2c.push(pkt);
-                return self.s2c_run();
-            }
-            Direction::BiDir => None,
-            _ => Some(Err::<T, ()>(())),
-        };
-        self.bdir_run()
+        } else {
+            None
+        }
     }
 
     fn c2s_run(&mut self) -> Option<Result<(), ()>> {
@@ -196,8 +250,8 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Task")
-            .field("c2s_stream", &self.stream_c2s)
-            .field("s2c_stream", &self.stream_s2c)
+            .field("c2s_stream", &self.strm_c2s)
+            .field("s2c_stream", &self.strm_s2c)
             .field("stream_c2s_state", &self.c2s_state)
             .field("stream_s2c_state", &self.s2c_state)
             .field("stream_bdir_state", &self.bdir_state)
