@@ -20,14 +20,14 @@ Protolens is a high-performance network protocol analysis and reconstruction lib
 
 ## Project Structure
 
-- **`protolens`**: <mcfolder name="protolens" path="protolens"></mcfolder> The core library implementing TCP stream reassembly and protocol parsing logic.
+- **`protolens`**: [`protolens`](protolens) directory. The core library implementing TCP stream reassembly and protocol parsing logic.
     - Compiles into a Rust library (`rlib`) and a C dynamic library (`cdylib`).
     - Includes benchmarks (`benches`).
-- **`imap-proto`**: <mcfolder name="imap-proto" path="imap-proto"></mcfolder> (Derived from [djc/tokio-imap](https://github.com/djc/tokio-imap)) This project uses parts of its code with minor modifications.
-- **`rust_example`**: <mcfolder name="rust_example" path="rust_example"></mcfolder> A Rust example project using the `protolens` library.
+- **`imap-proto`**: [`imap-proto`](imap-proto) directory. (Derived from [djc/tokio-imap](https://github.com/djc/tokio-imap)). This project uses parts of its code with minor modifications.
+- **`rust_example`**: [`rust_example`](rust_example) directory. A Rust example project using the `protolens` library.
     - Demonstrates how to use `protolens` to process online packets using pcap as an example.
     - More examples can be found in the test cases.
-- **`c_example`**: <mcfolder name="c_example" path="c_example"></mcfolder> A C language example project using the `protolens` C dynamic library.
+- **`c_example`**: [`c_example`](c_example) directory. A C language example project using the `protolens` C dynamic library.
     - Includes examples like `simple.c`, `simple_thread.c`, `smtp.c`.
     - Demonstrates how to integrate `protolens` into C projects.
 
@@ -35,17 +35,17 @@ Protolens is a high-performance network protocol analysis and reconstruction lib
 
 ### Rust Part (protolens library and rust_example)
 
-This project is managed using Cargo workspace (<mcfile name="Cargo.toml" path="Cargo.toml"></mcfile>).
+This project is managed using Cargo workspace (see [`Cargo.toml`](Cargo.toml)).
 
 1.  **Build All Members**:
-    Run the following command in the project root directory <mcfolder name="protolens" path="."></mcfolder>:
+    Run the following command in the project root directory:
     ```bash
     cargo build
     ```
     This will compile the `protolens` library (rlib and cdylib), the `imap-proto` library, and the `rust_example` executable. Build artifacts are located in the `target/` directory at the root.
 
 2.  **Run Rust Example**:
-    According to the instructions in <mcfile name="README" path="rust_example/README"></mcfile>, run the following commands in the project root directory:
+    According to the instructions in [`rust_example/README`](rust_example/README), run the following commands in the project root directory:
     ```bash
     cd rust_example
     ```
@@ -64,7 +64,7 @@ This project is managed using Cargo workspace (<mcfile name="Cargo.toml" path="C
 
 ### C Example (c_example)
 
-According to the instructions in <mcfile name="README" path="c_example/README"></mcfile>:
+According to the instructions in [`c_example/README`](c_example/README):
 
 1.  **Ensure `protolens` is Compiled**:
     First, you need to run `cargo build` (see above) to generate the C dynamic library for `protolens` (located at `target/debug/libprotolens.dylib` or `target/release/libprotolens.dylib`).
@@ -88,4 +88,4 @@ According to the instructions in <mcfile name="README" path="c_example/README"><
 
 ## License
 
-This project is dual-licensed under both **MIT** (<mcfile name="LICENSE-MIT" path="LICENSE-MIT"></mcfile>) and **Apache-2.0** (<mcfile name="LICENSE-APACHE" path="LICENSE-APACHE"></mcfile>) licenses. You can choose either license according to your needs.
+This project is dual-licensed under both **MIT** ([LICENSE-MIT](LICENSE-MIT)) and **Apache-2.0** ([LICENSE-APACHE](LICENSE-APACHE)) licenses. You can choose either license according to your needs.

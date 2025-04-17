@@ -20,14 +20,14 @@ Protolens 是一个使用 Rust 编写的高性能网络协议分析与还原库�
 
 ## 项目结构
 
-- **`protolens`**: <mcfolder name="protolens" path="protolens"></mcfolder> 核心库，实现了TCP流重组和协议解析逻辑。
+- **`protolens`**: [`protolens`](protolens) 目录，核心库，实现了TCP流重组和协议解析逻辑。
     - 编译为 Rust 库 (`rlib`) 和 C 动态库 (`cdylib`)。
     - 包含基准测试 (`benches`)。
-- **`imap-proto`**: <mcfolder name="imap-proto" path="imap-proto"></mcfolder> （源自 [djc/tokio-imap](https://github.com/djc/tokio-imap)）本项目使用到了其中的部分代码，并作了小幅改动。
-- **`rust_example`**: <mcfolder name="rust_example" path="rust_example"></mcfolder> 使用 `protolens` 库的 Rust 示例项目。
+- **`imap-proto`**: [`imap-proto`](imap-proto) 目录（源自 [djc/tokio-imap](https://github.com/djc/tokio-imap)），本项目使用到了其中的部分代码，并作了小幅改动。
+- **`rust_example`**: [`rust_example`](rust_example) 目录，使用 `protolens` 库的 Rust 示例项目。
     - 以 pcap 为例，演示了如何调用 `protolens` 处理在线数据包。
     - 更多示例可以参考测试用例。
-- **`c_example`**: <mcfolder name="c_example" path="c_example"></mcfolder> 使用 `protolens` C 动态库的 C 语言示例项目。
+- **`c_example`**: [`c_example`](c_example) 目录，使用 `protolens` C 动态库的 C 语言示例项目。
     - 包含 `simple.c`, `simple_thread.c`, `smtp.c` 等示例。
     - 演示了 C 项目如何集成 `protolens`。
 
@@ -35,17 +35,17 @@ Protolens 是一个使用 Rust 编写的高性能网络协议分析与还原库�
 
 ### Rust 部分 (protolens 库 和 rust_example)
 
-本项目使用 Cargo workspace (<mcfile name="Cargo.toml" path="Cargo.toml"></mcfile>) 管理。
+本项目使用 Cargo workspace（见 [`Cargo.toml`](Cargo.toml)）管理。
 
 1.  **构建所有成员**:
-    在项目根目录 <mcfolder name="protolens" path="."></mcfolder> 运行：
+    在项目根目录运行：
     ```bash
     cargo build
     ```
-    这将编译 `protolens` 库 (rlib 和 cdylib), `imap-proto` 库以及 `rust_example` 可执行文件。编译产物位于根目录下的 `target/` 文件夹。
+    这将编译 `protolens` 库 (rlib 和 cdylib)、`imap-proto` 库以及 `rust_example` 可执行文件。编译产物位于根目录下的 `target/` 文件夹。
 
 2.  **运行 Rust 示例**:
-    根据 <mcfile name="README" path="rust_example/README"></mcfile> 的说明，在项目根目录运行：
+    根据 [`rust_example/README`](rust_example/README) 的说明，在项目根目录运行：
     ```bash
     cd rust_example
     ```
@@ -64,10 +64,10 @@ Protolens 是一个使用 Rust 编写的高性能网络协议分析与还原库�
 
 ### C 示例 (c_example)
 
-根据 <mcfile name="README" path="c_example/README"></mcfile> 的说明：
+根据 [`c_example/README`](c_example/README) 的说明：
 
 1.  **确保 `protolens` 已编译**:
-    首先需要执行 `cargo build` (见上文) 来生成 `protolens` 的 C 动态库 (位于 `target/debug/libprotolens.dylib` 或 `target/release/libprotolens.dylib`)。
+    首先需要执行 `cargo build`（见上文）来生成 `protolens` 的 C 动态库（位于 `target/debug/libprotolens.dylib` 或 `target/release/libprotolens.dylib`）。
 
 2.  **编译 C 示例**:
     进入 `c_example` 目录：
@@ -88,4 +88,4 @@ Protolens 是一个使用 Rust 编写的高性能网络协议分析与还原库�
 
 ## 许可证
 
-本项目采用 **MIT** (<mcfile name="LICENSE-MIT" path="LICENSE-MIT"></mcfile>) 和 **Apache-2.0** (<mcfile name="LICENSE-APACHE" path="LICENSE-APACHE"></mcfile>) 双重许可证。您可以根据自己的需求选择其中一种许可证使用。
+本项目采用 **MIT**（[LICENSE-MIT](LICENSE-MIT)）和 **Apache-2.0**（[LICENSE-APACHE](LICENSE-APACHE)）双重许可证。您可以根据自己的需求选择其中一种许可证使用。
