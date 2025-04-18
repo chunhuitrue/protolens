@@ -6,8 +6,14 @@ Protolens is a high-performance network protocol analysis and reconstruction lib
 
 *   **TCP Stream Reassembly**: Automatically handles TCP out-of-order packets, retransmissions, etc., to reconstruct ordered application-layer data streams.
 *   **Application-Layer Protocol Reconstruction**: Deeply parses application-layer protocols to restore complete interaction processes and data content.
-*   **High Performance**: Built with Rust, focusing on stability and performance, suitable for real-time traffic analysis and offline pcap file processing.
-    *   macOS M4 Chip: Throughput of 100MB/s for 100-byte small packets, 1GB/s for 1000-byte large packets.
+*   **High Performance**: Based on Rust, focusing on stability and performance, suitable for both real-time online and offline pcap file processing. Single core on macOS M4 chip. Simulated packets, payload-only throughput:
+
+    | Packet Size | Throughput      |
+    | ----------- | -------------- |
+    | 100 bytes   | 282.56 MiB/s   |
+    | 500 bytes   | 1.3582 GiB/s   |
+    | 1000 bytes  | 2.6022 GiB/s   |
+
 *   **Rust Interface**: Provides a Rust library (`rlib`) for easy integration into Rust projects.
 *   **C Interface**: Provides a C dynamic library (`cdylib`) for convenient integration into C/C++ and other language projects.
 *   **Currently Supported Protocols**: SMTP, POP3, IMAP, HTTP, FTP, etc.
