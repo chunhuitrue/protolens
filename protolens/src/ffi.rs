@@ -21,7 +21,6 @@ pub struct CIpAddr {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct PacketVTable {
-    pub l7_proto: extern "C" fn(*mut std::ffi::c_void) -> L7Proto,
     pub trans_proto: extern "C" fn(*mut std::ffi::c_void) -> TransProto,
     pub sip: extern "C" fn(*mut std::ffi::c_void) -> CIpAddr,
     pub dip: extern "C" fn(*mut std::ffi::c_void) -> CIpAddr,
@@ -32,10 +31,6 @@ pub struct PacketVTable {
     pub fin: extern "C" fn(*mut std::ffi::c_void) -> bool,
     pub payload_len: extern "C" fn(*mut std::ffi::c_void) -> usize,
     pub payload: extern "C" fn(*mut std::ffi::c_void) -> *const u8,
-}
-
-extern "C" fn missing_l7proto(_: *mut std::ffi::c_void) -> L7Proto {
-    panic!("VTABLE not initialized")
 }
 
 extern "C" fn missing_trans_proto(_: *mut std::ffi::c_void) -> TransProto {
@@ -71,7 +66,6 @@ extern "C" fn missing_ptr(_: *mut std::ffi::c_void) -> *const u8 {
 
 thread_local! {
     static VTABLE: RefCell<PacketVTable> = RefCell::new(PacketVTable {
-        l7_proto: missing_l7proto,
         trans_proto: missing_trans_proto,
         sip: missing_ip,
         dip: missing_ip,
@@ -86,7 +80,7 @@ thread_local! {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_init_vtable(vtable: PacketVTable) {
+pub extern "C" fn protolens_init_vtable(vtable: PacketVTable) {
     VTABLE.with(|v| {
         *v.borrow_mut() = vtable;
     });
@@ -167,13 +161,13 @@ impl crate::Packet for FfiPacket {
 pub struct FfiProlens(Prolens<FfiPacket, Rc<FfiPacket>>);
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_new() -> *mut FfiProlens {
+pub extern "C" fn protolens_new() -> *mut FfiProlens {
     let prolens = Box::new(FfiProlens(Prolens::<FfiPacket, Rc<FfiPacket>>::default()));
     Box::into_raw(prolens)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_free(prolens: *mut FfiProlens) {
+pub extern "C" fn protolens_free(prolens: *mut FfiProlens) {
     if !prolens.is_null() {
         unsafe {
             let _ = Box::from_raw(prolens);
@@ -234,6 +228,49 @@ pub extern "C" fn protolens_task_dbinfo(
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
+pub enum CL7Proto {
+    OrdPacket = 0,
+    Smtp,
+    Pop3,
+    Imap,
+    Http,
+    FtpCmd,
+    FtpData,
+    Unknown,
+}
+
+impl From<CL7Proto> for L7Proto {
+    fn from(proto: CL7Proto) -> Self {
+        match proto {
+            CL7Proto::OrdPacket => L7Proto::OrdPacket,
+            CL7Proto::Smtp => L7Proto::Smtp,
+            CL7Proto::Pop3 => L7Proto::Pop3,
+            CL7Proto::Imap => L7Proto::Imap,
+            CL7Proto::Http => L7Proto::Http,
+            CL7Proto::FtpCmd => L7Proto::FtpCmd,
+            CL7Proto::FtpData => L7Proto::FtpData,
+            CL7Proto::Unknown => L7Proto::Unknown,
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_task_parser(
+    prolens: *mut FfiProlens,
+    task: *mut Task<FfiPacket, Rc<FfiPacket>>,
+    l7_proto: CL7Proto,
+) {
+    if prolens.is_null() || task.is_null() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let task = unsafe { &mut *task };
+    prolens.0.set_task_parser(task, l7_proto.into());
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TaskResult {
     Pending,
     Done,
@@ -267,7 +304,7 @@ pub extern "C" fn protolens_task_run(
 pub type CbStm = extern "C" fn(data: *const u8, data_len: usize, seq: u32, *const c_void);
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_task_c2s(prolens: *mut FfiProlens, callback: Option<CbStm>) {
+pub extern "C" fn protolens_set_cb_task_c2s(prolens: *mut FfiProlens, callback: Option<CbStm>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -281,7 +318,7 @@ pub extern "C" fn prolens_set_cb_task_c2s(prolens: *mut FfiProlens, callback: Op
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_task_s2c(prolens: *mut FfiProlens, callback: Option<CbStm>) {
+pub extern "C" fn protolens_set_cb_task_s2c(prolens: *mut FfiProlens, callback: Option<CbStm>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -297,7 +334,7 @@ pub extern "C" fn prolens_set_cb_task_s2c(prolens: *mut FfiProlens, callback: Op
 type CbOrdPkt = extern "C" fn(pkt_ptr: *mut c_void, ctx: *const c_void, dir: Direction);
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_ord_pkt(prolens: *mut FfiProlens, callback: Option<CbOrdPkt>) {
+pub extern "C" fn protolens_set_cb_ord_pkt(prolens: *mut FfiProlens, callback: Option<CbOrdPkt>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -427,7 +464,7 @@ type CbHttpBody = extern "C" fn(
 );
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_user(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn protolens_set_cb_smtp_user(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -440,7 +477,7 @@ pub extern "C" fn prolens_set_cb_smtp_user(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_pass(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn protolens_set_cb_smtp_pass(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -453,7 +490,10 @@ pub extern "C" fn prolens_set_cb_smtp_pass(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_mailfrom(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn protolens_set_cb_smtp_mailfrom(
+    prolens: *mut FfiProlens,
+    callback: Option<CbData>,
+) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -466,7 +506,7 @@ pub extern "C" fn prolens_set_cb_smtp_mailfrom(prolens: *mut FfiProlens, callbac
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_rcpt(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn protolens_set_cb_smtp_rcpt(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -479,7 +519,7 @@ pub extern "C" fn prolens_set_cb_smtp_rcpt(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_header(
+pub extern "C" fn protolens_set_cb_smtp_header(
     prolens: *mut FfiProlens,
     callback: Option<CbDirData>,
 ) {
@@ -495,7 +535,7 @@ pub extern "C" fn prolens_set_cb_smtp_header(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_body_start(
+pub extern "C" fn protolens_set_cb_smtp_body_start(
     prolens: *mut FfiProlens,
     callback: Option<CbDirEvt>,
 ) {
@@ -511,7 +551,7 @@ pub extern "C" fn prolens_set_cb_smtp_body_start(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: Option<CbBody>) {
+pub extern "C" fn protolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: Option<CbBody>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -528,7 +568,7 @@ pub extern "C" fn prolens_set_cb_smtp_body(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_body_stop(
+pub extern "C" fn protolens_set_cb_smtp_body_stop(
     prolens: *mut FfiProlens,
     callback: Option<CbDirEvt>,
 ) {
@@ -544,7 +584,7 @@ pub extern "C" fn prolens_set_cb_smtp_body_stop(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_smtp_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn protolens_set_cb_smtp_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -557,7 +597,7 @@ pub extern "C" fn prolens_set_cb_smtp_srv(prolens: *mut FfiProlens, callback: Op
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_pop3_header(
+pub extern "C" fn protolens_set_cb_pop3_header(
     prolens: *mut FfiProlens,
     callback: Option<CbDirData>,
 ) {
@@ -573,7 +613,7 @@ pub extern "C" fn prolens_set_cb_pop3_header(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_pop3_body_start(
+pub extern "C" fn protolens_set_cb_pop3_body_start(
     prolens: *mut FfiProlens,
     callback: Option<CbDirEvt>,
 ) {
@@ -589,7 +629,7 @@ pub extern "C" fn prolens_set_cb_pop3_body_start(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_pop3_body(prolens: *mut FfiProlens, callback: Option<CbBody>) {
+pub extern "C" fn protolens_set_cb_pop3_body(prolens: *mut FfiProlens, callback: Option<CbBody>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -606,7 +646,7 @@ pub extern "C" fn prolens_set_cb_pop3_body(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_pop3_body_stop(
+pub extern "C" fn protolens_set_cb_pop3_body_stop(
     prolens: *mut FfiProlens,
     callback: Option<CbDirEvt>,
 ) {
@@ -622,7 +662,7 @@ pub extern "C" fn prolens_set_cb_pop3_body_stop(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_pop3_clt(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn protolens_set_cb_pop3_clt(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -635,7 +675,7 @@ pub extern "C" fn prolens_set_cb_pop3_clt(prolens: *mut FfiProlens, callback: Op
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_pop3_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn protolens_set_cb_pop3_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -648,7 +688,7 @@ pub extern "C" fn prolens_set_cb_pop3_srv(prolens: *mut FfiProlens, callback: Op
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_imap_header(
+pub extern "C" fn protolens_set_cb_imap_header(
     prolens: *mut FfiProlens,
     callback: Option<CbDirData>,
 ) {
@@ -664,7 +704,7 @@ pub extern "C" fn prolens_set_cb_imap_header(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_imap_body_start(
+pub extern "C" fn protolens_set_cb_imap_body_start(
     prolens: *mut FfiProlens,
     callback: Option<CbDirEvt>,
 ) {
@@ -680,7 +720,7 @@ pub extern "C" fn prolens_set_cb_imap_body_start(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_imap_body(prolens: *mut FfiProlens, callback: Option<CbBody>) {
+pub extern "C" fn protolens_set_cb_imap_body(prolens: *mut FfiProlens, callback: Option<CbBody>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -697,7 +737,7 @@ pub extern "C" fn prolens_set_cb_imap_body(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_imap_body_stop(
+pub extern "C" fn protolens_set_cb_imap_body_stop(
     prolens: *mut FfiProlens,
     callback: Option<CbDirEvt>,
 ) {
@@ -713,7 +753,7 @@ pub extern "C" fn prolens_set_cb_imap_body_stop(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_imap_clt(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn protolens_set_cb_imap_clt(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -726,7 +766,7 @@ pub extern "C" fn prolens_set_cb_imap_clt(prolens: *mut FfiProlens, callback: Op
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_imap_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn protolens_set_cb_imap_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -739,7 +779,7 @@ pub extern "C" fn prolens_set_cb_imap_srv(prolens: *mut FfiProlens, callback: Op
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_http_start_line(
+pub extern "C" fn protolens_set_cb_http_start_line(
     prolens: *mut FfiProlens,
     callback: Option<CbDirData>,
 ) {
@@ -755,7 +795,7 @@ pub extern "C" fn prolens_set_cb_http_start_line(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_http_header(
+pub extern "C" fn protolens_set_cb_http_header(
     prolens: *mut FfiProlens,
     callback: Option<CbDirData>,
 ) {
@@ -771,7 +811,7 @@ pub extern "C" fn prolens_set_cb_http_header(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_http_body_start(
+pub extern "C" fn protolens_set_cb_http_body_start(
     prolens: *mut FfiProlens,
     callback: Option<CbDirEvt>,
 ) {
@@ -787,7 +827,10 @@ pub extern "C" fn prolens_set_cb_http_body_start(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_http_body(prolens: *mut FfiProlens, callback: Option<CbHttpBody>) {
+pub extern "C" fn protolens_set_cb_http_body(
+    prolens: *mut FfiProlens,
+    callback: Option<CbHttpBody>,
+) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -813,7 +856,7 @@ pub extern "C" fn prolens_set_cb_http_body(prolens: *mut FfiProlens, callback: O
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_http_body_stop(
+pub extern "C" fn protolens_set_cb_http_body_stop(
     prolens: *mut FfiProlens,
     callback: Option<CbDirEvt>,
 ) {
@@ -829,7 +872,7 @@ pub extern "C" fn prolens_set_cb_http_body_stop(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_ftp_clt(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn protolens_set_cb_ftp_clt(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -842,7 +885,7 @@ pub extern "C" fn prolens_set_cb_ftp_clt(prolens: *mut FfiProlens, callback: Opt
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_ftp_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
+pub extern "C" fn protolens_set_cb_ftp_srv(prolens: *mut FfiProlens, callback: Option<CbData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -855,7 +898,7 @@ pub extern "C" fn prolens_set_cb_ftp_srv(prolens: *mut FfiProlens, callback: Opt
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_ftp_link(prolens: *mut FfiProlens, callback: Option<CbFtpLink>) {
+pub extern "C" fn protolens_set_cb_ftp_link(prolens: *mut FfiProlens, callback: Option<CbFtpLink>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -889,7 +932,7 @@ pub extern "C" fn prolens_set_cb_ftp_link(prolens: *mut FfiProlens, callback: Op
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_ftp_body_start(
+pub extern "C" fn protolens_set_cb_ftp_body_start(
     prolens: *mut FfiProlens,
     callback: Option<CbDirEvt>,
 ) {
@@ -905,7 +948,7 @@ pub extern "C" fn prolens_set_cb_ftp_body_start(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_ftp_body(prolens: *mut FfiProlens, callback: Option<CbDirData>) {
+pub extern "C" fn protolens_set_cb_ftp_body(prolens: *mut FfiProlens, callback: Option<CbDirData>) {
     if prolens.is_null() || callback.is_none() {
         return;
     }
@@ -918,7 +961,7 @@ pub extern "C" fn prolens_set_cb_ftp_body(prolens: *mut FfiProlens, callback: Op
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_ftp_body_stop(
+pub extern "C" fn protolens_set_cb_ftp_body_stop(
     prolens: *mut FfiProlens,
     callback: Option<CbDirEvt>,
 ) {

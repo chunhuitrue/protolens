@@ -50,10 +50,13 @@ where
             stm = &mut *(strm as *mut PktStrm<T, P>);
         }
 
+        dbg!("in c2s parser");
         while !stm.fin() {
             match stm.read_err(read_size).await {
                 Ok((bytes, seq)) => {
+                    dbg!("get bytes");
                     if let Some(ref cb) = cb_read {
+                        dbg!("call cb");
                         cb.borrow_mut()(bytes, seq, cb_ctx);
                     }
                 }
@@ -122,6 +125,7 @@ mod tests {
     use crate::test_utils::*;
 
     // n如果小于read buff长度，和readn行为一样
+    // #[test]
     #[allow(dead_code)]
     fn test_read_single_packet() {
         let seq1 = 1;
@@ -151,6 +155,7 @@ mod tests {
     }
 
     // n如果小于read buff长度，和readn行为一样
+    // #[test]
     #[allow(dead_code)]
     fn test_read_multiple_packets() {
         let seq1 = 1;

@@ -20,16 +20,6 @@ typedef struct {
     L7Proto    l7_proto;    
 } PcapPacket;
 
-ProlensDirection packet_direction(void* packet) {
-    PcapPacket *pkt = (PcapPacket*)packet;
-    return (pkt->dport == 25) ? C2S : S2C;
-}
-
-L7Proto packet_l7_proto(void* packet) {
-    PcapPacket *pkt = (PcapPacket*)packet;
-    return pkt->l7_proto;
-}
-
 CIpAddr packet_sip(void* packet) {
     PcapPacket *pkt = (PcapPacket*)packet;
     CIpAddr addr = {
@@ -161,7 +151,7 @@ int main(void) {
     pcap_t *handle;
 
     // 创建 Prolens 实例
-    FfiProlens *prolens = prolens_new();
+    FfiProlens *prolens = protolens_new();
     if (!prolens) {
         printf("Failed to create prolens instance\n");
         return 1;
@@ -176,7 +166,6 @@ int main(void) {
 
     // 设置 vtable
     PacketVTable vtable = {
-        .l7_proto    = packet_l7_proto,
         .trans_proto = packet_trans_proto,
         .sip         = packet_sip,
         .dip         = packet_dip,
@@ -188,22 +177,23 @@ int main(void) {
         .payload_len = packet_payload_len,
         .payload     = packet_payload,
     };
-    prolens_init_vtable(vtable);
+    protolens_init_vtable(vtable);
 
     // 设置 SMTP 回调
-    prolens_set_cb_smtp_user(prolens, callback_smtp_user);
-    prolens_set_cb_smtp_pass(prolens, callback_smtp_pass);
+    protolens_set_cb_smtp_user(prolens, callback_smtp_user);
+    protolens_set_cb_smtp_pass(prolens, callback_smtp_pass);
 
     // 创建任务,以为pcap文件中只有一个链接，所以只建立一个task
-    Task *task = protolens_task_new(prolens, (void *)0x1234);
+    Task *task = protolens_task_new(prolens, TCP, (void *)0x1234);
     if (!task) {
         printf("Failed to create task\n");
-        prolens_free(prolens);
+        protolens_free(prolens);
         return 1;
     }
+    protolens_set_task_parser(prolens, task, SMTP);
 
     /* 设置task 流回调 */
-    prolens_set_cb_task_c2s(prolens, task, callback_task_c2s);
+    protolens_set_cb_task_c2s(prolens, callback_task_c2s);
 
     struct user_data user_data = {
         .prolens = prolens,
@@ -215,6 +205,6 @@ int main(void) {
 
     // 清理资源
     protolens_task_free(prolens, task);
-    prolens_free(prolens);
+    protolens_free(prolens);
     return 0;
 }

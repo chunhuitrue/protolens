@@ -16,10 +16,6 @@ typedef struct {
     size_t         payload_len;
 } TestPacket;
 
-L7Proto packet_l7_proto(void* packet) {
-    return SMTP;
-}
-
 TransProto packet_trans_proto(void* packet) {
     return TCP;
 }
@@ -113,7 +109,6 @@ void* thread_main(void* arg) {
     printf("Thread %d started\n", thread_id);
 
     PacketVTable vtable = {
-        .l7_proto    = packet_l7_proto,
         .trans_proto = packet_trans_proto,
         .sip         = packet_sip,
         .dip         = packet_dip,
@@ -125,30 +120,31 @@ void* thread_main(void* arg) {
         .payload_len = packet_payload_len,
         .payload     = packet_payload,
     };
-    prolens_init_vtable(vtable);
-    printf("after prolens_init_vtable\n");
+    protolens_init_vtable(vtable);
+    printf("after protolens_init_vtable\n");
     
     // 每个线程有自己的prolens实例
-    FfiProlens *prolens = prolens_new();
+    FfiProlens *prolens = protolens_new();
     if (!prolens) {
         printf("Thread %d: Failed to create prolens\n", thread_id);
         return NULL;
     }
 
     // 设置SMTP回调（每个实例独立设置）
-    prolens_set_cb_smtp_user(prolens, callback_smtp_user);
-    prolens_set_cb_smtp_pass(prolens, callback_smtp_pass);
+    protolens_set_cb_smtp_user(prolens, callback_smtp_user);
+    protolens_set_cb_smtp_pass(prolens, callback_smtp_pass);
 
     // 创建任务
-    Task *task = protolens_task_new(prolens, (void*)(intptr_t)thread_id);
+    Task *task = protolens_task_new(prolens, TCP, (void*)(intptr_t)thread_id);
     if (!task) {
         printf("Thread %d: Failed to create task\n", thread_id);
-        prolens_free(prolens);
+        protolens_free(prolens);
         return NULL;
     }
+    protolens_set_task_parser(prolens, task, SMTP);
 
     // 设置任务回调
-    prolens_set_cb_task_c2s(prolens, task, callback_task_c2s);
+    protolens_set_cb_task_c2s(prolens, callback_task_c2s);
 
     // 处理数据包
     TaskResult result = protolens_task_run(prolens, task, &test_packet);
@@ -156,7 +152,7 @@ void* thread_main(void* arg) {
 
     // 清理资源
     protolens_task_free(prolens, task);
-    prolens_free(prolens);
+    protolens_free(prolens);
 
     printf("Thread %d exited\n", thread_id);
     return NULL;

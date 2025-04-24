@@ -22,6 +22,11 @@ typedef enum {
 typedef enum {
     ORDPACKET,
     SMTP,
+    POP3,
+    IMAP,
+    HTTP,
+    FTPCMD,
+    FTPDATA,
     L7UNKNOWN,
 } L7Proto;
 
@@ -70,7 +75,6 @@ typedef struct {
 } CIpAddr;
 
 typedef struct {
-    L7Proto (*l7_proto)(void* pkt_ptr);
     TransProto (*trans_proto)(void* pkt_ptr);
     CIpAddr (*sip)(void* pkt_ptr);
     CIpAddr (*dip)(void* pkt_ptr);
@@ -94,56 +98,58 @@ typedef void (*CbHttpBody)(const uint8_t *data, size_t len, uint32_t seq, const 
 typedef void (*CbFtpLink)(const uint8_t *ip_ptr, size_t ip_len, uint8_t ip_type, uint16_t port, const void *ctx, ProlensDirection dir);
 typedef void (*CbFtpBody)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx, ProlensDirection dir);
 
-void        prolens_init_vtable(PacketVTable vtable);
-FfiProlens *prolens_new(void);
-void        prolens_free(FfiProlens *prolens);
+void        protolens_init_vtable(PacketVTable vtable);
+FfiProlens *protolens_new(void);
+void        protolens_free(FfiProlens *prolens);
 
-Task       *protolens_task_new(FfiProlens *prolens, void *cb_ctx);
+Task       *protolens_task_new(FfiProlens *prolens, TransProto l4_proto, void *cb_ctx);
 void        protolens_task_free(FfiProlens *prolens, Task *task);
 TaskResult  protolens_task_run(FfiProlens *prolens, Task *task, void *pkt_ptr);
 void        protolens_task_dbinfo(FfiProlens *prolens, Task *task);
 
-void prolens_set_cb_task_c2s(FfiProlens *prolens, Task *task, CbStm callback);
-void prolens_set_cb_task_s2c(FfiProlens *prolens, Task *task, CbStm callback);
-void prolens_set_cb_ord_pkt(FfiProlens *prolens, CbOrdPkt callback);
+void protolens_set_task_parser(FfiProlens *prolens, Task *task, L7Proto l7_proto);
+void protolens_set_cb_task_c2s(FfiProlens *prolens, CbStm callback);
+void protolens_set_cb_task_s2c(FfiProlens *prolens, CbStm callback);
 
-void prolens_set_cb_smtp_user(FfiProlens *prolens, CbData callback);
-void prolens_set_cb_smtp_pass(FfiProlens *prolens, CbData callback);
-void prolens_set_cb_smtp_mailfrom(FfiProlens *prolens, CbData callback);
-void prolens_set_cb_smtp_rcpt(FfiProlens *prolens, CbData callback);
-void prolens_set_cb_smtp_header(FfiProlens *prolens, CbDirData callback);
-void prolens_set_cb_smtp_body_start(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_smtp_body(FfiProlens *prolens, CbBody callback);
-void prolens_set_cb_smtp_body_stop(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_smtp_srv(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_ord_pkt(FfiProlens *prolens, CbOrdPkt callback);
 
-void prolens_set_cb_pop3_header(FfiProlens *prolens, CbDirData callback);
-void prolens_set_cb_pop3_body_start(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_pop3_body(FfiProlens *prolens, CbBody callback);
-void prolens_set_cb_pop3_body_stop(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_pop3_clt(FfiProlens *prolens, CbDirData callback);
-void prolens_set_cb_pop3_srv(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_smtp_user(FfiProlens *prolens, CbData callback);
+void protolens_set_cb_smtp_pass(FfiProlens *prolens, CbData callback);
+void protolens_set_cb_smtp_mailfrom(FfiProlens *prolens, CbData callback);
+void protolens_set_cb_smtp_rcpt(FfiProlens *prolens, CbData callback);
+void protolens_set_cb_smtp_header(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_smtp_body_start(FfiProlens *prolens, CbDirEvt callback);
+void protolens_set_cb_smtp_body(FfiProlens *prolens, CbBody callback);
+void protolens_set_cb_smtp_body_stop(FfiProlens *prolens, CbDirEvt callback);
+void protolens_set_cb_smtp_srv(FfiProlens *prolens, CbDirData callback);
 
-void prolens_set_cb_imap_header(FfiProlens *prolens, CbDirData callback);
-void prolens_set_cb_imap_body_start(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_imap_body(FfiProlens *prolens, CbBody callback);
-void prolens_set_cb_imap_body_stop(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_imap_clt(FfiProlens *prolens, CbDirData callback);
-void prolens_set_cb_imap_srv(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_pop3_header(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_pop3_body_start(FfiProlens *prolens, CbDirEvt callback);
+void protolens_set_cb_pop3_body(FfiProlens *prolens, CbBody callback);
+void protolens_set_cb_pop3_body_stop(FfiProlens *prolens, CbDirEvt callback);
+void protolens_set_cb_pop3_clt(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_pop3_srv(FfiProlens *prolens, CbDirData callback);
 
-void prolens_set_cb_http_start_line(FfiProlens *prolens, CbDirData callback);
-void prolens_set_cb_http_header(FfiProlens *prolens, CbDirData callback);
-void prolens_set_cb_http_body_start(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_http_body(FfiProlens *prolens, CbHttpBody callback);
-void prolens_set_cb_http_body_stop(FfiProlens *prolens, CbDirEvt callback);
+void protolens_set_cb_imap_header(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_imap_body_start(FfiProlens *prolens, CbDirEvt callback);
+void protolens_set_cb_imap_body(FfiProlens *prolens, CbBody callback);
+void protolens_set_cb_imap_body_stop(FfiProlens *prolens, CbDirEvt callback);
+void protolens_set_cb_imap_clt(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_imap_srv(FfiProlens *prolens, CbDirData callback);
 
-void prolens_set_cb_ftp_clt(FfiProlens *prolens, CbDirData callback);
-void prolens_set_cb_ftp_srv(FfiProlens *prolens, CbDirData callback);
-void prolens_set_cb_ftp_link(FfiProlens *prolens, CbFtpLink callback);
+void protolens_set_cb_http_start_line(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_http_header(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_http_body_start(FfiProlens *prolens, CbDirEvt callback);
+void protolens_set_cb_http_body(FfiProlens *prolens, CbHttpBody callback);
+void protolens_set_cb_http_body_stop(FfiProlens *prolens, CbDirEvt callback);
 
-void prolens_set_cb_ftp_body_start(FfiProlens *prolens, CbDirEvt callback);
-void prolens_set_cb_ftp_body(FfiProlens *prolens, CbFtpBody callback);
-void prolens_set_cb_ftp_body_stop(FfiProlens *prolens, CbDirEvt callback);
+void protolens_set_cb_ftp_clt(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_ftp_srv(FfiProlens *prolens, CbDirData callback);
+void protolens_set_cb_ftp_link(FfiProlens *prolens, CbFtpLink callback);
+
+void protolens_set_cb_ftp_body_start(FfiProlens *prolens, CbDirEvt callback);
+void protolens_set_cb_ftp_body(FfiProlens *prolens, CbFtpBody callback);
+void protolens_set_cb_ftp_body_stop(FfiProlens *prolens, CbDirEvt callback);
 
 #ifdef __cplusplus
 }

@@ -15,10 +15,6 @@ typedef struct {
     size_t payload_len;
 } TestPacket;
 
-L7Proto packet_l7_proto(void* packet) {
-    return SMTP;
-}
-
 TransProto packet_trans_proto(void* packet) {
     return TCP;
 }
@@ -98,7 +94,7 @@ void callback_smtp_pass(const uint8_t* data, size_t len, uint32_t seq, const voi
 
 int main(void) {
     // 创建 Prolens 实例
-    FfiProlens *prolens = prolens_new();
+    FfiProlens *prolens = protolens_new();
     if (!prolens) {
         printf("Failed to create prolens instance\n");
         return 1;
@@ -106,7 +102,6 @@ int main(void) {
 
     // 设置 vtable
     PacketVTable vtable = {
-        .l7_proto    = packet_l7_proto,
         .trans_proto = packet_trans_proto,
         .sip         = packet_sip,
         .dip         = packet_dip,
@@ -118,7 +113,7 @@ int main(void) {
         .payload_len = packet_payload_len,
         .payload     = packet_payload,
     };
-    prolens_init_vtable(vtable);
+    protolens_init_vtable(vtable);
 
     // 创建测试数据包
     uint8_t payload[] = "EHLO\r\nAUTH LOGIN\r\nUSER root\r\nPASS 1234\r\n";
@@ -134,23 +129,24 @@ int main(void) {
     
     // 设置 SMTP 回调
     printf("simple.c. set smtp cb\n");
-    prolens_set_cb_smtp_user(prolens, callback_smtp_user);
-    prolens_set_cb_smtp_pass(prolens, callback_smtp_pass);
+    protolens_set_cb_smtp_user(prolens, callback_smtp_user);
+    protolens_set_cb_smtp_pass(prolens, callback_smtp_pass);
 
     // 创建任务
-    Task *task = protolens_task_new(prolens, (void *)0x1234);
+    Task *task = protolens_task_new(prolens, TCP, (void *)0x1234);
     if (!task) {
         printf("Failed to create task\n");
-        prolens_free(prolens);
+        protolens_free(prolens);
         return 1;
     }
+    protolens_set_task_parser(prolens, task, SMTP);
 
     printf("simple.c. task db info:\n");
     protolens_task_dbinfo(prolens, task);
 
     /* 设置task 流回调 */
     printf("simple.c. set task cb\n");
-    prolens_set_cb_task_c2s(prolens, task, callback_task_c2s);
+    protolens_set_cb_task_c2s(prolens, callback_task_c2s);
     
     // 运行任务处理数据包
     TaskResult result = protolens_task_run(prolens, task, &test_packet);
@@ -158,6 +154,6 @@ int main(void) {
 
     // 清理资源
     protolens_task_free(prolens, task);
-    prolens_free(prolens);
+    protolens_free(prolens);
     return 0;
 }

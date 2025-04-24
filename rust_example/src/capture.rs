@@ -155,10 +155,6 @@ impl CapPacket {
 }
 
 impl Packet for CapPacket {
-    fn l7_proto(&self) -> L7Proto {
-        self.header.borrow().as_ref().unwrap().l7_proto
-    }
-
     fn trans_proto(&self) -> TransProto {
         if let Some(TransportHeader::Tcp(_tcph)) = &self.header.borrow().as_ref().unwrap().transport
         {

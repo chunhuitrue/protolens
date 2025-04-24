@@ -1,11 +1,12 @@
 #![allow(unused)]
-
 use crate::capture::CapPacket;
 use crate::capture::PktHeader;
 use crate::recognize::{Direction, ProtoID, recognize_pkt};
 use etherparse::{IpHeader, PacketHeaders, TransportHeader};
+use protolens::L7Proto as ProlensL7Proto;
 use protolens::Prolens;
 use protolens::Task;
+use protolens::TransProto as ProlensTransProto;
 use std::cmp::Ordering;
 use std::ffi::c_void;
 use std::sync::Mutex;
@@ -365,10 +366,13 @@ impl FlowNode {
                 seq
             );
         };
+
         prolens.set_cb_smtp_user(user_callback);
         prolens.set_cb_smtp_pass(pass_callback);
 
-        let mut task = prolens.new_task();
+        let mut task = prolens.new_task(ProlensTransProto::Tcp);
+        prolens.set_task_parser(task.as_mut(), ProlensL7Proto::Smtp);
+
         self.parser_task = Some(task);
     }
 }
