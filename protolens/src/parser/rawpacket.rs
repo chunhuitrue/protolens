@@ -118,17 +118,16 @@ mod tests {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::RawPacket);
+
         // 11 - 20
         let seq2 = seq1 + pkt1.payload_len();
         let pkt2 = build_pkt(seq2, false);
         let _ = pkt2.decode();
-        pkt2.set_l7_proto(L7Proto::RawPacket);
+
         // 21 - 30
         let seq3 = seq2 + pkt2.payload_len();
         let pkt3 = build_pkt(seq3, true);
         let _ = pkt3.decode();
-        pkt3.set_l7_proto(L7Proto::RawPacket);
 
         let count = Rc::new(RefCell::new(0));
         let count_clone = count.clone();
@@ -147,7 +146,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_raw_pkt(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::RawPacket);
 
         dbg!("1 task run");
         protolens.run_task(&mut task, pkt3);

@@ -55,7 +55,6 @@ pub enum Direction {
 }
 
 pub trait Packet: Clone {
-    fn l7_proto(&self) -> L7Proto;
     fn trans_proto(&self) -> TransProto;
     fn sip(&self) -> IpAddr;
     fn dip(&self) -> IpAddr;
@@ -133,7 +132,6 @@ mod tests {
     #[test]
     fn test_same_seq() {
         let packet1 = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -143,7 +141,6 @@ mod tests {
         };
 
         let packet2 = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 1000,
@@ -167,7 +164,6 @@ mod tests {
     #[test]
     fn test_different_seq() {
         let packet1 = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -177,7 +173,6 @@ mod tests {
         };
 
         let packet2 = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 2000,
@@ -201,7 +196,6 @@ mod tests {
     #[test]
     fn test_greater_than() {
         let packet1 = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 2000,
@@ -211,7 +205,6 @@ mod tests {
         };
 
         let packet2 = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 1000,
@@ -234,7 +227,6 @@ mod tests {
     #[test]
     fn test_less_than() {
         let packet1 = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -244,7 +236,6 @@ mod tests {
         };
 
         let packet2 = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 54321,
             dport: 8080,
             sequence: 2000,

@@ -126,7 +126,6 @@ mod tests {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, true);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::Readn);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
@@ -139,7 +138,10 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_readn(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Readn);
+
         protolens.run_task(&mut task, pkt1);
 
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -155,7 +157,6 @@ mod tests {
         let pkt2 = build_pkt(seq2, true);
         let _ = pkt1.decode();
         let _ = pkt2.decode();
-        pkt1.set_l7_proto(L7Proto::Readn);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
@@ -168,7 +169,10 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_readn(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Readn);
+
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
 
@@ -186,7 +190,6 @@ mod tests {
         let payload1 = vec![1, 2, 3, 4, 5];
         let pkt1 = build_pkt_payload(seq1, &payload1);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::Readn);
 
         // 第二个包，包含3个字节
         let seq2 = seq1 + payload1.len() as u32;
@@ -211,7 +214,10 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_readn(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Readn);
+
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
         protolens.run_task(&mut task, pkt3);
@@ -243,7 +249,6 @@ mod tests {
         }
         let pkt1 = build_pkt_payload(seq1, &payload1);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::Readn);
 
         // 创建第二个包，包含额外数据
         let pkt2_payload_len = MAX_READN - MAX_READ_BUFF % MAX_READN;
@@ -281,7 +286,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_readn(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Readn);
 
         protolens.run_task(&mut task, pkt1);
 
@@ -342,7 +349,6 @@ mod tests {
         }
         let pkt = build_pkt_payload(seq1, &payload);
         let _ = pkt.decode();
-        pkt.set_l7_proto(L7Proto::Readn);
 
         let data_chunks = Rc::new(RefCell::new(Vec::new()));
         let data_chunks_clone = Rc::clone(&data_chunks);
@@ -355,7 +361,10 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_readn(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Readn);
+
         protolens.run_task(&mut task, pkt);
 
         // 验证结果 - 应该没有读取到任何数据块

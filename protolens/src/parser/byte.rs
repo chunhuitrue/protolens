@@ -117,7 +117,6 @@ mod tests {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, true);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::Byte);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
@@ -128,7 +127,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_byte(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt1);
 
@@ -143,7 +144,6 @@ mod tests {
         let pkt2 = build_pkt(seq2, true);
         let _ = pkt1.decode();
         let _ = pkt2.decode();
-        pkt1.set_l7_proto(L7Proto::Byte);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
@@ -153,7 +153,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_byte(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -166,7 +168,6 @@ mod tests {
     fn test_stream_next_empty_packet() {
         let pkt = build_pkt_nodata(1, true);
         let _ = pkt.decode();
-        pkt.set_l7_proto(L7Proto::Byte);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
@@ -176,7 +177,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_byte(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt);
 
@@ -196,7 +199,6 @@ mod tests {
         let pkt4 = build_pkt_nodata(seq4, true);
 
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::Byte);
         let _ = pkt2.decode();
         let _ = pkt3.decode();
         let _ = pkt4.decode();
@@ -209,7 +211,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_byte(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -243,9 +247,7 @@ mod tests {
         let seq4 = 41;
         let pkt4 = build_pkt_nodata(seq4, true);
 
-        // 解码所有包
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::Byte);
         let _ = pkt2.decode();
         let _ = pkt_ack.decode();
         let _ = pkt3.decode();
@@ -259,7 +261,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_byte(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -294,13 +298,11 @@ mod tests {
         let seq4 = 41;
         let pkt4 = build_pkt_nodata(seq4, true);
 
-        // 解码所有包
         let _ = pkt1.decode();
         let _ = pkt2.decode();
         let _ = pkt_ack.decode();
         let _ = pkt3.decode();
         let _ = pkt4.decode();
-        pkt1.set_l7_proto(L7Proto::Byte);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
@@ -310,7 +312,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_byte(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
 
         // 乱序发送包：
         // 1. 先发第二个数据包
@@ -356,14 +360,12 @@ mod tests {
         let seq5 = 32;
         let pkt4 = build_pkt_nodata(seq5, true);
 
-        // 解码所有包
         let _ = pkt_syn.decode();
         let _ = pkt1.decode();
         let _ = pkt2.decode();
         let _ = pkt_ack.decode();
         let _ = pkt3.decode();
         let _ = pkt4.decode();
-        pkt_syn.set_l7_proto(L7Proto::Byte);
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
@@ -373,7 +375,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_byte(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt_syn);
         protolens.run_task(&mut task, pkt2);

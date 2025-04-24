@@ -98,10 +98,6 @@ pub struct FfiPacket {
 }
 
 impl crate::Packet for FfiPacket {
-    fn l7_proto(&self) -> L7Proto {
-        VTABLE.with(|vtable| (vtable.borrow().l7_proto)(self.packet_ptr))
-    }
-
     fn trans_proto(&self) -> TransProto {
         VTABLE.with(|vtable| (vtable.borrow().trans_proto)(self.packet_ptr))
     }
@@ -188,6 +184,7 @@ pub extern "C" fn prolens_free(prolens: *mut FfiProlens) {
 #[unsafe(no_mangle)]
 pub extern "C" fn protolens_task_new(
     prolens: *mut FfiProlens,
+    l4_proto: TransProto,
     cb_ctx: *mut c_void,
 ) -> *mut Task<FfiPacket, Rc<FfiPacket>> {
     if prolens.is_null() {
@@ -195,7 +192,7 @@ pub extern "C" fn protolens_task_new(
     }
 
     let prolens = unsafe { Box::from_raw(prolens) };
-    let task = prolens.0.new_task_ffi(cb_ctx);
+    let task = prolens.0.new_task_ffi(l4_proto, cb_ctx);
     std::mem::forget(prolens);
     Box::into_raw(task)
 }
@@ -253,65 +250,48 @@ pub extern "C" fn protolens_task_run(
         return TaskResult::Error;
     }
 
-    let mut prolens = unsafe { Box::from_raw(prolens) };
-    let mut task = unsafe { Box::from_raw(task) };
+    let prolens = unsafe { &mut *prolens };
+    let task = unsafe { &mut *task };
 
     let pkt = FfiPacket {
         packet_ptr: pkt_ptr,
     };
 
-    let result = match prolens.0.run_task(&mut task, pkt) {
+    match prolens.0.run_task(task, pkt) {
         None => TaskResult::Pending,
         Some(Ok(())) => TaskResult::Done,
         Some(Err(())) => TaskResult::Error,
-    };
-    std::mem::forget(prolens);
-    std::mem::forget(task);
-    result
+    }
 }
 
 pub type CbStm = extern "C" fn(data: *const u8, data_len: usize, seq: u32, *const c_void);
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_task_c2s(
-    prolens: *mut FfiProlens,
-    task: *mut Task<FfiPacket, Rc<FfiPacket>>,
-    callback: Option<CbStm>,
-) {
-    if prolens.is_null() || task.is_null() || callback.is_none() {
+pub extern "C" fn prolens_set_cb_task_c2s(prolens: *mut FfiProlens, callback: Option<CbStm>) {
+    if prolens.is_null() || callback.is_none() {
         return;
     }
 
-    let prolens = unsafe { Box::from_raw(prolens) };
-    let mut task = unsafe { Box::from_raw(task) };
+    let prolens = unsafe { &mut *prolens };
 
     let wrapper = move |data: &[u8], seq: u32, ctx: *const c_void| {
         callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
     };
-    task.set_cb_c2s(wrapper);
-    std::mem::forget(prolens);
-    std::mem::forget(task);
+    prolens.0.set_cb_task_c2s(wrapper);
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn prolens_set_cb_task_s2c(
-    prolens: *mut FfiProlens,
-    task: *mut Task<FfiPacket, Rc<FfiPacket>>,
-    callback: Option<CbStm>,
-) {
-    if prolens.is_null() || task.is_null() || callback.is_none() {
+pub extern "C" fn prolens_set_cb_task_s2c(prolens: *mut FfiProlens, callback: Option<CbStm>) {
+    if prolens.is_null() || callback.is_none() {
         return;
     }
 
-    let prolens = unsafe { Box::from_raw(prolens) };
-    let mut task = unsafe { Box::from_raw(task) };
+    let prolens = unsafe { &mut *prolens };
 
     let wrapper = move |data: &[u8], seq: u32, ctx: *const c_void| {
         callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
     };
-    task.set_cb_s2c(wrapper);
-    std::mem::forget(prolens);
-    std::mem::forget(task);
+    prolens.0.set_cb_task_c2s(wrapper);
 }
 
 type CbOrdPkt = extern "C" fn(pkt_ptr: *mut c_void, ctx: *const c_void, dir: Direction);

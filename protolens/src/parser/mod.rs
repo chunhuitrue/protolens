@@ -41,19 +41,17 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 pub(crate) type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
+pub(crate) type DirConfirmFn<T, P> =
+    Box<dyn Fn(*const PktStrm<T, P>, *const PktStrm<T, P>, u16, u16) -> Option<bool>>;
 
 pub(crate) trait Parser {
     type PacketType: PacketBind;
     type PtrType: PtrWrapper<Self::PacketType> + PtrNew<Self::PacketType>;
 
-    fn dir_confirm(
-        &self,
-        _c2s_strm: *const PktStrm<Self::PacketType, Self::PtrType>,
-        _s2c_strm: *const PktStrm<Self::PacketType, Self::PtrType>,
-        _c2s_port: u16,
-        _s2c_port: u16,
-    ) -> bool {
-        true // 默认先到的包就是c2s
+    fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
+        Box::new(|_c2s_strm, _s2c_strm, _c2s_port, _s2c_port| {
+            Some(true) // 默认先到的包就是c2s
+        })
     }
 
     fn c2s_parser(

@@ -127,8 +127,8 @@ impl<T: Ord> Heap<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PacketWrapper;
     use crate::test_utils::MyPacket;
-    use crate::{L7Proto, PacketWrapper};
     use std::marker::PhantomData;
     use std::rc::Rc;
 
@@ -163,7 +163,6 @@ mod tests {
         let mut heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>>::new(5);
 
         let packet1 = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 1000,
@@ -173,7 +172,6 @@ mod tests {
         };
 
         let packet2 = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 990,
@@ -183,7 +181,6 @@ mod tests {
         };
 
         let packet3 = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 995,
@@ -216,7 +213,6 @@ mod tests {
         let mut heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>>::new(5);
 
         let syn_packet = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 100,
@@ -226,7 +222,6 @@ mod tests {
         };
 
         let data_packet = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 101,
@@ -236,7 +231,6 @@ mod tests {
         };
 
         let fin_packet = MyPacket {
-            l7_proto: L7Proto::Unknown,
             sport: 12345,
             dport: 80,
             sequence: 104,

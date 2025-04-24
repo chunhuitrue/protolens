@@ -4,6 +4,7 @@ use crate::CbBodyEvt;
 use crate::CbClt;
 use crate::CbHeader;
 use crate::CbSrv;
+use crate::DirConfirmFn;
 use crate::Direction;
 use crate::POP3_PORT;
 use crate::Parser;
@@ -143,43 +144,46 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn dir_confirm(
-        &self,
-        c2s_strm: *const PktStrm<T, P>,
-        s2c_strm: *const PktStrm<T, P>,
-        c2s_port: u16,
-        s2c_port: u16,
-    ) -> bool {
-        let stm_c2s;
-        let stm_s2c;
-        unsafe {
-            stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
-            stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
-        }
-
-        if s2c_port == POP3_PORT {
-            return true;
-        } else if c2s_port == POP3_PORT {
-            return false;
-        }
-
-        if let Ok(payload) = stm_s2c.peek_payload() {
-            if payload.len() >= 4 && (payload.starts_with(b"+OK ")) {
-                return true;
+    fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
+        Box::new(|c2s_strm, s2c_strm, c2s_port, s2c_port| {
+            let stm_c2s;
+            let stm_s2c;
+            unsafe {
+                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
+                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
             }
 
-            if payload.len() >= 4 && (payload.starts_with(b"USER ")) {
-                return false;
+            if s2c_port == POP3_PORT {
+                return Some(true);
+            } else if c2s_port == POP3_PORT {
+                return Some(false);
             }
-        }
 
-        if let Ok(payload) = stm_c2s.peek_payload() {
-            if payload.len() >= 4 && (payload.starts_with(b"+OK ")) {
-                return false;
+            let payload_c2s = stm_c2s.peek_payload();
+            let payload_s2c = stm_s2c.peek_payload();
+
+            if payload_c2s.is_err() && payload_s2c.is_err() {
+                return None;
             }
-        }
 
-        true
+            if let Ok(payload) = payload_s2c {
+                if payload.len() >= 4 && (payload.starts_with(b"+OK ")) {
+                    return Some(true);
+                }
+
+                if payload.len() >= 4 && (payload.starts_with(b"USER ")) {
+                    return Some(false);
+                }
+            }
+
+            if let Ok(payload) = payload_c2s {
+                if payload.len() >= 4 && (payload.starts_with(b"+OK ")) {
+                    return Some(false);
+                }
+            }
+
+            Some(true)
+        })
     }
 
     fn c2s_parser(
@@ -326,14 +330,12 @@ mod tests {
     }
 
     #[test]
-    fn test_pop3_confirm_dir() {
+    fn test_pop3_confirm_dir_clt() {
         let lines = [
             "USER xiaomingming@163.com\r\n",
             "PASS 1234567890123456\r\n",
             "STAT\r\n",
         ];
-
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
 
         let captured_clt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
 
@@ -345,16 +347,23 @@ mod tests {
             }
         };
 
-        let mut task = protolens.new_task();
-
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_pop3_clt(clt_callback);
 
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Pop3);
+
+        // First packet has no data, confirm_dir will try again next time
         let mut seq = 1000;
+        let pkt_syn = build_pkt_syn(seq);
+        let _ = pkt_syn.decode();
+        protolens.run_task(&mut task, pkt_syn);
+        seq += 1;
+
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload2(seq, line_bytes, 5000, 4000, false);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Pop3);
 
             protolens.run_task(&mut task, pkt);
             seq += line_bytes.len() as u32;
@@ -391,8 +400,6 @@ mod tests {
             .chain(body.iter())
             .chain(quit.iter());
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-
         let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
         let captured_body = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
 
@@ -417,17 +424,18 @@ mod tests {
             }
         };
 
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_pop3_header(header_callback);
         protolens.set_cb_pop3_body(body_callback);
 
-        let mut task = protolens.new_task();
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Pop3);
 
         let mut seq = 1000;
         for line in lines {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload2(seq, line_bytes, POP3_PORT, 4000, false);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Pop3);
 
             protolens.run_task(&mut task, pkt);
             seq += line_bytes.len() as u32;
@@ -487,8 +495,6 @@ mod tests {
             ".\r\n",
         ];
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-
         let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
         let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
         let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
@@ -534,19 +540,20 @@ mod tests {
             }
         };
 
-        let mut task = protolens.new_task();
-
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_pop3_header(header_callback);
         protolens.set_cb_pop3_body_start(body_start_callback);
         protolens.set_cb_pop3_body(body_callback);
         protolens.set_cb_pop3_body_stop(body_stop_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Pop3);
 
         let mut seq = 1000;
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload2(seq, line_bytes, port, 4000, false);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Pop3);
 
             protolens.run_task(&mut task, pkt);
             seq += line_bytes.len() as u32;
@@ -674,14 +681,15 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_pop3_header(header_callback);
         protolens.set_cb_pop3_body_start(body_start_callback);
         protolens.set_cb_pop3_body(body_callback);
         protolens.set_cb_pop3_body_stop(body_stop_callback);
         protolens.set_cb_pop3_clt(clt_callback);
         protolens.set_cb_pop3_srv(srv_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Pop3);
 
         loop {
             let now = SystemTime::now()
@@ -696,7 +704,6 @@ mod tests {
             if pkt.decode().is_err() {
                 continue;
             }
-            pkt.set_l7_proto(L7Proto::Pop3);
 
             protolens.run_task(&mut task, pkt);
         }

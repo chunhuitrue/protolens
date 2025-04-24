@@ -2,6 +2,7 @@ use crate::CbBodyEvt;
 use crate::CbHeader;
 use crate::CbHttpBody;
 use crate::CbStartLine;
+use crate::DirConfirmFn;
 use crate::Direction;
 use crate::Encoding;
 use crate::HTTP_PORT;
@@ -326,43 +327,46 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn dir_confirm(
-        &self,
-        c2s_strm: *const PktStrm<T, P>,
-        s2c_strm: *const PktStrm<T, P>,
-        c2s_port: u16,
-        s2c_port: u16,
-    ) -> bool {
-        let stm_c2s;
-        let stm_s2c;
-        unsafe {
-            stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
-            stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
-        }
-
-        if s2c_port == HTTP_PORT {
-            return true;
-        } else if c2s_port == HTTP_PORT {
-            return false;
-        }
-
-        if let Ok(payload) = stm_c2s.peek_payload() {
-            if payload.len() >= 4 && req(unsafe { std::str::from_utf8_unchecked(payload) }) {
-                return true;
+    fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
+        Box::new(|c2s_strm, s2c_strm, c2s_port, s2c_port| {
+            let stm_c2s;
+            let stm_s2c;
+            unsafe {
+                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
+                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
             }
 
-            if payload.len() >= 7 && rsp(unsafe { std::str::from_utf8_unchecked(payload) }) {
-                return false;
+            if s2c_port == HTTP_PORT {
+                return Some(true);
+            } else if c2s_port == HTTP_PORT {
+                return Some(false);
             }
-        }
 
-        if let Ok(payload) = stm_s2c.peek_payload() {
-            if payload.len() >= 4 && req(unsafe { std::str::from_utf8_unchecked(payload) }) {
-                return false;
+            let payload_c2s = stm_c2s.peek_payload();
+            let payload_s2c = stm_s2c.peek_payload();
+
+            if payload_c2s.is_err() && payload_s2c.is_err() {
+                return None;
             }
-        }
 
-        true
+            if let Ok(payload) = payload_c2s {
+                if payload.len() >= 4 && req(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                    return Some(true);
+                }
+
+                if payload.len() >= 7 && rsp(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                    return Some(false);
+                }
+            }
+
+            if let Ok(payload) = payload_s2c {
+                if payload.len() >= 4 && req(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                    return Some(false);
+                }
+            }
+
+            Some(true)
+        })
     }
 
     fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
@@ -917,13 +921,14 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_http_start_line(start_line_callback);
         protolens.set_cb_http_header(header_callback);
         protolens.set_cb_http_body_start(body_start_callback);
         protolens.set_cb_http_body(body_callback);
         protolens.set_cb_http_body_stop(body_stop_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Http);
 
         loop {
             let now = SystemTime::now()
@@ -938,7 +943,6 @@ mod tests {
             if pkt.decode().is_err() {
                 continue;
             }
-            pkt.set_l7_proto(L7Proto::Http);
 
             protolens.run_task(&mut task, pkt);
         }
@@ -1094,13 +1098,14 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_http_start_line(start_line_callback);
         protolens.set_cb_http_header(header_callback);
         protolens.set_cb_http_body_start(body_start_callback);
         protolens.set_cb_http_body(body_callback);
         protolens.set_cb_http_body_stop(body_stop_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Http);
 
         loop {
             let now = SystemTime::now()
@@ -1115,7 +1120,6 @@ mod tests {
             if pkt.decode().is_err() {
                 continue;
             }
-            pkt.set_l7_proto(L7Proto::Http);
 
             protolens.run_task(&mut task, pkt);
         }
@@ -1283,20 +1287,20 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_http_start_line(start_line_callback);
         protolens.set_cb_http_header(header_callback);
         protolens.set_cb_http_body_start(body_start_callback);
         protolens.set_cb_http_body(body_callback);
         protolens.set_cb_http_body_stop(body_stop_callback);
 
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Http);
+
         let mut seq = 1000;
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Http);
 
             protolens.run_task(&mut task, pkt);
 

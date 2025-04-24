@@ -125,7 +125,6 @@ mod tests {
     use super::*;
     use crate::test_utils::*;
 
-    // 有octet
     #[test]
     fn test_octet_content() {
         let seq1 = 1;
@@ -135,7 +134,6 @@ mod tests {
         payload.extend_from_slice(BDRY.as_bytes());
         let pkt = build_pkt_payload(seq1, &payload);
         let _ = pkt.decode();
-        pkt.set_l7_proto(L7Proto::ReadOctet);
 
         let lines = Rc::new(RefCell::new(Vec::new()));
         let lines_clone = Rc::clone(&lines);
@@ -149,7 +147,10 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_readoctet(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::ReadOctet);
+
         protolens.run_task(&mut task, pkt);
 
         let lines_result = lines.borrow();
@@ -170,7 +171,6 @@ mod tests {
         payload.extend_from_slice(BDRY.as_bytes());
         let pkt = build_pkt_payload(seq1, &payload);
         let _ = pkt.decode();
-        pkt.set_l7_proto(L7Proto::ReadOctet);
 
         let lines = Rc::new(RefCell::new(Vec::new()));
         let lines_clone = Rc::clone(&lines);
@@ -184,7 +184,10 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_readoctet(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::ReadOctet);
+
         protolens.run_task(&mut task, pkt);
 
         let lines_result = lines.borrow();
@@ -202,8 +205,6 @@ mod tests {
         let payload1 = b"ABCDEFGHIJKLMNOPQRST".to_vec(); // 20个字母
         let pkt1 = build_pkt_payload(seq1, &payload1);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::ReadOctet);
-        dbg!(payload1.len());
 
         let seq2 = seq1 + payload1.len() as u32;
         let mut payload2 = b"1234567890".to_vec(); // 10个字母
@@ -224,10 +225,11 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_readoctet(callback);
-        let mut task = protolens.new_task();
-        dbg!("========== pkt1");
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::ReadOctet);
+
         protolens.run_task(&mut task, pkt1);
-        dbg!("========== pkt2");
         protolens.run_task(&mut task, pkt2);
 
         let content_result = content.borrow();
@@ -252,8 +254,6 @@ mod tests {
         let payload1 = vec![b'a'; payload1_len];
         let pkt1 = build_pkt_payload(seq1, &payload1);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::ReadOctet);
-        dbg!(payload1.len());
 
         let seq2 = seq1 + payload1.len() as u32;
         let mut payload2 = b"1234567890".to_vec(); // 10个字母
@@ -274,10 +274,11 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_readoctet(callback);
-        let mut task = protolens.new_task();
-        dbg!("========== pkt1");
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::ReadOctet);
+
         protolens.run_task(&mut task, pkt1);
-        dbg!("========== pkt2");
         protolens.run_task(&mut task, pkt2);
 
         let content_result = content.borrow();

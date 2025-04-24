@@ -1,8 +1,9 @@
+use crate::CbStrm;
+use crate::DirConfirmFn;
 use crate::PacketWrapper;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktStrm;
-use crate::StmCbFn;
 use crate::config::Config;
 use crate::packet::*;
 use core::{
@@ -26,11 +27,13 @@ where
     strm_c2s: PktStrm<T, P>,
     strm_s2c: PktStrm<T, P>,
 
+    dir_confirm_parser: Option<DirConfirmFn<T, P>>,
     c2s_parser: Option<ParserFuture>,
     s2c_parser: Option<ParserFuture>,
     bdir_parser: Option<ParserFuture>,
 
-    pub(crate) parser_inited: bool,
+    pub(crate) parser_set: bool,
+    dir_confirm: bool,
     c2s_state: TaskState,
     s2c_state: TaskState,
     bdir_state: TaskState,
@@ -44,20 +47,37 @@ where
     P: PtrWrapper<T> + PtrNew<T>,
     PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
-    pub(crate) fn new(conf: &Config, cb_ctx: *mut c_void) -> Self {
+    pub(crate) fn new(
+        conf: &Config,
+        _l4_proto: TransProto,
+        cb_c2s: Option<CbStrm>,
+        cb_s2c: Option<CbStrm>,
+        cb_ctx: *mut c_void,
+    ) -> Self {
+        let mut strm_c2s = PktStrm::new(conf.pkt_buff, conf.read_buff, cb_ctx);
+        if let Some(cb) = cb_c2s {
+            strm_c2s.set_cb(cb);
+        }
+        let mut strm_s2c = PktStrm::new(conf.pkt_buff, conf.read_buff, cb_ctx);
+        if let Some(cb) = cb_s2c {
+            strm_s2c.set_cb(cb);
+        }
+
         Task {
             strm_c2s_ip: None,
             strm_s2c_ip: None,
             strm_c2s_port: 0,
             strm_s2c_port: 0,
-            strm_c2s: PktStrm::new(conf.pkt_buff, conf.read_buff, cb_ctx),
-            strm_s2c: PktStrm::new(conf.pkt_buff, conf.read_buff, cb_ctx),
+            strm_c2s,
+            strm_s2c,
 
+            dir_confirm_parser: None,
             c2s_parser: None,
             s2c_parser: None,
             bdir_parser: None,
-            parser_inited: false,
 
+            parser_set: false,
+            dir_confirm: false,
             c2s_state: TaskState::Start,
             s2c_state: TaskState::Start,
             bdir_state: TaskState::Start,
@@ -70,12 +90,12 @@ where
         if self.c2s_parser.is_none() {
             eprintln!(
                 "task debug info: c2s parser is none. state: {:?}, parser_inited: {:?}, cb_ctx: {:?}",
-                self.c2s_state, self.parser_inited, self.cb_ctx
+                self.c2s_state, self.parser_set, self.cb_ctx
             );
         } else {
             eprintln!(
                 "task debug info: c2s parser is some. state: {:?}, parser_inited: {:?}, cb_ctx: {:?}",
-                self.c2s_state, self.parser_inited, self.cb_ctx
+                self.c2s_state, self.parser_set, self.cb_ctx
             );
         }
 
@@ -86,52 +106,37 @@ where
         }
     }
 
-    pub(crate) fn set_cb_c2s<F>(&mut self, callback: F)
-    where
-        F: StmCbFn + 'static,
-    {
-        self.strm_c2s.set_cb(callback);
+    pub(crate) fn set_parser(&mut self, parser: Box<dyn Parser<PacketType = T, PtrType = P>>) {
+        self.dir_confirm_parser = Some(parser.dir_confirm());
+        self.c2s_parser = parser.c2s_parser(&self.strm_c2s, self.cb_ctx);
+        self.s2c_parser = parser.s2c_parser(&self.strm_s2c, self.cb_ctx);
+        self.bdir_parser = parser.bdir_parser(&self.strm_c2s, &self.strm_s2c, self.cb_ctx);
+        self.parser_set = true;
     }
 
-    pub(crate) fn set_cb_s2c<F>(&mut self, callback: F)
-    where
-        F: StmCbFn + 'static,
-    {
-        self.strm_s2c.set_cb(callback);
-    }
-
-    pub(crate) fn init_parser(
-        &mut self,
-        parser: Option<Box<dyn Parser<PacketType = T, PtrType = P>>>,
-    ) {
-        if let Some(parser) = parser {
-            if !parser.dir_confirm(
+    fn confirm_dir(&mut self) {
+        if let Some(dir_confirm_parser) = &self.dir_confirm_parser {
+            if let Some(c2s_dir) = dir_confirm_parser(
                 &self.strm_c2s,
                 &self.strm_s2c,
                 self.strm_c2s_port,
                 self.strm_s2c_port,
             ) {
-                std::mem::swap(&mut self.strm_c2s_ip, &mut self.strm_s2c_ip);
-                std::mem::swap(&mut self.strm_c2s_port, &mut self.strm_s2c_port);
-                std::mem::swap(&mut self.strm_c2s, &mut self.strm_s2c);
-                std::mem::swap(&mut self.c2s_state, &mut self.s2c_state);
+                if !c2s_dir {
+                    std::mem::swap(&mut self.strm_c2s_ip, &mut self.strm_s2c_ip);
+                    std::mem::swap(&mut self.strm_c2s_port, &mut self.strm_s2c_port);
+                    std::mem::swap(&mut self.strm_c2s, &mut self.strm_s2c);
+                    std::mem::swap(&mut self.c2s_state, &mut self.s2c_state);
+                }
+                self.dir_confirm = true;
             }
-
-            self.c2s_parser = parser.c2s_parser(&self.strm_c2s, self.cb_ctx);
-            self.s2c_parser = parser.s2c_parser(&self.strm_s2c, self.cb_ctx);
-            self.bdir_parser = parser.bdir_parser(&self.strm_c2s, &self.strm_s2c, self.cb_ctx);
-            self.parser_inited = true;
         }
     }
 
     // None - 表示解析器还在pending状态或没有parser
     // Some(Ok(())) - 表示解析成功完成
     // Some(Err(())) - 表示解析遇到错误
-    pub(crate) fn run(
-        &mut self,
-        pkt: PacketWrapper<T, P>,
-        parser: Option<Box<dyn Parser<PacketType = T, PtrType = P>>>,
-    ) -> Option<Result<(), ()>> {
+    pub(crate) fn run(&mut self, pkt: PacketWrapper<T, P>) -> Option<Result<(), ()>> {
         if self.strm_c2s_ip.is_none() {
             self.strm_c2s_ip = Some(pkt.ptr.sip());
             self.strm_s2c_ip = Some(pkt.ptr.dip());
@@ -147,8 +152,11 @@ where
             self.strm_s2c.push(pkt);
         }
 
-        if !self.parser_inited {
-            self.init_parser(parser);
+        if !self.dir_confirm {
+            self.confirm_dir();
+            if !self.dir_confirm {
+                return None;
+            }
         }
 
         if let Some(strm_c2s_ip) = self.strm_c2s_ip.as_ref() {

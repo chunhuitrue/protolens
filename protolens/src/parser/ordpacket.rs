@@ -165,7 +165,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_ord_pkt(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::OrdPacket);
         let mut push_count = 0;
 
         loop {
@@ -183,7 +185,6 @@ mod tests {
                 println!("Packet decode error");
                 continue;
             }
-            pkt.set_l7_proto(L7Proto::OrdPacket);
 
             if pkt.header.borrow().as_ref().unwrap().dport() == SMTP_PORT {
                 push_count += 1;
@@ -202,7 +203,6 @@ mod tests {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, false);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::OrdPacket);
         let seq2 = seq1 + pkt1.payload_len() as u32;
         let pkt2 = build_pkt(seq2, false);
         let _ = pkt2.decode();
@@ -223,7 +223,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_ord_pkt(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::OrdPacket);
 
         // 乱序发送包
         protolens.run_task(&mut task, pkt1); // seq1
@@ -247,7 +249,6 @@ mod tests {
         let syn_seq = 1;
         let pkt_syn = build_pkt_syn(syn_seq);
         let _ = pkt_syn.decode();
-        pkt_syn.set_l7_proto(L7Proto::OrdPacket);
 
         // 创建两个数据包，序列号连续
         let seq1 = syn_seq + 1; // SYN占用一个序列号
@@ -268,7 +269,9 @@ mod tests {
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_ord_pkt(callback);
-        let mut task = protolens.new_task();
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::OrdPacket);
 
         // 发送包
         protolens.run_task(&mut task, pkt_syn); // SYN包

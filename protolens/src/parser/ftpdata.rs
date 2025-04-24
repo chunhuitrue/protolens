@@ -186,11 +186,12 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_ftp_body_start(body_start_callback);
         protolens.set_cb_ftp_body(body_callback);
         protolens.set_cb_ftp_body_stop(body_stop_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::FtpData);
 
         loop {
             let now = SystemTime::now()
@@ -209,7 +210,6 @@ mod tests {
             if pkt.header.borrow().as_ref().unwrap().dport() == 56281
                 && pkt.header.borrow().as_ref().unwrap().sport() == 22578
             {
-                pkt.set_l7_proto(L7Proto::FtpData);
                 protolens.run_task(&mut task, pkt);
             }
         }

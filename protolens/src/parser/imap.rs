@@ -4,6 +4,7 @@ use crate::CbBodyEvt;
 use crate::CbClt;
 use crate::CbHeader;
 use crate::CbSrv;
+use crate::DirConfirmFn;
 use crate::Direction;
 use crate::IMAP_PORT;
 use crate::MimeBodyParams;
@@ -335,43 +336,47 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn dir_confirm(
-        &self,
-        c2s_strm: *const PktStrm<T, P>,
-        s2c_strm: *const PktStrm<T, P>,
-        c2s_port: u16,
-        s2c_port: u16,
-    ) -> bool {
-        let stm_c2s;
-        let stm_s2c;
-        unsafe {
-            stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
-            stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
-        }
-
-        if s2c_port == IMAP_PORT {
-            return true;
-        } else if c2s_port == IMAP_PORT {
-            return false;
-        }
-
-        if let Ok(payload) = stm_s2c.peek_payload() {
-            if payload.len() >= 5 && (payload.starts_with(b"* OK ")) {
-                return true;
+    fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
+        Box::new(|c2s_strm, s2c_strm, c2s_port, s2c_port| {
+            let stm_c2s;
+            let stm_s2c;
+            unsafe {
+                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
+                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
             }
 
-            if payload.len() >= 10 && clt_cmd(unsafe { std::str::from_utf8_unchecked(payload) }) {
-                return false;
+            if s2c_port == IMAP_PORT {
+                return Some(true);
+            } else if c2s_port == IMAP_PORT {
+                return Some(false);
             }
-        }
 
-        if let Ok(payload) = stm_c2s.peek_payload() {
-            if payload.len() >= 5 && (payload.starts_with(b"* OK ")) {
-                return false;
+            let payload_c2s = stm_c2s.peek_payload();
+            let payload_s2c = stm_s2c.peek_payload();
+
+            if payload_c2s.is_err() && payload_s2c.is_err() {
+                return None;
             }
-        }
 
-        true
+            if let Ok(payload) = payload_s2c {
+                if payload.len() >= 5 && (payload.starts_with(b"* OK ")) {
+                    return Some(true);
+                }
+
+                if payload.len() >= 10 && clt_cmd(unsafe { std::str::from_utf8_unchecked(payload) })
+                {
+                    return Some(false);
+                }
+            }
+
+            if let Ok(payload) = payload_c2s {
+                if payload.len() >= 5 && (payload.starts_with(b"* OK ")) {
+                    return Some(false);
+                }
+            }
+
+            Some(true)
+        })
     }
 
     fn c2s_parser(
@@ -587,16 +592,16 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_imap_srv(srv_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
 
         let mut seq = 1000;
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Imap);
 
             protolens.run_task(&mut task, pkt);
 
@@ -683,20 +688,20 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_imap_header(header_callback);
         protolens.set_cb_imap_body_start(body_start_callback);
         protolens.set_cb_imap_body(body_callback);
         protolens.set_cb_imap_body_stop(body_stop_callback);
         protolens.set_cb_imap_clt(clt_callback);
 
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
+
         let mut seq = 1000;
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Imap);
 
             protolens.run_task(&mut task, pkt);
 
@@ -793,13 +798,14 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_imap_header(header_callback);
         protolens.set_cb_imap_body_start(body_start_callback);
         protolens.set_cb_imap_body(body_callback);
         protolens.set_cb_imap_body_stop(body_stop_callback);
         protolens.set_cb_imap_clt(clt_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
 
         loop {
             let now = SystemTime::now()
@@ -814,7 +820,6 @@ mod tests {
             if pkt.decode().is_err() {
                 continue;
             }
-            pkt.set_l7_proto(L7Proto::Imap);
 
             protolens.run_task(&mut task, pkt);
         }
@@ -982,19 +987,19 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_imap_header(header_callback);
         protolens.set_cb_imap_body_start(body_start_callback);
         protolens.set_cb_imap_body(body_callback);
         protolens.set_cb_imap_body_stop(body_stop_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
 
         let mut seq = 1000;
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Imap);
 
             protolens.run_task(&mut task, pkt);
 
@@ -1161,14 +1166,15 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_imap_header(header_callback);
         protolens.set_cb_imap_body_start(body_start_callback);
         protolens.set_cb_imap_body(body_callback);
         protolens.set_cb_imap_body_stop(body_stop_callback);
         protolens.set_cb_imap_clt(clt_callback);
         protolens.set_cb_imap_srv(srv_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
 
         loop {
             let now = SystemTime::now()
@@ -1183,7 +1189,6 @@ mod tests {
             if pkt.decode().is_err() {
                 continue;
             }
-            pkt.set_l7_proto(L7Proto::Imap);
 
             protolens.run_task(&mut task, pkt);
         }
@@ -1408,9 +1413,10 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_imap_clt(clt_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
 
         loop {
             let now = SystemTime::now()
@@ -1425,7 +1431,6 @@ mod tests {
             if pkt.decode().is_err() {
                 continue;
             }
-            pkt.set_l7_proto(L7Proto::Imap);
 
             protolens.run_task(&mut task, pkt);
         }

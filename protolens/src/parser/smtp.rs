@@ -8,6 +8,7 @@ use crate::CbPass;
 use crate::CbRcpt;
 use crate::CbSrv;
 use crate::CbUser;
+use crate::DirConfirmFn;
 use crate::Direction;
 use crate::Parser;
 use crate::ParserFactory;
@@ -185,55 +186,58 @@ where
     type PacketType = T;
     type PtrType = P;
 
-    fn dir_confirm(
-        &self,
-        c2s_strm: *const PktStrm<T, P>,
-        s2c_strm: *const PktStrm<T, P>,
-        c2s_port: u16,
-        s2c_port: u16,
-    ) -> bool {
-        let stm_c2s;
-        let stm_s2c;
-        unsafe {
-            stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
-            stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
-        }
-
-        if s2c_port == SMTP_PORT {
-            return true;
-        } else if c2s_port == SMTP_PORT {
-            return false;
-        }
-
-        if let Ok(payload) = stm_s2c.peek_payload() {
-            if payload.len() >= 4
-                && (payload.starts_with(b"220 ")
-                    || payload.starts_with(b"220-")
-                    || payload.starts_with(b"421 ")
-                    || payload.starts_with(b"421-"))
-            {
-                return true;
+    fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
+        Box::new(|c2s_strm, s2c_strm, c2s_port, s2c_port| {
+            let stm_c2s;
+            let stm_s2c;
+            unsafe {
+                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
+                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
             }
 
-            if payload.len() >= 4
-                && (payload.starts_with(b"HELO ") || payload.starts_with(b"EHLO "))
-            {
-                return false;
+            if s2c_port == SMTP_PORT {
+                return Some(true);
+            } else if c2s_port == SMTP_PORT {
+                return Some(false);
             }
-        }
 
-        if let Ok(payload) = stm_c2s.peek_payload() {
-            if payload.len() >= 4
-                && (payload.starts_with(b"220 ")
-                    || payload.starts_with(b"220-")
-                    || payload.starts_with(b"421 ")
-                    || payload.starts_with(b"421-"))
-            {
-                return false;
+            let payload_c2s = stm_c2s.peek_payload();
+            let payload_s2c = stm_s2c.peek_payload();
+
+            if payload_c2s.is_err() && payload_s2c.is_err() {
+                return None;
             }
-        }
 
-        true
+            if let Ok(payload) = payload_s2c {
+                if payload.len() >= 4
+                    && (payload.starts_with(b"220 ")
+                        || payload.starts_with(b"220-")
+                        || payload.starts_with(b"421 ")
+                        || payload.starts_with(b"421-"))
+                {
+                    return Some(true);
+                }
+
+                if payload.len() >= 4
+                    && (payload.starts_with(b"HELO ") || payload.starts_with(b"EHLO "))
+                {
+                    return Some(false);
+                }
+            }
+
+            if let Ok(payload) = payload_c2s {
+                if payload.len() >= 4
+                    && (payload.starts_with(b"220 ")
+                        || payload.starts_with(b"220-")
+                        || payload.starts_with(b"421 ")
+                        || payload.starts_with(b"421-"))
+                {
+                    return Some(false);
+                }
+            }
+
+            Some(true)
+        })
     }
 
     fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
@@ -472,10 +476,10 @@ mod tests {
         let wrong_command = *b"HELO tes\r\n";
         let pkt1 = build_pkt_payload2(seq1, &wrong_command, 4000, SMTP_PORT, false);
         let _ = pkt1.decode();
-        pkt1.set_l7_proto(L7Proto::Smtp);
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
 
         let result = protolens.run_task(&mut task, pkt1);
         assert_eq!(result, None, "none is ok");
@@ -484,10 +488,10 @@ mod tests {
         let correct_commands = *b"EHLO tes\r\n";
         let pkt2 = build_pkt_payload2(seq2, &correct_commands, 4000, SMTP_PORT, false);
         let _ = pkt2.decode();
-        pkt2.set_l7_proto(L7Proto::Smtp);
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
 
         let result = protolens.run_task(&mut task, pkt2);
         assert_eq!(result, None, "none is ok");
@@ -501,8 +505,6 @@ mod tests {
             "c2VuZGVyQGV4YW1wbGUuY29t\r\n", // user
             "cGFzc3dvcmQxMjM=\r\n",         // pass
         ];
-
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
 
         let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
@@ -523,17 +525,18 @@ mod tests {
             }
         };
 
-        let mut task = protolens.new_task();
-
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
 
         let mut seq = 1000;
         for line in lines {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload2(seq, line_bytes, 4000, 2500, false);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
             seq += line_bytes.len() as u32;
@@ -557,8 +560,6 @@ mod tests {
             "250-PIPELINING\r\n",
         ];
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-
         let captured_srv = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
 
         let srv_callback = {
@@ -569,16 +570,17 @@ mod tests {
             }
         };
 
-        let mut task = protolens.new_task();
-
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_smtp_srv(srv_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
 
         let mut seq = 1000;
         for line in lines {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload2(seq, line_bytes, 2500, 5000, false);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
             seq += line_bytes.len() as u32;
@@ -620,8 +622,6 @@ mod tests {
             .chain(header.iter())
             .chain(body.iter())
             .chain(quit.iter());
-
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
 
         let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_user_seq = Rc::new(RefCell::new(0u32));
@@ -702,22 +702,23 @@ mod tests {
             }
         };
 
-        let mut task = protolens.new_task();
-
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
         protolens.set_cb_smtp_mailfrom(mailfrom_callback);
         protolens.set_cb_smtp_rcpt(rcpt_callback);
         protolens.set_cb_smtp_header(header_callback);
         protolens.set_cb_smtp_body(body_callback);
-        protolens.set_cb_task_c2s(&mut task, raw_callback);
+        protolens.set_cb_task_c2s(raw_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
 
         let mut seq = 1000;
         for line in lines {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload2(seq, line_bytes, 4000, SMTP_PORT, false);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
             seq += line_bytes.len() as u32;
@@ -797,8 +798,6 @@ mod tests {
             "QUIT\r\n",
         ];
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-
         let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_user_seq = Rc::new(RefCell::new(0u32));
         let captured_pass_seq = Rc::new(RefCell::new(0u32));
@@ -844,19 +843,20 @@ mod tests {
             }
         };
 
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
         protolens.set_cb_smtp_mailfrom(mailfrom_callback);
         protolens.set_cb_smtp_rcpt(rcpt_callback);
 
-        let mut task = protolens.new_task();
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
 
         let mut seq = 1000;
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
             seq += line_bytes.len() as u32;
@@ -894,8 +894,6 @@ mod tests {
             "cGFzc3dvcmQxMjM=\r\n",         // pass
         ];
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-
         let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_user_seq = Rc::new(RefCell::new(0u32));
         let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
@@ -923,17 +921,18 @@ mod tests {
             }
         };
 
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
 
-        let mut task = protolens.new_task();
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
 
         let mut seq = 1000;
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
             seq += line_bytes.len() as u32;
@@ -972,8 +971,6 @@ mod tests {
             "\r\n",
         ];
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-
         let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
 
         let header_callback = {
@@ -988,16 +985,17 @@ mod tests {
             }
         };
 
-        let mut task = protolens.new_task();
-
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_smtp_header(header_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
 
         let mut seq = 1000;
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
             seq += line_bytes.len() as u32;
@@ -1068,8 +1066,6 @@ mod tests {
             "QUIT\r\n",
             "\r\n",
         ];
-
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
 
         let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_user_seq = Rc::new(RefCell::new(0u32));
@@ -1186,8 +1182,7 @@ mod tests {
             }
         };
 
-        let mut task = protolens.new_task();
-
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
         protolens.set_cb_smtp_mailfrom(mailfrom_callback);
@@ -1196,14 +1191,16 @@ mod tests {
         protolens.set_cb_smtp_body_start(body_start_callback);
         protolens.set_cb_smtp_body(body_callback);
         protolens.set_cb_smtp_body_stop(body_stop_callback);
-        protolens.set_cb_task_c2s(&mut task, raw_callback);
+        protolens.set_cb_task_c2s(raw_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
 
         let mut seq = 1000;
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
 
@@ -1344,7 +1341,6 @@ mod tests {
             ".\r\n",
             "QUIT\r\n",
         ];
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
 
         let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
         let captured_user_seq = Rc::new(RefCell::new(0u32));
@@ -1452,6 +1448,7 @@ mod tests {
             }
         };
 
+        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
         protolens.set_cb_smtp_mailfrom(mailfrom_callback);
@@ -1461,14 +1458,14 @@ mod tests {
         protolens.set_cb_smtp_body(body_callback);
         protolens.set_cb_smtp_body_stop(body_stop_callback);
 
-        let mut task = protolens.new_task();
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
 
         let mut seq = 1000;
         for line in lines.iter() {
             let line_bytes = line.as_bytes();
             let pkt = build_pkt_payload(seq, line_bytes);
             let _ = pkt.decode();
-            pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
 
@@ -1673,8 +1670,6 @@ mod tests {
         };
 
         let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
-        let mut task = protolens.new_task();
-
         protolens.set_cb_smtp_user(user_callback);
         protolens.set_cb_smtp_pass(pass_callback);
         protolens.set_cb_smtp_mailfrom(mailfrom_callback);
@@ -1684,6 +1679,9 @@ mod tests {
         protolens.set_cb_smtp_body(body_callback);
         protolens.set_cb_smtp_body_stop(body_stop_callback);
         protolens.set_cb_smtp_srv(srv_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
 
         loop {
             let now = SystemTime::now()
@@ -1698,7 +1696,6 @@ mod tests {
             if pkt.decode().is_err() {
                 continue;
             }
-            pkt.set_l7_proto(L7Proto::Smtp);
 
             protolens.run_task(&mut task, pkt);
         }
