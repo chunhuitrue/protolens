@@ -16,6 +16,7 @@ pub enum L7Proto {
     Http,
     FtpCmd,
     FtpData,
+    Sip,
 
     #[cfg(test)]
     RawPacket,
@@ -42,7 +43,6 @@ pub enum L7Proto {
 pub enum TransProto {
     Tcp,
     Udp,
-    Other,
 }
 
 #[repr(C)]

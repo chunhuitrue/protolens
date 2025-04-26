@@ -151,7 +151,7 @@ mod tests {
         // However, if there isn't enough data for the given size, and the size already exceeds the buffer size,
         // read will encounter the fin flag when attempting to read.
         // This is reasonable behavior.
-        assert_eq!(*vec.borrow(), vec![]);
+        assert_eq!(*vec.borrow(), Vec::<u8>::new());
     }
 
     #[test]
@@ -182,7 +182,7 @@ mod tests {
         protolens.run_task(&mut task, pkt2);
 
         // The reason is the same as above
-        assert_eq!(*vec.borrow(), vec![]);
+        assert_eq!(*vec.borrow(), Vec::<u8>::new());
     }
 
     // 因为n超过buff的长度。应该第一次读取buff的长度，第二次读取剩余的长度

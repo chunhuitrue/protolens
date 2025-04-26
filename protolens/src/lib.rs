@@ -35,6 +35,7 @@ use crate::packet::*;
 use crate::parser::*;
 use crate::pktstrm::*;
 use crate::pop3::*;
+use crate::sip::*;
 use crate::smtp::*;
 use crate::stats::*;
 use std::cell::RefCell;
@@ -207,6 +208,8 @@ where
             .insert(L7Proto::FtpCmd, Box::new(FtpCmdFactory::<T, P>::new()));
         self.parsers
             .insert(L7Proto::FtpData, Box::new(FtpDataFactory::<T, P>::new()));
+        self.parsers
+            .insert(L7Proto::Sip, Box::new(SipFactory::<T, P>::new()));
 
         #[cfg(test)]
         {
@@ -233,22 +236,21 @@ where
         self.new_task_ffi(l4_proto, ptr::null_mut())
     }
 
-    pub(crate) fn new_task_ffi(
-        &self,
-        l4_proto: TransProto,
-        cb_ctx: *mut c_void,
-    ) -> Box<Task<T, P>> {
-        Box::new(Task::new(
-            &self.conf,
-            l4_proto,
-            self.cb_task_c2s.clone(),
-            self.cb_task_s2c.clone(),
-            cb_ctx,
-        ))
+    fn new_task_ffi(&self, l4_proto: TransProto, cb_ctx: *mut c_void) -> Box<Task<T, P>> {
+        let mut task = Box::new(Task::new(&self.conf, cb_ctx, l4_proto));
+        if let Some(cb) = &self.cb_task_c2s {
+            task.set_cb_strm_c2s(cb.clone());
+        }
+        if let Some(cb) = &self.cb_task_s2c {
+            task.set_cb_strm_s2c(cb.clone());
+        }
+        task
     }
 
     pub fn set_task_parser(&self, task: &mut Task<T, P>, l7_proto: L7Proto) {
-        if task.parser_set || l7_proto == L7Proto::Unknown || !self.parsers.contains_key(&l7_proto)
+        if task.parser_set()
+            || l7_proto == L7Proto::Unknown
+            || !self.parsers.contains_key(&l7_proto)
         {
             return;
         }
@@ -257,7 +259,6 @@ where
             .parsers
             .get(&l7_proto)
             .map(|factory| factory.create(self));
-
         if let Some(parser) = parser {
             task.set_parser(parser);
         }

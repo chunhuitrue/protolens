@@ -185,9 +185,8 @@ pub extern "C" fn protolens_task_new(
         return std::ptr::null_mut();
     }
 
-    let prolens = unsafe { Box::from_raw(prolens) };
+    let prolens = unsafe { &mut *prolens };
     let task = prolens.0.new_task_ffi(l4_proto, cb_ctx);
-    std::mem::forget(prolens);
     Box::into_raw(task)
 }
 
@@ -201,9 +200,7 @@ pub extern "C" fn protolens_task_free(
     }
 
     unsafe {
-        let prolens = Box::from_raw(prolens);
         let _ = Box::from_raw(task);
-        std::mem::forget(prolens);
     }
 }
 
@@ -216,14 +213,8 @@ pub extern "C" fn protolens_task_dbinfo(
         return;
     }
 
-    unsafe {
-        let prolens = Box::from_raw(prolens);
-        let task = Box::from_raw(task);
-        task.debug_info();
-        std::mem::forget(prolens);
-        std::mem::forget(task);
-    }
-    eprintln!("protolens_task_dbinfo. end");
+    let task = unsafe { &mut *task };
+    task.debug_info();
 }
 
 #[repr(C)]

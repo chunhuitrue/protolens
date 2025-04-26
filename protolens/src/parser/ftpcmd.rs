@@ -127,7 +127,7 @@ where
     type PtrType = P;
 
     fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
-        Box::new(|c2s_strm, s2c_strm, c2s_port, s2c_port| {
+        |c2s_strm, s2c_strm, c2s_port, s2c_port| {
             let stm_c2s;
             let stm_s2c;
             unsafe {
@@ -168,7 +168,7 @@ where
             }
 
             Some(true)
-        })
+        }
     }
 
     fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {

@@ -4,6 +4,7 @@ pub mod http;
 pub mod imap;
 pub mod ordpacket;
 pub mod pop3;
+pub mod sip;
 pub mod smtp;
 
 #[cfg(test)]
@@ -21,6 +22,7 @@ pub mod readn;
 
 use crate::Direction;
 use crate::PacketBind;
+use crate::PacketWrapper;
 use crate::PktStrm;
 use crate::Prolens;
 use crate::PtrNew;
@@ -42,16 +44,18 @@ use std::rc::Rc;
 
 pub(crate) type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 pub(crate) type DirConfirmFn<T, P> =
-    Box<dyn Fn(*const PktStrm<T, P>, *const PktStrm<T, P>, u16, u16) -> Option<bool>>;
+    fn(*const PktStrm<T, P>, *const PktStrm<T, P>, u16, u16) -> Option<bool>;
+pub(crate) type UdpParserFn<T, P> = fn(&PacketWrapper<T, P>, *mut c_void) -> Result<(), ()>;
+pub(crate) type PktDirConfirmFn<T, P> = fn(&PacketWrapper<T, P>) -> Option<bool>;
 
 pub(crate) trait Parser {
     type PacketType: PacketBind;
     type PtrType: PtrWrapper<Self::PacketType> + PtrNew<Self::PacketType>;
 
     fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
-        Box::new(|_c2s_strm, _s2c_strm, _c2s_port, _s2c_port| {
-            Some(true) // 默认先到的包就是c2s
-        })
+        |_c2s_strm, _s2c_strm, _c2s_port, _s2c_port| {
+            Some(true) // The default is that the first package to arrive is c2s.
+        }
     }
 
     fn c2s_parser(
@@ -76,6 +80,24 @@ pub(crate) trait Parser {
         _s2c_strm: *const PktStrm<Self::PacketType, Self::PtrType>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
+        None
+    }
+
+    fn pkt_dir_confirm(&self) -> PktDirConfirmFn<Self::PacketType, Self::PtrType> {
+        |_pkt| {
+            Some(true) // The default is that the first package to arrive is c2s.
+        }
+    }
+
+    fn pkt_c2s_parser(&self) -> Option<UdpParserFn<Self::PacketType, Self::PtrType>> {
+        None
+    }
+
+    fn pkt_s2c_parser(&self) -> Option<UdpParserFn<Self::PacketType, Self::PtrType>> {
+        None
+    }
+
+    fn pkt_bidr_parser(&self) -> Option<UdpParserFn<Self::PacketType, Self::PtrType>> {
         None
     }
 }
