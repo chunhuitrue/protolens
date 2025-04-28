@@ -4,6 +4,7 @@ mod ffi;
 mod heap;
 mod packet;
 mod parser;
+mod pktdata;
 mod pktstrm;
 mod stats;
 mod task;
@@ -108,6 +109,12 @@ where
     cb_ftp_body: Option<CbFtpBody>,
     cb_ftp_body_stop: Option<CbBodyEvt>,
 
+    cb_sip_start_line: Option<CbStartLine>,
+    cb_sip_header: Option<CbHeader>,
+    cb_sip_body_start: Option<CbBodyEvt>,
+    cb_sip_body: Option<CbSipBody>,
+    cb_sip_body_stop: Option<CbBodyEvt>,
+
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
     #[cfg(test)]
@@ -182,6 +189,11 @@ where
             cb_ftp_body_start: None,
             cb_ftp_body: None,
             cb_ftp_body_stop: None,
+            cb_sip_start_line: None,
+            cb_sip_header: None,
+            cb_sip_body_start: None,
+            cb_sip_body: None,
+            cb_sip_body_stop: None,
         };
         prolens.regist_parsers();
         prolens
@@ -565,6 +577,41 @@ where
     {
         self.cb_ftp_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
     }
+
+    pub fn set_cb_sip_start_line<F>(&mut self, callback: F)
+    where
+        F: DataCbDirFn + 'static,
+    {
+        self.cb_sip_start_line = Some(Rc::new(RefCell::new(callback)) as CbStartLine);
+    }
+
+    pub fn set_cb_sip_header<F>(&mut self, callback: F)
+    where
+        F: DataCbDirFn + 'static,
+    {
+        self.cb_sip_header = Some(Rc::new(RefCell::new(callback)) as CbHeader);
+    }
+
+    pub fn set_cb_sip_body_start<F>(&mut self, callback: F)
+    where
+        F: EvtCbFn + 'static,
+    {
+        self.cb_sip_body_start = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
+
+    pub fn set_cb_sip_body<F>(&mut self, callback: F)
+    where
+        F: SipBodyCbFn + 'static,
+    {
+        self.cb_sip_body = Some(Rc::new(RefCell::new(callback)) as CbSipBody);
+    }
+
+    pub fn set_cb_sip_body_stop<F>(&mut self, callback: F)
+    where
+        F: EvtCbFn + 'static,
+    {
+        self.cb_sip_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
 }
 
 impl<T, P> Default for Prolens<T, P>
@@ -833,22 +880,26 @@ pub mod bench {
     }
 
     pub fn http(c: &mut Criterion) {
-        bench_proto(c, "http", "http_mime", L7Proto::Http, 80);
+        bench_proto(c, "http", "http_mime", TransProto::Tcp, L7Proto::Http);
     }
 
     pub fn smtp(c: &mut Criterion) {
-        bench_proto(c, "smtp", "smtp", L7Proto::Smtp, 25);
+        bench_proto(c, "smtp", "smtp", TransProto::Tcp, L7Proto::Smtp);
     }
 
     pub fn pop3(c: &mut Criterion) {
-        bench_proto(c, "pop3", "pop3", L7Proto::Pop3, 110);
+        bench_proto(c, "pop3", "pop3", TransProto::Tcp, L7Proto::Pop3);
     }
 
     pub fn imap(c: &mut Criterion) {
-        bench_proto(c, "imap", "imap", L7Proto::Imap, 143);
+        bench_proto(c, "imap", "imap", TransProto::Tcp, L7Proto::Imap);
     }
 
-    fn bench_proto(c: &mut Criterion, name: &str, pcap_name: &str, proto: L7Proto, _port: u16) {
+    pub fn sip(c: &mut Criterion) {
+        bench_proto(c, "sip", "sip", TransProto::Udp, L7Proto::Sip);
+    }
+
+    fn bench_proto(c: &mut Criterion, name: &str, pcap_name: &str, l4: TransProto, l7: L7Proto) {
         let project_root = env::current_dir().unwrap();
         let file_path = project_root.join(format!("tests/pcap/{}.pcap", pcap_name));
         let mut cap = Capture::init(file_path).unwrap();
@@ -874,8 +925,8 @@ pub mod bench {
         }
 
         let mut protolens = black_box(Prolens::<CapPacket, Rc<CapPacket>>::default());
-        let mut task = black_box(protolens.new_task(TransProto::Tcp));
-        protolens.set_task_parser(task.as_mut(), proto);
+        let mut task = black_box(protolens.new_task(l4));
+        protolens.set_task_parser(task.as_mut(), l7);
 
         let mut group = c.benchmark_group(name);
         group.throughput(Throughput::Bytes(total_bytes.into()));

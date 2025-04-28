@@ -12,6 +12,7 @@ use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
 use crate::ReadRet;
+use crate::content_length;
 use crate::content_type;
 use crate::content_type_ext;
 use crate::packet::*;
@@ -350,17 +351,17 @@ where
             }
 
             if let Ok(payload) = payload_c2s {
-                if payload.len() >= 4 && req(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                if req(unsafe { std::str::from_utf8_unchecked(payload) }) {
                     return Some(true);
                 }
 
-                if payload.len() >= 7 && rsp(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                if rsp(unsafe { std::str::from_utf8_unchecked(payload) }) {
                     return Some(false);
                 }
             }
 
             if let Ok(payload) = payload_s2c {
-                if payload.len() >= 4 && req(unsafe { std::str::from_utf8_unchecked(payload) }) {
+                if req(unsafe { std::str::from_utf8_unchecked(payload) }) {
                     return Some(false);
                 }
             }
@@ -526,25 +527,6 @@ fn rsp_version(line: &[u8]) -> HttpVersion {
     match parse_rsp_version(line) {
         Ok((_, version)) => version,
         Err(_) => HttpVersion::Unknown,
-    }
-}
-
-fn content_length(line: &str) -> Option<usize> {
-    fn parse_content_length(input: &str) -> IResult<&str, usize> {
-        let (input, _) = tag_no_case("content-length:")(input)?;
-
-        let (input, _) = nom::character::complete::space0(input)?;
-
-        let (input, length) = map_res(nom::character::complete::digit1, |s: &str| {
-            s.parse::<usize>()
-        })(input)?;
-
-        Ok((input, length))
-    }
-
-    match parse_content_length(line) {
-        Ok((_, length)) => Some(length),
-        Err(_) => None,
     }
 }
 

@@ -33,7 +33,7 @@ use nom::{
     IResult,
     branch::alt,
     bytes::complete::{tag, tag_no_case, take_till, take_while},
-    combinator::value,
+    combinator::{map_res, value},
     sequence::{preceded, terminated},
 };
 use std::cell::RefCell;
@@ -45,7 +45,6 @@ use std::rc::Rc;
 pub(crate) type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 pub(crate) type DirConfirmFn<T, P> =
     fn(*const PktStrm<T, P>, *const PktStrm<T, P>, u16, u16) -> Option<bool>;
-pub(crate) type UdpParserFn<T, P> = fn(&PacketWrapper<T, P>, *mut c_void) -> Result<(), ()>;
 pub(crate) type PktDirConfirmFn<T, P> = fn(&PacketWrapper<T, P>) -> Option<bool>;
 
 pub(crate) trait Parser {
@@ -97,10 +96,22 @@ pub(crate) trait Parser {
         None
     }
 
-    fn pkt_bidr_parser(&self) -> Option<UdpParserFn<Self::PacketType, Self::PtrType>> {
+    fn pkt_bdir_parser(&self) -> Option<UdpParserFn<Self::PacketType, Self::PtrType>> {
         None
     }
 }
+
+pub trait UdpParser {
+    type PacketType: PacketBind;
+    type PtrType: PtrWrapper<Self::PacketType> + PtrNew<Self::PacketType>;
+
+    fn parse(
+        &self,
+        pkt: PacketWrapper<Self::PacketType, Self::PtrType>,
+        cb_ctx: *mut c_void,
+    ) -> Result<(), ()>;
+}
+pub type UdpParserFn<T, P> = Box<dyn UdpParser<PacketType = T, PtrType = P>>;
 
 pub(crate) trait ParserFactory<T, P>
 where
@@ -155,6 +166,9 @@ impl<
 pub trait FtpLinkCbFn: FnMut(Option<IpAddr>, u16, *mut c_void, Direction) {}
 impl<F: FnMut(Option<IpAddr>, u16, *mut c_void, Direction)> FtpLinkCbFn for F {}
 
+pub trait SipBodyCbFn: FnMut(&[u8], u32, *mut c_void, Direction) {}
+impl<F: FnMut(&[u8], u32, *mut c_void, Direction)> SipBodyCbFn for F {}
+
 pub(crate) type CbOrdPkt<T> = Rc<RefCell<dyn OrdPktCbFn<T> + 'static>>;
 pub(crate) type CbUser = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbPass = Rc<RefCell<dyn DataCbFn + 'static>>;
@@ -169,6 +183,7 @@ pub(crate) type CbStartLine = Rc<RefCell<dyn DataCbDirFn + 'static>>;
 pub(crate) type CbHttpBody = Rc<RefCell<dyn HttpBodyCbFn + 'static>>;
 pub(crate) type CbFtpLink = Rc<RefCell<dyn FtpLinkCbFn + 'static>>;
 pub(crate) type CbFtpBody = Rc<RefCell<dyn DataCbDirFn + 'static>>;
+pub(crate) type CbSipBody = Rc<RefCell<dyn SipBodyCbFn + 'static>>;
 
 #[derive(Clone)]
 pub(crate) struct Callbacks {
@@ -480,6 +495,25 @@ fn transfer_encoding(input: &[u8]) -> Option<TransferEncoding> {
 
     match parser(input) {
         Ok((_, encoding)) => Some(encoding),
+        Err(_) => None,
+    }
+}
+
+pub(crate) fn content_length(line: &str) -> Option<usize> {
+    fn parse_content_length(input: &str) -> IResult<&str, usize> {
+        let (input, _) = tag_no_case("content-length:")(input)?;
+
+        let (input, _) = nom::character::complete::space0(input)?;
+
+        let (input, length) = map_res(nom::character::complete::digit1, |s: &str| {
+            s.parse::<usize>()
+        })(input)?;
+
+        Ok((input, length))
+    }
+
+    match parse_content_length(line) {
+        Ok((_, length)) => Some(length),
         Err(_) => None,
     }
 }

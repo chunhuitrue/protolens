@@ -168,13 +168,23 @@ impl CapPacket {
                 let payload_offset =
                     headers.payload.as_ptr() as usize - self.data.as_ptr() as usize;
                 let mut payload_len = 0;
-                if let (Some(IpHeader::Version4(ipv4, _)), Some(TransportHeader::Tcp(tcp_header))) =
+
+                if let (Some(IpHeader::Version4(ipv4, _)), Some(transport)) =
                     (&headers.ip, &headers.transport)
                 {
                     let ip_total_len = ipv4.total_len() as usize;
                     let ip_header_len = ipv4.ihl() as usize * 4;
-                    let tcp_header_len = tcp_header.header_len() as usize;
-                    payload_len = ip_total_len - ip_header_len - tcp_header_len;
+
+                    match transport {
+                        TransportHeader::Tcp(tcp_header) => {
+                            let tcp_header_len = tcp_header.header_len() as usize;
+                            payload_len = ip_total_len - ip_header_len - tcp_header_len;
+                        }
+                        TransportHeader::Udp(_) => {
+                            payload_len = ip_total_len - ip_header_len - 8;
+                        }
+                        _ => {}
+                    }
                 }
 
                 self.header.replace(Some(PktHeader {

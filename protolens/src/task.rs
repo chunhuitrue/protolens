@@ -206,6 +206,10 @@ where
     // Some(Ok(())) - 表示解析成功完成
     // Some(Err(())) - 表示解析遇到错误
     fn run(&mut self, pkt: PacketWrapper<T, P>) -> Option<Result<(), ()>> {
+        if pkt.ptr.trans_proto() != TransProto::Tcp {
+            return None;
+        }
+
         if self.c2s_ip.is_none() {
             self.c2s_ip = Some(pkt.ptr.sip());
             self.s2c_ip = Some(pkt.ptr.dip());
@@ -409,7 +413,7 @@ where
         self.dir_confirm_parser = Some(parser.pkt_dir_confirm());
         self.c2s_parser = parser.pkt_c2s_parser();
         self.s2c_parser = parser.pkt_s2c_parser();
-        self.bdir_parser = parser.pkt_bidr_parser();
+        self.bdir_parser = parser.pkt_bdir_parser();
         self.parser_set = true;
     }
 
@@ -426,6 +430,10 @@ where
     }
 
     fn run(&mut self, pkt: PacketWrapper<T, P>) -> Option<Result<(), ()>> {
+        if pkt.ptr.trans_proto() != TransProto::Udp {
+            return None;
+        }
+
         if self.c2s_ip.is_none() {
             self.c2s_ip = Some(pkt.ptr.sip());
             self.s2c_ip = Some(pkt.ptr.dip());
@@ -450,9 +458,9 @@ where
                 self.s2c_parser.as_ref(),
                 self.bdir_parser.as_ref(),
             ) {
-                (true, Some(parser), _, _) => Some(parser(&pkt, self.cb_ctx)),
-                (false, _, Some(parser), _) => Some(parser(&pkt, self.cb_ctx)),
-                (_, _, _, Some(parser)) => Some(parser(&pkt, self.cb_ctx)),
+                (true, Some(parser), _, _) => Some(parser.parse(pkt, self.cb_ctx)),
+                (false, _, Some(parser), _) => Some(parser.parse(pkt, self.cb_ctx)),
+                (_, _, _, Some(parser)) => Some(parser.parse(pkt, self.cb_ctx)),
                 _ => None,
             }
         } else {

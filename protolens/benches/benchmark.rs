@@ -11,6 +11,7 @@ fn task_benches(c: &mut Criterion) {
     smtp(c);
     pop3(c);
     imap(c);
+    sip(c);
 }
 
 criterion_group!(benches, task_benches);

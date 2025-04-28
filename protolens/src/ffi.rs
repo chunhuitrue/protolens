@@ -966,3 +966,83 @@ pub extern "C" fn protolens_set_cb_ftp_body_stop(
     };
     prolens.0.set_cb_ftp_body_stop(wrapper);
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_sip_start_line(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirData>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], offset: u32, ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(data.as_ptr(), data.len(), offset, ctx, dir);
+    };
+    prolens.0.set_cb_sip_start_line(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_sip_header(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirData>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], offset: u32, ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(data.as_ptr(), data.len(), offset, ctx, dir);
+    };
+    prolens.0.set_cb_sip_header(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_sip_body_start(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirEvt>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(ctx, dir);
+    };
+    prolens.0.set_cb_sip_body_start(wrapper);
+}
+
+type CbSipBody =
+    extern "C" fn(data: *const u8, len: usize, offset: u32, ctx: *const c_void, dir: Direction);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_sip_body(prolens: *mut FfiProlens, callback: Option<CbSipBody>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], offset: u32, ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(data.as_ptr(), data.len(), offset, ctx, dir);
+    };
+    prolens.0.set_cb_sip_body(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_sip_body_stop(
+    prolens: *mut FfiProlens,
+    callback: Option<CbDirEvt>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void, dir: Direction| {
+        callback.unwrap()(ctx, dir);
+    };
+    prolens.0.set_cb_sip_body_stop(wrapper);
+}
