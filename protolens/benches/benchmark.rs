@@ -7,6 +7,8 @@ fn task_benches(c: &mut Criterion) {
     readline100(c);
     readline500(c);
     readline1000(c);
+    http_perf(c);
+    http_new_task(c);
     http(c);
     smtp(c);
     pop3(c);

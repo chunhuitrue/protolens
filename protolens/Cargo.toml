@@ -28,4 +28,7 @@ bench = ["dep:criterion", "dep:pcap", "dep:etherparse"]
 [[bench]]
 name    = "benchmark"
 harness = false
-required-features = ["bench"] 
+required-features = ["bench"]
+
+[profile.bench]
+debug = true

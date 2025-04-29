@@ -17,3 +17,5 @@ c_example/simple_thread
 .DS_Store
 .aider*
 .vscode
+.cursor
+flamegraph.svg
