@@ -1,13 +1,12 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use protolens::bench::*;
 
-fn task_benches(c: &mut Criterion) {
+fn benches(c: &mut Criterion) {
     task_new(c);
     task_init(c);
     readline100(c);
     readline500(c);
     readline1000(c);
-    http_perf(c);
     http_new_task(c);
     http(c);
     smtp(c);
@@ -16,5 +15,7 @@ fn task_benches(c: &mut Criterion) {
     sip(c);
 }
 
-criterion_group!(benches, task_benches);
-criterion_main!(benches);
+criterion_group!(normal_benches, benches);
+criterion_group!(perf_task, task_init_perf);
+criterion_group!(perf_http, http_perf);
+criterion_main!(normal_benches, perf_task, perf_http);

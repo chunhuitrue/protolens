@@ -10,13 +10,12 @@ pub(crate) struct Heap<T> {
 
 impl<T: Ord> Heap<T> {
     pub(crate) fn new(max_size: usize) -> Self {
-        let mut data = Vec::with_capacity(max_size);
-        for _ in 0..max_size {
-            data.push(MaybeUninit::uninit());
-        }
-
         Heap {
-            data,
+            data: {
+                let mut data = Vec::with_capacity(max_size);
+                data.extend((0..max_size).map(|_| MaybeUninit::uninit()));
+                data
+            },
             len: 0,
             max_size,
         }

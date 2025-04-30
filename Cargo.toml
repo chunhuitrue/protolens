@@ -8,8 +8,6 @@ members = [
 
 [profile.bench]
 debug = true
-lto = true
-codegen-units = 1
 
 [profile.release]
 lto = true

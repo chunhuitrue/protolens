@@ -68,7 +68,11 @@ where
             heap: Heap::new(max_pkt_buff),
 
             max_buff: max_read_buff,
-            buff: vec![0; max_read_buff],
+            buff: {
+                let mut data = Vec::with_capacity(max_read_buff);
+                data.extend((0..max_read_buff).map(|_| 0u8));
+                data
+            },
             buff_start: 0,
             buff_len: 0,
             buff_next: 0,

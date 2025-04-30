@@ -836,6 +836,23 @@ pub mod bench {
         group.finish();
     }
 
+    pub fn task_init_perf(c: &mut Criterion) {
+        let protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+
+        let num = 10000;
+        let mut group = c.benchmark_group("task_init_perf");
+        group.throughput(Throughput::Elements(num));
+        group.bench_function("task_init_perf", |b| {
+            b.iter(|| {
+                for _ in 0..num {
+                    let mut task = black_box(protolens.new_task(TransProto::Tcp));
+                    protolens.set_task_parser(task.as_mut(), L7Proto::Http);
+                }
+            })
+        });
+        group.finish();
+    }
+
     pub fn readline100(c: &mut Criterion) {
         readline(c, 100);
     }
