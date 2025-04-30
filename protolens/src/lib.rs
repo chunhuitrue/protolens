@@ -24,6 +24,9 @@ use crate::readline::*;
 #[cfg(test)]
 use crate::readn::*;
 
+#[cfg(feature = "jemalloc")]
+use jemallocator::Jemalloc;
+
 use crate::config::*;
 use crate::enum_map::EnumMap;
 use crate::ftpcmd::*;
@@ -54,6 +57,10 @@ pub use crate::task::Task;
 
 pub type ProlensRc<T> = Prolens<T, Rc<T>>;
 pub type ProlensArc<T> = Prolens<T, Arc<T>>;
+
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 pub struct Prolens<T, P>
 where

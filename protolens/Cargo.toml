@@ -17,6 +17,7 @@ imap-proto      = { path = "../imap-proto/", version = "0.16.5"}
 pcap            = { version = "2.2.0", optional = true }
 etherparse      = { version = "0.13.0", optional = true }
 criterion       = { version = "0.5.1", optional = true }
+jemallocator    = { version = "0.5.4", optional = true }
 
 [dev-dependencies]
 pcap       = "2.2.0"
@@ -24,11 +25,10 @@ etherparse = "0.13.0"
 
 [features]
 bench = ["dep:criterion", "dep:pcap", "dep:etherparse"]
+jemalloc = ["dep:jemallocator"]
 
 [[bench]]
 name    = "benchmark"
 harness = false
 required-features = ["bench"]
 
-[profile.bench]
-debug = true

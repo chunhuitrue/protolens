@@ -1,7 +1,16 @@
 [workspace]
 resolver = "2"
 members = [
-    "protolens",  # 如果你的库代码位于 src 目录下，则将其添加为成员
-    "rust_example",  # 将 example/rust 添加为成员
+    "protolens", 
+    "rust_example",
     "imap-proto",
 ]
+
+[profile.bench]
+debug = true
+lto = true
+codegen-units = 1
+
+[profile.release]
+lto = true
+codegen-units = 1
