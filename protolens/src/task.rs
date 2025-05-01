@@ -195,7 +195,6 @@ where
                     std::mem::swap(&mut self.c2s_ip, &mut self.s2c_ip);
                     std::mem::swap(&mut self.c2s_port, &mut self.s2c_port);
                     std::mem::swap(&mut self.strm_c2s, &mut self.strm_s2c);
-                    std::mem::swap(&mut self.c2s_state, &mut self.s2c_state);
                 }
                 self.dir_confirm = true;
             }
