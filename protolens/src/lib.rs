@@ -903,6 +903,7 @@ pub mod bench {
         group.finish();
     }
 
+    // 预先栈上分配task，只测解码过程
     pub fn http(c: &mut Criterion) {
         bench_proto(
             c,
@@ -914,6 +915,7 @@ pub mod bench {
         );
     }
 
+    // 不预先分配task
     pub fn http_new_task(c: &mut Criterion) {
         bench_proto(
             c,
@@ -925,14 +927,26 @@ pub mod bench {
         );
     }
 
+    // 预先分配N个task，在堆上
     pub fn http_perf(c: &mut Criterion) {
-        bench_perf(
+        bench_proto_vec_task(
             c,
             "http_perf",
             "http_mime",
             TransProto::Tcp,
             L7Proto::Http,
             10000,
+        );
+    }
+
+    // 不预先分配task，多次执行采集perf数据
+    pub fn http_task_perf(c: &mut Criterion) {
+        bench_proto_task(
+            c,
+            "http_task_perf",
+            "http_mime",
+            TransProto::Tcp,
+            L7Proto::Http,
         );
     }
 
@@ -1009,7 +1023,7 @@ pub mod bench {
         group.finish();
     }
 
-    fn bench_perf(
+    fn bench_proto_vec_task(
         c: &mut Criterion,
         name: &str,
         pcap_name: &str,
@@ -1059,6 +1073,62 @@ pub mod bench {
                     for task in tasks.iter_mut() {
                         for pkt in &packets {
                             black_box(protolens.run_task(task, pkt.clone()));
+                        }
+                    }
+                },
+            )
+        });
+        group.finish();
+    }
+
+    fn bench_proto_task(
+        c: &mut Criterion,
+        name: &str,
+        pcap_name: &str,
+        l4: TransProto,
+        l7: L7Proto,
+    ) {
+        let project_root = env::current_dir().unwrap();
+        let file_path = project_root.join(format!("tests/pcap/{}.pcap", pcap_name));
+        let mut cap = Capture::init(file_path).unwrap();
+
+        let mut total_bytes = 0;
+        let mut packets = Vec::new();
+        loop {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let pkt = cap.next_packet(now);
+            if pkt.is_none() {
+                break;
+            }
+            let pkt = pkt.unwrap();
+            if pkt.decode().is_err() {
+                continue;
+            }
+
+            total_bytes += pkt.payload_len();
+            packets.push(pkt);
+        }
+
+        let mut protolens = black_box(Prolens::<CapPacket, Rc<CapPacket>>::default());
+
+        let num = 1000;
+        let mut group = c.benchmark_group(name);
+        group.throughput(Throughput::Bytes(
+            std::convert::Into::<u64>::into(total_bytes) * num,
+        ));
+        group.bench_function(name, |b| {
+            b.iter_with_setup(
+                || packets.clone(),
+                |packets| {
+                    for _ in 0..num {
+                        let mut task = black_box(protolens.new_task(l4));
+                        protolens.set_task_parser(task.as_mut(), l7);
+
+                        for pkt in &packets {
+                            black_box(protolens.run_task(&mut task, pkt.clone()));
                         }
                     }
                 },

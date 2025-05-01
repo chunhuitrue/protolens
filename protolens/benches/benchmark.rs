@@ -18,4 +18,5 @@ fn benches(c: &mut Criterion) {
 criterion_group!(normal_benches, benches);
 criterion_group!(perf_task, task_init_perf);
 criterion_group!(perf_http, http_perf);
-criterion_main!(normal_benches, perf_task, perf_http);
+criterion_group!(perf_http_task, http_task_perf);
+criterion_main!(normal_benches, perf_task, perf_http, perf_http_task);
