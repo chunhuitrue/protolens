@@ -854,18 +854,30 @@ pub mod bench {
     }
 
     pub fn readline100(c: &mut Criterion) {
-        readline(c, 100);
+        readline(c, 100, "read100", false);
+    }
+
+    pub fn readline100_new_task(c: &mut Criterion) {
+        readline(c, 100, "read100_new_task", true);
     }
 
     pub fn readline500(c: &mut Criterion) {
-        readline(c, 500);
+        readline(c, 500, "readline500", false);
+    }
+
+    pub fn readline500_new_task(c: &mut Criterion) {
+        readline(c, 500, "readline500_new_task", true);
     }
 
     pub fn readline1000(c: &mut Criterion) {
-        readline(c, 1000);
+        readline(c, 1000, "readline1000", false);
     }
 
-    fn readline(c: &mut Criterion, pkt_len: usize) {
+    pub fn readline1000_new_task(c: &mut Criterion) {
+        readline(c, 1000, "readline1000_new_task", true);
+    }
+
+    fn readline(c: &mut Criterion, pkt_len: usize, name: &str, new_task: bool) {
         let pkt_len = pkt_len.max(100);
         let lines_per_pkt = pkt_len / 10;
 
@@ -885,15 +897,21 @@ pub mod bench {
         }
 
         let mut protolens = black_box(Prolens::<CapPacket, Rc<CapPacket>>::default());
+
         let mut task = black_box(protolens.new_task(TransProto::Tcp));
         protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
 
         let mut group = c.benchmark_group("readline");
         group.throughput(Throughput::Bytes((payload.len() * 100) as u64));
-        group.bench_function(format!("readline{}", pkt_len), |b| {
+        group.bench_function(name, |b| {
             b.iter_with_setup(
                 || packets.clone(),
                 |packets| {
+                    if new_task {
+                        task = black_box(protolens.new_task(TransProto::Tcp));
+                        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+                    }
+
                     for pkt in packets {
                         black_box(protolens.run_task(&mut task, pkt));
                     }
@@ -942,6 +960,18 @@ pub mod bench {
         bench_proto(c, "smtp", "smtp", TransProto::Tcp, L7Proto::Smtp, false);
     }
 
+    // smtp.pcap比http_mime.pcap更有代表性
+    pub fn smtp_new_task(c: &mut Criterion) {
+        bench_proto(
+            c,
+            "smtp_new_task",
+            "smtp",
+            TransProto::Tcp,
+            L7Proto::Smtp,
+            true,
+        );
+    }
+
     pub fn pop3(c: &mut Criterion) {
         bench_proto(c, "pop3", "pop3", TransProto::Tcp, L7Proto::Pop3, false);
     }
@@ -987,7 +1017,6 @@ pub mod bench {
         }
 
         let mut protolens = black_box(Prolens::<CapPacket, Rc<CapPacket>>::default());
-
         let mut task = black_box(protolens.new_task(l4));
         protolens.set_task_parser(task.as_mut(), l7);
 
@@ -995,7 +1024,9 @@ pub mod bench {
         group.throughput(Throughput::Bytes(total_bytes.into()));
         group.bench_function(name, |b| {
             b.iter_with_setup(
-                || packets.clone(),
+                || {
+                    packets.clone() // 这个clone仍然在占用时间，所以实际的性能比测试结果要高
+                },
                 |packets| {
                     if new_task {
                         task = black_box(protolens.new_task(l4));

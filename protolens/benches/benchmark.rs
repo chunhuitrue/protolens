@@ -5,11 +5,15 @@ fn benches(c: &mut Criterion) {
     task_new(c);
     task_init(c);
     readline100(c);
+    readline100_new_task(c);
     readline500(c);
+    readline500_new_task(c);
     readline1000(c);
-    http_new_task(c);
+    readline1000_new_task(c);
     http(c);
+    http_new_task(c);
     smtp(c);
+    smtp_new_task(c);
     pop3(c);
     imap(c);
     sip(c);

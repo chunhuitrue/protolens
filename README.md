@@ -10,9 +10,9 @@ Protolens is a high-performance network protocol analysis and reconstruction lib
 
     | Packet Size | Throughput      |
     | ----------- | -------------- |
-    | 100 bytes   | 282.56 MiB/s   |
-    | 500 bytes   | 1.3582 GiB/s   |
-    | 1000 bytes  | 2.6022 GiB/s   |
+    | 100 bytes   | 418.55 MiB/s   |
+    | 500 bytes   | 2.0136 GiB/s   |
+    | 1000 bytes  | 3.8905 GiB/s   |
 
 *   **Rust Interface**: Provides a Rust library (`rlib`) for easy integration into Rust projects.
 *   **C Interface**: Provides a C dynamic library (`cdylib`) for convenient integration into C/C++ and other language projects.

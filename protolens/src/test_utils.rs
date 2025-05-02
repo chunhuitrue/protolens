@@ -9,6 +9,7 @@ use std::fmt;
 use std::net::IpAddr;
 use std::ops::Deref;
 use std::path::Path;
+use std::rc::Rc;
 
 pub(crate) const TEST_UTILS_SPORT: u16 = 5000;
 pub(crate) const TEST_UTILS_DPORT: u16 = 4000;
@@ -116,46 +117,24 @@ impl PktHeader {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct CapPacket {
     pub(crate) timestamp: u128,
-    pub(crate) data: [u8; MAX_PACKET_LEN],
+    pub(crate) data: Rc<[u8; MAX_PACKET_LEN]>,
     pub(crate) data_len: usize,
     pub(crate) header: RefCell<Option<PktHeader>>,
 }
 
-impl Deref for CapPacket {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        &self.data
-    }
-}
-
-impl fmt::Debug for CapPacket {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "ip: {:?}, Packet: ts: {}, caplen: {}, data: {:?}",
-            self.header.borrow().as_ref().unwrap().ip,
-            self.timestamp,
-            self.data_len,
-            self.data
-        )
-    }
-}
-
 impl CapPacket {
     pub(crate) fn new(ts: u128, len: usize, data: &[u8]) -> CapPacket {
-        let mut pkt = CapPacket {
+        let mut arr = [0; MAX_PACKET_LEN];
+        arr[..len].copy_from_slice(&data[..len]);
+
+        CapPacket {
             timestamp: ts,
+            data: Rc::new(arr),
             data_len: len,
-            data: [0; MAX_PACKET_LEN],
             header: RefCell::new(None),
-        };
-        let s_data = &mut pkt.data[..len];
-        s_data.copy_from_slice(&data[..len]);
-        pkt
+        }
     }
 
     pub(crate) fn decode(&self) -> Result<(), PacketError> {
@@ -238,6 +217,38 @@ impl CapPacket {
             .payload_len
             .try_into()
             .unwrap()
+    }
+}
+
+impl Deref for CapPacket {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &*self.data
+    }
+}
+
+impl Clone for CapPacket {
+    fn clone(&self) -> Self {
+        CapPacket {
+            timestamp: self.timestamp,
+            data: Rc::clone(&self.data),
+            data_len: self.data_len,
+            header: self.header.clone(),
+        }
+    }
+}
+
+impl fmt::Debug for CapPacket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ip: {:?}, Packet: ts: {}, caplen: {}, data: {:?}",
+            self.header.borrow().as_ref().unwrap().ip,
+            self.timestamp,
+            self.data_len,
+            self.data
+        )
     }
 }
 
