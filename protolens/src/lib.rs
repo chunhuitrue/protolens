@@ -905,7 +905,7 @@ pub mod bench {
         group.throughput(Throughput::Bytes((payload.len() * 100) as u64));
         group.bench_function(name, |b| {
             b.iter_with_setup(
-                || packets.clone(),
+                || black_box(packets.clone()),
                 |packets| {
                     if new_task {
                         task = black_box(protolens.new_task(TransProto::Tcp));
@@ -1024,9 +1024,7 @@ pub mod bench {
         group.throughput(Throughput::Bytes(total_bytes.into()));
         group.bench_function(name, |b| {
             b.iter_with_setup(
-                || {
-                    packets.clone() // 这个clone仍然在占用时间，所以实际的性能比测试结果要高
-                },
+                || black_box(packets.clone()),
                 |packets| {
                     if new_task {
                         task = black_box(protolens.new_task(l4));
