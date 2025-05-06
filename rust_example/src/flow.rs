@@ -56,7 +56,7 @@ impl Flow {
         &self,
         pkt: &CapPacket,
         now: u128,
-        prolens: &mut Prolens<CapPacket, Rc<CapPacket>>,
+        prolens: &mut Prolens<CapPacket>,
     ) -> Option<RefMut<FlowNode>> {
         if let Some(mut node) = self.get_mut_node(pkt, now) {
             // [插入点] 数据包处理
@@ -223,7 +223,7 @@ pub struct FlowNode {
     client_stat: StreamState,
     server_stat: StreamState,
 
-    parser_task: Option<Box<Task<CapPacket, Rc<CapPacket>>>>,
+    parser_task: Option<Task<CapPacket>>,
     // 解码出来的元数据
     user: Rc<RefCell<Vec<u8>>>,
     pass: Rc<RefCell<Vec<u8>>>,
@@ -314,7 +314,7 @@ impl FlowNode {
         }
     }
 
-    fn parse(&mut self, pkt: CapPacket, prolens: &mut Prolens<CapPacket, Rc<CapPacket>>) {
+    fn parse(&mut self, pkt: CapPacket, prolens: &mut Prolens<CapPacket>) {
         self.init_parser_task(prolens);
 
         if let Some(ref mut task) = self.parser_task {
@@ -338,7 +338,7 @@ impl FlowNode {
         }
     }
 
-    fn init_parser_task(&mut self, prolens: &mut Prolens<CapPacket, Rc<CapPacket>>) {
+    fn init_parser_task(&mut self, prolens: &mut Prolens<CapPacket>) {
         if self.parser_task.is_some() {
             return;
         }
@@ -371,7 +371,7 @@ impl FlowNode {
         prolens.set_cb_smtp_pass(pass_callback);
 
         let mut task = prolens.new_task(ProlensTransProto::Tcp);
-        prolens.set_task_parser(task.as_mut(), ProlensL7Proto::Smtp);
+        prolens.set_task_parser(&mut task, ProlensL7Proto::Smtp);
 
         self.parser_task = Some(task);
     }

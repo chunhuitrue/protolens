@@ -1,22 +1,18 @@
 use crate::packet::*;
 
-pub(crate) struct PktData<T, P>
+pub(crate) struct PktData<T>
 where
     T: Packet,
-    P: PtrWrapper<T> + PtrNew<T>,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
-    pkt: PacketWrapper<T, P>,
+    pkt: T,
     read_offset: usize,
 }
 
-impl<T, P> PktData<T, P>
+impl<T> PktData<T>
 where
     T: Packet,
-    P: PtrWrapper<T> + PtrNew<T>,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
 {
-    pub(crate) fn new(pkt: PacketWrapper<T, P>) -> Self {
+    pub(crate) fn new(pkt: T) -> Self {
         PktData {
             pkt,
             read_offset: 0,
@@ -24,7 +20,7 @@ where
     }
 
     pub(crate) fn readline(&mut self) -> Result<(&[u8], usize), ()> {
-        let payload = self.pkt.ptr.payload();
+        let payload = self.pkt.payload();
         if self.read_offset >= payload.len() {
             return Err(());
         }
@@ -47,7 +43,7 @@ where
     }
 
     pub(crate) fn readn(&mut self, size: usize) -> Result<(&[u8], usize), ()> {
-        let payload = self.pkt.ptr.payload();
+        let payload = self.pkt.payload();
         if self.read_offset >= payload.len() {
             return Err(());
         }
@@ -65,7 +61,7 @@ where
     }
 
     pub(crate) fn remain_data(&self) -> bool {
-        let payload = self.pkt.ptr.payload();
+        let payload = self.pkt.payload();
         self.read_offset < payload.len()
     }
 }

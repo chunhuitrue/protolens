@@ -32,10 +32,9 @@ use nom::{
 use std::ffi::c_void;
 use std::marker::PhantomData;
 
-pub struct ImapParser<T, P>
+pub struct ImapParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     cb_header: Option<CbHeader>,
     cb_body_start: Option<CbBodyEvt>,
@@ -44,13 +43,11 @@ where
     cb_clt: Option<CbClt>,
     cb_srv: Option<CbSrv>,
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ImapParser<T, P>
+impl<T> ImapParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) fn new() -> Self {
         Self {
@@ -61,18 +58,17 @@ where
             cb_clt: None,
             cb_srv: None,
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
     async fn c2s_parser_inner(
-        stream: *const PktStrm<T, P>,
+        stream: *const PktStrm<T>,
         cb_imap: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(stream as *mut PktStrm<T>);
         }
 
         loop {
@@ -97,13 +93,13 @@ where
     }
 
     async fn s2c_parser_inner(
-        stream: *const PktStrm<T, P>,
+        stream: *const PktStrm<T>,
         cb_imap: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(stream as *mut PktStrm<T>);
         }
         let mut bds_parser = None;
 
@@ -156,7 +152,7 @@ where
     }
 
     async fn append_mail(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         mail_size: usize,
         cb_imap: &Callbacks,
         cb_ctx: *mut c_void,
@@ -174,7 +170,7 @@ where
     }
 
     async fn multi_body(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         mail_size: usize,
         start_size: usize,
         out_bdry: &str,
@@ -219,7 +215,7 @@ where
     }
 
     async fn size_body(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         size: usize,
         te: Option<TransferEncoding>,
         cb_imap: &Callbacks,
@@ -263,7 +259,7 @@ where
     }
 
     async fn handle_fetch_ret(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         size: Option<usize>,
         header: bool,
         te: Option<TransferEncoding>,
@@ -289,7 +285,7 @@ where
     }
 
     async fn fetch_header(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         cb_imap: &Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
@@ -307,7 +303,7 @@ where
     }
 
     async fn epilogue(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         bdry: &str,
         mail_size: usize,
         start_size: usize,
@@ -328,21 +324,19 @@ where
     }
 }
 
-impl<T, P> Parser for ImapParser<T, P>
+impl<T> Parser for ImapParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
-    type PacketType = T;
-    type PtrType = P;
+    type T = T;
 
-    fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
+    fn dir_confirm(&self) -> DirConfirmFn<Self::T> {
         |c2s_strm, s2c_strm, c2s_port, s2c_port| {
             let stm_c2s;
             let stm_s2c;
             unsafe {
-                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
-                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
+                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T>);
+                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T>);
             }
 
             if s2c_port == IMAP_PORT {
@@ -379,11 +373,7 @@ where
         }
     }
 
-    fn c2s_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+    fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         let cb_imap = Callbacks {
             header: self.cb_header.clone(),
             body_start: self.cb_body_start.clone(),
@@ -396,11 +386,7 @@ where
         Some(Box::pin(Self::c2s_parser_inner(stream, cb_imap, cb_ctx)))
     }
 
-    fn s2c_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+    fn s2c_parser(&self, stream: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         let cb_imap = Callbacks {
             header: self.cb_header.clone(),
             body_start: self.cb_body_start.clone(),
@@ -414,24 +400,21 @@ where
     }
 }
 
-pub(crate) struct ImapFactory<T, P> {
+pub(crate) struct ImapFactory<T> {
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ParserFactory<T, P> for ImapFactory<T, P>
+impl<T> ParserFactory<T> for ImapFactory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
     fn new() -> Self {
         Self {
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>> {
         let mut parser = Box::new(ImapParser::new());
         parser.cb_header = prolens.cb_imap_header.clone();
         parser.cb_body_start = prolens.cb_imap_body_start.clone();
@@ -492,10 +475,9 @@ fn append(input: &str) -> (bool, usize) {
 
 // server应答append有可能是出错。如果是这种情况，那么append的后续内容就不是邮件而是其他的命令
 // 判断是否是邮件头，如果是邮件头说明是邮件内容
-async fn append_ok<T, P>(stm: &mut PktStrm<T, P>) -> Result<bool, ()>
+async fn append_ok<T>(stm: &mut PktStrm<T>) -> Result<bool, ()>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     let line = stm.peekline_str().await?;
     Ok(line.contains(':'))
@@ -591,11 +573,11 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_imap_srv(srv_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
+        protolens.set_task_parser(&mut task, L7Proto::Imap);
 
         let mut seq = 1000;
         for line in lines.iter() {
@@ -687,7 +669,7 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_imap_header(header_callback);
         protolens.set_cb_imap_body_start(body_start_callback);
         protolens.set_cb_imap_body(body_callback);
@@ -695,7 +677,7 @@ mod tests {
         protolens.set_cb_imap_clt(clt_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
+        protolens.set_task_parser(&mut task, L7Proto::Imap);
 
         let mut seq = 1000;
         for line in lines.iter() {
@@ -797,7 +779,7 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_imap_header(header_callback);
         protolens.set_cb_imap_body_start(body_start_callback);
         protolens.set_cb_imap_body(body_callback);
@@ -805,7 +787,7 @@ mod tests {
         protolens.set_cb_imap_clt(clt_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
+        protolens.set_task_parser(&mut task, L7Proto::Imap);
 
         loop {
             let now = SystemTime::now()
@@ -986,14 +968,14 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_imap_header(header_callback);
         protolens.set_cb_imap_body_start(body_start_callback);
         protolens.set_cb_imap_body(body_callback);
         protolens.set_cb_imap_body_stop(body_stop_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
+        protolens.set_task_parser(&mut task, L7Proto::Imap);
 
         let mut seq = 1000;
         for line in lines.iter() {
@@ -1165,7 +1147,7 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_imap_header(header_callback);
         protolens.set_cb_imap_body_start(body_start_callback);
         protolens.set_cb_imap_body(body_callback);
@@ -1174,7 +1156,7 @@ mod tests {
         protolens.set_cb_imap_srv(srv_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
+        protolens.set_task_parser(&mut task, L7Proto::Imap);
 
         loop {
             let now = SystemTime::now()
@@ -1412,11 +1394,11 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_imap_clt(clt_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Imap);
+        protolens.set_task_parser(&mut task, L7Proto::Imap);
 
         loop {
             let now = SystemTime::now()

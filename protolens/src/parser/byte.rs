@@ -14,37 +14,33 @@ pub trait ByteCbFn: FnMut(u8, *mut c_void) {}
 impl<F: FnMut(u8, *mut c_void)> ByteCbFn for F {}
 pub(crate) type CbByte = Rc<RefCell<dyn ByteCbFn + 'static>>;
 
-pub struct ByteParser<T, P>
+pub struct ByteParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) cb_next_byte: Option<CbByte>,
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ByteParser<T, P>
+impl<T> ByteParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub fn new() -> Self {
         Self {
             cb_next_byte: None,
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
     async fn c2s_parser_inner(
-        strm: *const PktStrm<T, P>,
+        strm: *const PktStrm<T>,
         cb_next_byte: Option<CbByte>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm;
         unsafe {
-            stm = &mut *(strm as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T>);
         };
 
         while let Some(byte) = stm.next().await {
@@ -56,25 +52,22 @@ where
     }
 }
 
-impl<T, P> Default for ByteParser<T, P>
+impl<T> Default for ByteParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, P> Parser for ByteParser<T, P>
+impl<T> Parser for ByteParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
-    type PacketType = T;
-    type PtrType = P;
+    type T = T;
 
-    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
             strm,
             self.cb_next_byte.clone(),
@@ -83,24 +76,21 @@ where
     }
 }
 
-pub(crate) struct ByteFactory<T, P> {
+pub(crate) struct ByteFactory<T> {
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ParserFactory<T, P> for ByteFactory<T, P>
+impl<T> ParserFactory<T> for ByteFactory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
     fn new() -> Self {
         Self {
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>> {
         let mut parser = Box::new(ByteParser::new());
         parser.cb_next_byte = prolens.cb_byte.clone();
         parser
@@ -125,11 +115,11 @@ mod tests {
             vec_clone.borrow_mut().push(byte);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_byte(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
+        protolens.set_task_parser(&mut task, L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt1);
 
@@ -151,11 +141,11 @@ mod tests {
             vec_clone.borrow_mut().push(byte);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_byte(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
+        protolens.set_task_parser(&mut task, L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -175,11 +165,11 @@ mod tests {
             vec_clone.borrow_mut().push(byte);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_byte(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
+        protolens.set_task_parser(&mut task, L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt);
 
@@ -209,11 +199,11 @@ mod tests {
             vec_clone.borrow_mut().push(byte);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_byte(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
+        protolens.set_task_parser(&mut task, L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -259,11 +249,11 @@ mod tests {
             vec_clone.borrow_mut().push(byte);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_byte(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
+        protolens.set_task_parser(&mut task, L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -310,11 +300,11 @@ mod tests {
             vec_clone.borrow_mut().push(byte);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_byte(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
+        protolens.set_task_parser(&mut task, L7Proto::Byte);
 
         // 乱序发送包：
         // 1. 先发第二个数据包
@@ -373,11 +363,11 @@ mod tests {
             vec_clone.borrow_mut().push(byte);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_byte(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Byte);
+        protolens.set_task_parser(&mut task, L7Proto::Byte);
 
         protolens.run_task(&mut task, pkt_syn);
         protolens.run_task(&mut task, pkt2);

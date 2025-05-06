@@ -35,7 +35,6 @@ use crate::heap::*;
 use crate::http::*;
 use crate::imap::*;
 use crate::ordpacket::*;
-use crate::packet::*;
 use crate::parser::*;
 use crate::pktstrm::*;
 use crate::pop3::*;
@@ -47,7 +46,6 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::Arc;
 
 pub use crate::packet::Direction;
 pub use crate::packet::L7Proto;
@@ -55,23 +53,18 @@ pub use crate::packet::Packet;
 pub use crate::packet::TransProto;
 pub use crate::task::Task;
 
-pub type ProlensRc<T> = Prolens<T, Rc<T>>;
-pub type ProlensArc<T> = Prolens<T, Arc<T>>;
-
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-pub struct Prolens<T, P>
+pub struct Prolens<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+    T: Packet,
 {
     conf: Config,
     stats: Stats,
-    parsers: EnumMap<Box<dyn ParserFactory<T, P>>>,
-    _phantom: PhantomData<P>,
+    parsers: EnumMap<Box<dyn ParserFactory<T>>>,
+    _phantom: PhantomData<T>,
 
     cb_task_c2s: Option<CbStrm>,
     cb_task_s2c: Option<CbStrm>,
@@ -136,11 +129,9 @@ where
     cb_readoctet: Option<CbReadOctet>,
 }
 
-impl<T, P> Prolens<T, P>
+impl<T> Prolens<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+    T: Packet + 'static,
 {
     pub fn new(conf: Config) -> Self {
         let mut prolens = Prolens {
@@ -211,51 +202,52 @@ where
     }
 
     fn regist_parsers(&mut self) {
-        self.parsers.insert(
-            L7Proto::OrdPacket,
-            Box::new(OrdPacketrFactory::<T, P>::new()),
-        );
         self.parsers
-            .insert(L7Proto::Smtp, Box::new(SmtpFactory::<T, P>::new()));
+            .insert(L7Proto::OrdPacket, Box::new(OrdPacketrFactory::<T>::new()));
         self.parsers
-            .insert(L7Proto::Pop3, Box::new(Pop3Factory::<T, P>::new()));
+            .insert(L7Proto::Smtp, Box::new(SmtpFactory::<T>::new()));
         self.parsers
-            .insert(L7Proto::Imap, Box::new(ImapFactory::<T, P>::new()));
+            .insert(L7Proto::Pop3, Box::new(Pop3Factory::<T>::new()));
         self.parsers
-            .insert(L7Proto::Http, Box::new(HttpFactory::<T, P>::new()));
+            .insert(L7Proto::Imap, Box::new(ImapFactory::<T>::new()));
         self.parsers
-            .insert(L7Proto::FtpCmd, Box::new(FtpCmdFactory::<T, P>::new()));
+            .insert(L7Proto::Http, Box::new(HttpFactory::<T>::new()));
         self.parsers
-            .insert(L7Proto::FtpData, Box::new(FtpDataFactory::<T, P>::new()));
+            .insert(L7Proto::FtpCmd, Box::new(FtpCmdFactory::<T>::new()));
         self.parsers
-            .insert(L7Proto::Sip, Box::new(SipFactory::<T, P>::new()));
+            .insert(L7Proto::FtpData, Box::new(FtpDataFactory::<T>::new()));
+        self.parsers
+            .insert(L7Proto::Sip, Box::new(SipFactory::<T>::new()));
 
         #[cfg(test)]
         {
-            self.parsers.insert(
-                L7Proto::RawPacket,
-                Box::new(RawPacketFactory::<T, P>::new()),
-            );
             self.parsers
-                .insert(L7Proto::Byte, Box::new(ByteFactory::<T, P>::new()));
+                .insert(L7Proto::RawPacket, Box::new(RawPacketFactory::<T>::new()));
             self.parsers
-                .insert(L7Proto::Read, Box::new(ReadFactory::<T, P>::new()));
+                .insert(L7Proto::Byte, Box::new(ByteFactory::<T>::new()));
             self.parsers
-                .insert(L7Proto::Readline, Box::new(ReadlineFactory::<T, P>::new()));
+                .insert(L7Proto::Read, Box::new(ReadFactory::<T>::new()));
             self.parsers
-                .insert(L7Proto::Readn, Box::new(ReadnFactory::<T, P>::new()));
-            self.parsers.insert(
-                L7Proto::ReadOctet,
-                Box::new(ReadOctetFactory::<T, P>::new()),
-            );
+                .insert(L7Proto::Readline, Box::new(ReadlineFactory::<T>::new()));
+            self.parsers
+                .insert(L7Proto::Readn, Box::new(ReadnFactory::<T>::new()));
+            self.parsers
+                .insert(L7Proto::ReadOctet, Box::new(ReadOctetFactory::<T>::new()));
         }
     }
 
-    pub fn new_task(&self, l4_proto: TransProto) -> Box<Task<T, P>> {
-        self.new_task_ffi(l4_proto, ptr::null_mut())
+    pub fn new_task(&self, l4_proto: TransProto) -> Task<T> {
+        let mut task = Task::new(&self.conf, ptr::null_mut(), l4_proto);
+        if let Some(cb) = &self.cb_task_c2s {
+            task.set_cb_strm_c2s(cb.clone());
+        }
+        if let Some(cb) = &self.cb_task_s2c {
+            task.set_cb_strm_s2c(cb.clone());
+        }
+        task
     }
 
-    fn new_task_ffi(&self, l4_proto: TransProto, cb_ctx: *mut c_void) -> Box<Task<T, P>> {
+    fn new_task_ffi(&self, l4_proto: TransProto, cb_ctx: *mut c_void) -> Box<Task<T>> {
         let mut task = Box::new(Task::new(&self.conf, cb_ctx, l4_proto));
         if let Some(cb) = &self.cb_task_c2s {
             task.set_cb_strm_c2s(cb.clone());
@@ -266,7 +258,7 @@ where
         task
     }
 
-    pub fn set_task_parser(&self, task: &mut Task<T, P>, l7_proto: L7Proto) {
+    pub fn set_task_parser(&self, task: &mut Task<T>, l7_proto: L7Proto) {
         if task.parser_set()
             || l7_proto == L7Proto::Unknown
             || !self.parsers.contains_key(&l7_proto)
@@ -283,13 +275,9 @@ where
         }
     }
 
-    pub fn run_task(&mut self, task: &mut Task<T, P>, pkt: T) -> Option<Result<(), ()>> {
+    pub fn run_task(&mut self, task: &mut Task<T>, pkt: T) -> Option<Result<(), ()>> {
         self.stats.packet_count += 1;
-        let wrapper = PacketWrapper {
-            ptr: P::new(pkt),
-            _phantom: PhantomData,
-        };
-        task.run(wrapper)
+        task.run(pkt)
     }
 
     pub fn set_cb_task_c2s<F>(&mut self, callback: F)
@@ -621,11 +609,9 @@ where
     }
 }
 
-impl<T, P> Default for Prolens<T, P>
+impl<T> Default for Prolens<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+    T: Packet + 'static,
 {
     fn default() -> Self {
         let conf = Config::default();
@@ -644,7 +630,7 @@ mod tests {
         let mut conf = Config::new();
         conf.pkt_buff = MAX_PKT_BUFF;
         conf.read_buff = MAX_READ_BUFF;
-        let mut protolens = ProlensRc::<MyPacket>::new(conf);
+        let mut protolens = Prolens::<MyPacket>::new(conf);
 
         let mut task = protolens.new_task(TransProto::Tcp);
 
@@ -654,7 +640,7 @@ mod tests {
 
     #[test]
     fn test_protolens_multiple_tasks() {
-        let mut protolens = ProlensRc::<MyPacket>::default();
+        let mut protolens = Prolens::<MyPacket>::default();
 
         let mut task1 = protolens.new_task(TransProto::Tcp);
         let mut task2 = protolens.new_task(TransProto::Tcp);
@@ -674,13 +660,35 @@ mod tests {
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
 
-        let mut protolens = ProlensRc::<MyPacket>::default();
+        let mut protolens = Prolens::<MyPacket>::default();
         protolens.set_cb_ord_pkt(move |pkt, _cb_ctx: *mut c_void, _dir: Direction| {
             vec_clone.borrow_mut().push(pkt.seq());
         });
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::OrdPacket);
+        protolens.set_task_parser(&mut task, L7Proto::OrdPacket);
+
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
+
+        assert_eq!(*vec.borrow(), vec![1, 2]);
+    }
+
+    #[test]
+    fn test_protolens_boxed_packet() {
+        let pkt1 = Box::new(MyPacket::new(1, false));
+        let pkt2 = Box::new(MyPacket::new(2, true));
+
+        let vec = Rc::new(RefCell::new(Vec::new()));
+        let vec_clone = Rc::clone(&vec);
+
+        let mut protolens = Prolens::<Box<MyPacket>>::default();
+        protolens.set_cb_ord_pkt(move |pkt, _cb_ctx: *mut c_void, _dir: Direction| {
+            vec_clone.borrow_mut().push(pkt.seq());
+        });
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::OrdPacket);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -690,7 +698,7 @@ mod tests {
 
     #[test]
     fn test_task_set_parser() {
-        let mut protolens = ProlensRc::<MyPacket>::default();
+        let mut protolens = Prolens::<MyPacket>::default();
         let mut task = protolens.new_task(TransProto::Tcp);
 
         // 先运行一些数据包
@@ -700,7 +708,7 @@ mod tests {
         protolens.run_task(&mut task, pkt2);
 
         // pkt2之后识别成功，设置 parser
-        protolens.set_task_parser(task.as_mut(), L7Proto::Smtp);
+        protolens.set_task_parser(&mut task, L7Proto::Smtp);
 
         // 继续处理数据包
         let pkt3 = MyPacket::new(3, false);
@@ -709,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_task_raw_conversion_no_ctx() {
-        let mut protolens = ProlensRc::<MyPacket>::default();
+        let mut protolens = Prolens::<MyPacket>::default();
 
         // 设置 OrdPacket 回调（可选）
         let vec = Rc::new(RefCell::new(Vec::new()));
@@ -718,8 +726,8 @@ mod tests {
             vec_clone.borrow_mut().push(pkt.seq());
         });
 
-        let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::OrdPacket);
+        let mut task = protolens.new_task_ffi(TransProto::Tcp, ptr::null_mut());
+        protolens.set_task_parser(&mut task, L7Proto::OrdPacket);
 
         // 使用 OrdPacket 协议类型
         let pkt1 = MyPacket::new(1, false);
@@ -750,7 +758,7 @@ mod tests {
 
     #[test]
     fn test_task_raw_conversion_ctx() {
-        let mut protolens = Prolens::<MyPacket, Rc<MyPacket>>::default();
+        let mut protolens = Prolens::<MyPacket>::default();
 
         let ctx = Rc::new(RefCell::new(std::ptr::null_mut::<c_void>()));
         let ctx_clone = Rc::clone(&ctx);
@@ -808,11 +816,10 @@ pub mod bench {
     use crate::test_utils::build_pkt_payload;
     use criterion::{Criterion, Throughput, black_box};
     use std::env;
-    use std::rc::Rc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     pub fn task_new(c: &mut Criterion) {
-        let protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let protolens = Prolens::<CapPacket>::default();
 
         let mut group = c.benchmark_group("task_new");
         group.throughput(Throughput::Elements(1));
@@ -823,21 +830,21 @@ pub mod bench {
     }
 
     pub fn task_init(c: &mut Criterion) {
-        let protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let protolens = Prolens::<Box<CapPacket>>::default();
 
         let mut group = c.benchmark_group("task_init");
         group.throughput(Throughput::Elements(1));
         group.bench_function("task_init", |b| {
             b.iter(|| {
                 let mut task = black_box(protolens.new_task(TransProto::Tcp));
-                protolens.set_task_parser(task.as_mut(), L7Proto::Http);
+                protolens.set_task_parser(&mut task, L7Proto::Http);
             })
         });
         group.finish();
     }
 
     pub fn task_init_flame(c: &mut Criterion) {
-        let protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let protolens = Prolens::<Box<CapPacket>>::default();
 
         let num = 100000;
         let mut group = c.benchmark_group("task_init_flame");
@@ -846,7 +853,7 @@ pub mod bench {
             b.iter(|| {
                 for _ in 0..num {
                     let mut task = black_box(protolens.new_task(TransProto::Tcp));
-                    protolens.set_task_parser(task.as_mut(), L7Proto::Http);
+                    protolens.set_task_parser(&mut task, L7Proto::Http);
                 }
             })
         });
@@ -854,11 +861,11 @@ pub mod bench {
     }
 
     pub fn readline100(c: &mut Criterion) {
-        readline(c, 100, "read100", false);
+        readline(c, 100, "readline100", false);
     }
 
     pub fn readline100_new_task(c: &mut Criterion) {
-        readline(c, 100, "read100_new_task", true);
+        readline(c, 100, "readline100_new_task", true);
     }
 
     pub fn readline500(c: &mut Criterion) {
@@ -892,14 +899,13 @@ pub mod bench {
         for _ in 0..100 {
             let pkt = build_pkt_payload(seq, &payload);
             let _ = pkt.decode();
-            packets.push(pkt);
+            packets.push(Box::new(pkt));
             seq += payload.len() as u32;
         }
 
-        let mut protolens = black_box(Prolens::<CapPacket, Rc<CapPacket>>::default());
-
+        let mut protolens = black_box(Prolens::<Box<CapPacket>>::default());
         let mut task = black_box(protolens.new_task(TransProto::Tcp));
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         let mut group = c.benchmark_group("readline");
         group.throughput(Throughput::Bytes((payload.len() * 100) as u64));
@@ -909,7 +915,7 @@ pub mod bench {
                 |packets| {
                     if new_task {
                         task = black_box(protolens.new_task(TransProto::Tcp));
-                        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+                        protolens.set_task_parser(&mut task, L7Proto::Readline);
                     }
 
                     for pkt in packets {
@@ -972,6 +978,17 @@ pub mod bench {
         );
     }
 
+    // smtp.pcap比http_mime.pcap更有代表性
+    pub fn smtp_new_task_flame(c: &mut Criterion) {
+        bench_proto_task(
+            c,
+            "smtp_new_task_flame",
+            "smtp",
+            TransProto::Tcp,
+            L7Proto::Smtp,
+        );
+    }
+
     pub fn pop3(c: &mut Criterion) {
         bench_proto(c, "pop3", "pop3", TransProto::Tcp, L7Proto::Pop3, false);
     }
@@ -1013,12 +1030,12 @@ pub mod bench {
             }
 
             total_bytes += pkt.payload_len();
-            packets.push(pkt);
+            packets.push(Box::new(pkt));
         }
 
-        let mut protolens = black_box(Prolens::<CapPacket, Rc<CapPacket>>::default());
+        let mut protolens = black_box(Prolens::<Box<CapPacket>>::default());
         let mut task = black_box(protolens.new_task(l4));
-        protolens.set_task_parser(task.as_mut(), l7);
+        protolens.set_task_parser(&mut task, l7);
 
         let mut group = c.benchmark_group(name);
         group.throughput(Throughput::Bytes(total_bytes.into()));
@@ -1028,7 +1045,7 @@ pub mod bench {
                 |packets| {
                     if new_task {
                         task = black_box(protolens.new_task(l4));
-                        protolens.set_task_parser(task.as_mut(), l7);
+                        protolens.set_task_parser(&mut task, l7);
                     }
 
                     for pkt in packets {
@@ -1068,10 +1085,10 @@ pub mod bench {
             }
 
             total_bytes += pkt.payload_len();
-            packets.push(pkt);
+            packets.push(Box::new(pkt));
         }
 
-        let mut protolens = black_box(Prolens::<CapPacket, Rc<CapPacket>>::default());
+        let mut protolens = black_box(Prolens::<Box<CapPacket>>::default());
 
         let num = 10000;
         let mut group = c.benchmark_group(name);
@@ -1084,7 +1101,7 @@ pub mod bench {
                 |packets| {
                     for _ in 0..num {
                         let mut task = black_box(protolens.new_task(l4));
-                        protolens.set_task_parser(task.as_mut(), l7);
+                        protolens.set_task_parser(&mut task, l7);
 
                         for pkt in &packets {
                             black_box(protolens.run_task(&mut task, pkt.clone()));

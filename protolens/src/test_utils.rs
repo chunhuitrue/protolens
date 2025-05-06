@@ -79,6 +79,48 @@ impl Packet for MyPacket {
     }
 }
 
+impl Packet for Box<MyPacket> {
+    fn trans_proto(&self) -> TransProto {
+        (**self).trans_proto()
+    }
+
+    fn sip(&self) -> IpAddr {
+        (**self).sip()
+    }
+
+    fn dip(&self) -> IpAddr {
+        (**self).dip()
+    }
+
+    fn tu_sport(&self) -> u16 {
+        (**self).tu_sport()
+    }
+
+    fn tu_dport(&self) -> u16 {
+        (**self).tu_dport()
+    }
+
+    fn seq(&self) -> u32 {
+        (**self).seq()
+    }
+
+    fn syn(&self) -> bool {
+        (**self).syn()
+    }
+
+    fn fin(&self) -> bool {
+        (**self).fin()
+    }
+
+    fn payload_len(&self) -> usize {
+        (**self).payload_len()
+    }
+
+    fn payload(&self) -> &[u8] {
+        (**self).payload()
+    }
+}
+
 pub(crate) const MAX_PACKET_LEN: usize = 4096;
 
 pub(crate) enum PacketError {
@@ -117,21 +159,22 @@ impl PktHeader {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct CapPacket {
     pub(crate) timestamp: u128,
-    pub(crate) data: Rc<[u8; MAX_PACKET_LEN]>,
+    pub(crate) data: [u8; MAX_PACKET_LEN],
     pub(crate) data_len: usize,
     pub(crate) header: RefCell<Option<PktHeader>>,
 }
 
 impl CapPacket {
     pub(crate) fn new(ts: u128, len: usize, data: &[u8]) -> CapPacket {
-        let mut arr = [0; MAX_PACKET_LEN];
-        arr[..len].copy_from_slice(&data[..len]);
+        let mut pkt_data = [0; MAX_PACKET_LEN];
+        pkt_data[..len].copy_from_slice(&data[..len]);
 
         CapPacket {
             timestamp: ts,
-            data: Rc::new(arr),
+            data: pkt_data,
             data_len: len,
             header: RefCell::new(None),
         }
@@ -224,18 +267,7 @@ impl Deref for CapPacket {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &*self.data
-    }
-}
-
-impl Clone for CapPacket {
-    fn clone(&self) -> Self {
-        CapPacket {
-            timestamp: self.timestamp,
-            data: Rc::clone(&self.data),
-            data_len: self.data_len,
-            header: self.header.clone(),
-        }
+        &self.data
     }
 }
 
@@ -327,6 +359,48 @@ impl Eq for CapPacket {}
 impl PartialEq for CapPacket {
     fn eq(&self, other: &Self) -> bool {
         self.seq() == other.seq()
+    }
+}
+
+impl Packet for Box<CapPacket> {
+    fn trans_proto(&self) -> TransProto {
+        (**self).trans_proto()
+    }
+
+    fn sip(&self) -> IpAddr {
+        (**self).sip()
+    }
+
+    fn dip(&self) -> IpAddr {
+        (**self).dip()
+    }
+
+    fn tu_sport(&self) -> u16 {
+        (**self).tu_sport()
+    }
+
+    fn tu_dport(&self) -> u16 {
+        (**self).tu_dport()
+    }
+
+    fn seq(&self) -> u32 {
+        (**self).seq()
+    }
+
+    fn syn(&self) -> bool {
+        (**self).syn()
+    }
+
+    fn fin(&self) -> bool {
+        (**self).fin()
+    }
+
+    fn payload_len(&self) -> usize {
+        (**self).payload_len() as usize
+    }
+
+    fn payload(&self) -> &[u8] {
+        (**self).payload()
     }
 }
 

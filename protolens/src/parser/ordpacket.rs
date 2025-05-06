@@ -8,44 +8,38 @@ use crate::packet::*;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 
-pub(crate) struct OrdPacketParser<T, P>
+pub(crate) struct OrdPacketParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) cb_ord_pkt: Option<CbOrdPkt<T>>,
-    _phantom: PhantomData<P>,
 }
 
-impl<T, P> OrdPacketParser<T, P>
+impl<T> OrdPacketParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     fn new() -> Self {
-        Self {
-            cb_ord_pkt: None,
-            _phantom: PhantomData,
-        }
+        Self { cb_ord_pkt: None }
     }
 
     async fn parser_inner(
         cb_ord_pkt: Option<CbOrdPkt<T>>,
-        strm: *const PktStrm<T, P>,
+        strm: *const PktStrm<T>,
         dir: Direction,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm;
         unsafe {
-            stm = &mut *(strm as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T>);
         }
 
         while !stm.fin() {
             let pkt = stm.next_ord_pkt().await;
 
             if let Some(ref cb) = cb_ord_pkt {
-                if let Some(wrapper) = pkt {
-                    cb.borrow_mut()((*wrapper.ptr).clone(), cb_ctx, dir);
+                if let Some(pkt) = pkt {
+                    cb.borrow_mut()(pkt, cb_ctx, dir);
                 }
             }
         }
@@ -53,25 +47,22 @@ where
     }
 }
 
-impl<T, P> Default for OrdPacketParser<T, P>
+impl<T> Default for OrdPacketParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, P> Parser for OrdPacketParser<T, P>
+impl<T> Parser for OrdPacketParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
-    type PacketType = T;
-    type PtrType = P;
+    type T = T;
 
-    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::parser_inner(
             self.cb_ord_pkt.clone(),
             strm,
@@ -80,7 +71,7 @@ where
         )))
     }
 
-    fn s2c_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn s2c_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::parser_inner(
             self.cb_ord_pkt.clone(),
             strm,
@@ -90,24 +81,21 @@ where
     }
 }
 
-pub(crate) struct OrdPacketrFactory<T, P> {
+pub(crate) struct OrdPacketrFactory<T> {
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ParserFactory<T, P> for OrdPacketrFactory<T, P>
+impl<T> ParserFactory<T> for OrdPacketrFactory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
     fn new() -> Self {
         Self {
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>> {
         let mut parser = Box::new(OrdPacketParser::new());
         parser.cb_ord_pkt = prolens.cb_ord_pkt.clone();
         parser
@@ -163,11 +151,11 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_ord_pkt(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::OrdPacket);
+        protolens.set_task_parser(&mut task, L7Proto::OrdPacket);
         let mut push_count = 0;
 
         loop {
@@ -221,11 +209,11 @@ mod tests {
             vec_clone.borrow_mut().extend(pkt.payload());
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_ord_pkt(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::OrdPacket);
+        protolens.set_task_parser(&mut task, L7Proto::OrdPacket);
 
         // 乱序发送包
         protolens.run_task(&mut task, pkt1); // seq1
@@ -267,11 +255,11 @@ mod tests {
             vec_clone.borrow_mut().extend(pkt.payload());
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_ord_pkt(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::OrdPacket);
+        protolens.set_task_parser(&mut task, L7Proto::OrdPacket);
 
         // 发送包
         protolens.run_task(&mut task, pkt_syn); // SYN包

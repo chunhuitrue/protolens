@@ -1,6 +1,5 @@
 use crate::CbStrm;
 use crate::DirConfirmFn;
-use crate::PacketWrapper;
 use crate::Parser;
 use crate::ParserFuture;
 use crate::PktDirConfirmFn;
@@ -16,21 +15,17 @@ use std::ffi::c_void;
 use std::fmt;
 use std::net::IpAddr;
 
-pub enum Task<T, P>
+pub enum Task<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+    T: Packet,
 {
-    Tcp(Box<TcpTask<T, P>>),
-    Udp(UdpTask<T, P>),
+    Tcp(Box<TcpTask<T>>),
+    Udp(UdpTask<T>),
 }
 
-impl<T, P> Task<T, P>
+impl<T> Task<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+    T: Packet,
 {
     pub(crate) fn new(conf: &Config, cb_ctx: *mut c_void, proto: TransProto) -> Self {
         match proto {
@@ -51,7 +46,7 @@ where
         }
     }
 
-    pub(crate) fn set_parser(&mut self, parser: Box<dyn Parser<PacketType = T, PtrType = P>>) {
+    pub(crate) fn set_parser(&mut self, parser: Box<dyn Parser<T = T>>) {
         match self {
             Task::Tcp(task) => task.set_parser(parser),
             Task::Udp(task) => task.set_parser(parser),
@@ -65,7 +60,7 @@ where
         }
     }
 
-    pub(crate) fn run(&mut self, pkt: PacketWrapper<T, P>) -> Option<Result<(), ()>> {
+    pub(crate) fn run(&mut self, pkt: T) -> Option<Result<(), ()>> {
         match self {
             Task::Tcp(task) => task.run(pkt),
             Task::Udp(task) => task.run(pkt),
@@ -80,11 +75,9 @@ where
     }
 }
 
-impl<T, P> fmt::Debug for Task<T, P>
+impl<T> fmt::Debug for Task<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+    T: Packet,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -113,11 +106,9 @@ where
     }
 }
 
-pub struct TcpTask<T, P>
+pub struct TcpTask<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+    T: Packet,
 {
     dir_confirm: bool,
     c2s_ip: Option<IpAddr>,
@@ -125,11 +116,11 @@ where
     c2s_port: u16,
     s2c_port: u16,
 
-    strm_c2s: PktStrm<T, P>,
-    strm_s2c: PktStrm<T, P>,
+    strm_c2s: PktStrm<T>,
+    strm_s2c: PktStrm<T>,
 
     parser_set: bool,
-    dir_confirm_parser: Option<DirConfirmFn<T, P>>,
+    dir_confirm_parser: Option<DirConfirmFn<T>>,
     c2s_parser: Option<ParserFuture>,
     s2c_parser: Option<ParserFuture>,
     bdir_parser: Option<ParserFuture>,
@@ -140,11 +131,9 @@ where
     cb_ctx: *mut c_void,
 }
 
-impl<T, P> TcpTask<T, P>
+impl<T> TcpTask<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+    T: Packet,
 {
     fn new(conf: &Config, cb_ctx: *mut c_void) -> Self {
         TcpTask {
@@ -178,7 +167,7 @@ where
         self.strm_s2c.set_cb(callback);
     }
 
-    fn set_parser(&mut self, parser: Box<dyn Parser<PacketType = T, PtrType = P>>) {
+    fn set_parser(&mut self, parser: Box<dyn Parser<T = T>>) {
         self.dir_confirm_parser = Some(parser.dir_confirm());
         self.c2s_parser = parser.c2s_parser(&self.strm_c2s, self.cb_ctx);
         self.s2c_parser = parser.s2c_parser(&self.strm_s2c, self.cb_ctx);
@@ -204,19 +193,19 @@ where
     // None - 表示解析器还在pending状态或没有parser
     // Some(Ok(())) - 表示解析成功完成
     // Some(Err(())) - 表示解析遇到错误
-    fn run(&mut self, pkt: PacketWrapper<T, P>) -> Option<Result<(), ()>> {
-        if pkt.ptr.trans_proto() != TransProto::Tcp {
+    fn run(&mut self, pkt: T) -> Option<Result<(), ()>> {
+        if pkt.trans_proto() != TransProto::Tcp {
             return None;
         }
 
         if self.c2s_ip.is_none() {
-            self.c2s_ip = Some(pkt.ptr.sip());
-            self.s2c_ip = Some(pkt.ptr.dip());
-            self.c2s_port = pkt.ptr.tu_sport();
-            self.s2c_port = pkt.ptr.tu_dport();
+            self.c2s_ip = Some(pkt.sip());
+            self.s2c_ip = Some(pkt.dip());
+            self.c2s_port = pkt.tu_sport();
+            self.s2c_port = pkt.tu_dport();
         }
-        let pkt_sip = pkt.ptr.sip();
-        let pkt_sport = pkt.ptr.tu_sport();
+        let pkt_sip = pkt.sip();
+        let pkt_sport = pkt.tu_sport();
 
         if pkt_sip == self.c2s_ip.unwrap() && pkt_sport == self.c2s_port {
             self.strm_c2s.push(pkt);
@@ -363,11 +352,9 @@ fn dummy_waker() -> Waker {
     unsafe { Waker::from_raw(dummy_raw_waker()) }
 }
 
-pub struct UdpTask<T, P>
+pub struct UdpTask<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+    T: Packet,
 {
     dir_confirm: bool,
     c2s_ip: Option<IpAddr>,
@@ -376,19 +363,17 @@ where
     s2c_port: u16,
 
     parser_set: bool,
-    dir_confirm_parser: Option<PktDirConfirmFn<T, P>>,
-    c2s_parser: Option<UdpParserFn<T, P>>,
-    s2c_parser: Option<UdpParserFn<T, P>>,
-    bdir_parser: Option<UdpParserFn<T, P>>,
+    dir_confirm_parser: Option<PktDirConfirmFn<T>>,
+    c2s_parser: Option<UdpParserFn<T>>,
+    s2c_parser: Option<UdpParserFn<T>>,
+    bdir_parser: Option<UdpParserFn<T>>,
 
     cb_ctx: *mut c_void,
 }
 
-impl<T, P> UdpTask<T, P>
+impl<T> UdpTask<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
-    PacketWrapper<T, P>: PartialEq + Eq + PartialOrd + Ord,
+    T: Packet,
 {
     fn new(cb_ctx: *mut c_void) -> Self {
         UdpTask {
@@ -408,7 +393,7 @@ where
         }
     }
 
-    fn set_parser(&mut self, parser: Box<dyn Parser<PacketType = T, PtrType = P>>) {
+    fn set_parser(&mut self, parser: Box<dyn Parser<T = T>>) {
         self.dir_confirm_parser = Some(parser.pkt_dir_confirm());
         self.c2s_parser = parser.pkt_c2s_parser();
         self.s2c_parser = parser.pkt_s2c_parser();
@@ -416,7 +401,7 @@ where
         self.parser_set = true;
     }
 
-    fn confirm_dir(&mut self, pkt: &PacketWrapper<T, P>) {
+    fn confirm_dir(&mut self, pkt: &T) {
         if let Some(dir_confirm_parser) = &self.dir_confirm_parser {
             if let Some(c2s_dir) = dir_confirm_parser(pkt) {
                 if !c2s_dir {
@@ -428,19 +413,19 @@ where
         }
     }
 
-    fn run(&mut self, pkt: PacketWrapper<T, P>) -> Option<Result<(), ()>> {
-        if pkt.ptr.trans_proto() != TransProto::Udp {
+    fn run(&mut self, pkt: T) -> Option<Result<(), ()>> {
+        if pkt.trans_proto() != TransProto::Udp {
             return None;
         }
 
         if self.c2s_ip.is_none() {
-            self.c2s_ip = Some(pkt.ptr.sip());
-            self.s2c_ip = Some(pkt.ptr.dip());
-            self.c2s_port = pkt.ptr.tu_sport();
-            self.s2c_port = pkt.ptr.tu_dport();
+            self.c2s_ip = Some(pkt.sip());
+            self.s2c_ip = Some(pkt.dip());
+            self.c2s_port = pkt.tu_sport();
+            self.s2c_port = pkt.tu_dport();
         }
-        let pkt_sip = pkt.ptr.sip();
-        let pkt_sport = pkt.ptr.tu_sport();
+        let pkt_sip = pkt.sip();
+        let pkt_sport = pkt.tu_sport();
 
         if !self.dir_confirm {
             self.confirm_dir(&pkt);

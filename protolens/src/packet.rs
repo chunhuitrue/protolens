@@ -1,10 +1,6 @@
 use std::cmp::{Ord, Ordering, PartialOrd};
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::net::IpAddr;
-use std::ops::Deref;
-use std::rc::Rc;
-use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Clone, Copy, Hash)]
@@ -70,57 +66,40 @@ pub trait Packet: Clone {
     fn payload(&self) -> &[u8];
 }
 
-pub trait PacketBind: Packet + Ord + Debug + 'static {}
-impl<T: Packet + Ord + Debug + 'static> PacketBind for T {}
+#[derive(Clone, Debug)]
+pub(crate) struct SeqPacket<T: Packet>(T);
 
-pub trait PtrWrapper<T: ?Sized>: Clone + Deref<Target = T> {}
-impl<T: ?Sized> PtrWrapper<T> for Rc<T> {}
-impl<T: ?Sized> PtrWrapper<T> for Arc<T> {}
+impl<T: Packet> SeqPacket<T> {
+    pub(crate) fn new(packet: T) -> Self {
+        SeqPacket(packet)
+    }
 
-pub trait PtrNew<T>: PtrWrapper<T> {
-    fn new(value: T) -> Self;
-}
+    pub(crate) fn inner(&self) -> &T {
+        &self.0
+    }
 
-impl<T> PtrNew<T> for Rc<T> {
-    fn new(value: T) -> Self {
-        Rc::new(value)
+    pub(crate) fn into_inner(self) -> T {
+        self.0
     }
 }
 
-impl<T> PtrNew<T> for Arc<T> {
-    fn new(value: T) -> Self {
-        Arc::new(value)
+impl<T: Packet> PartialEq for SeqPacket<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.seq() == other.0.seq()
     }
 }
 
-// 包装结构体，必须实现以seq比较，才能用于数据包排序
-#[derive(Debug)]
-pub struct PacketWrapper<T: Packet, P>
-where
-    T: Packet,
-    P: PtrWrapper<T> + PtrNew<T>,
-{
-    pub(crate) ptr: P,
-    pub(crate) _phantom: PhantomData<T>,
-}
+impl<T: Packet> Eq for SeqPacket<T> {}
 
-impl<T: Packet, P: PtrWrapper<T> + PtrNew<T>> PartialEq for PacketWrapper<T, P> {
-    fn eq(&self, other: &PacketWrapper<T, P>) -> bool {
-        self.ptr.seq() == other.ptr.seq()
-    }
-}
-
-impl<T: Packet, P: PtrWrapper<T> + PtrNew<T>> Eq for PacketWrapper<T, P> {}
-
-impl<T: Packet + Ord, P: PtrWrapper<T> + PtrNew<T>> PartialOrd for PacketWrapper<T, P> {
+impl<T: Packet> PartialOrd for SeqPacket<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T: Packet + Ord, P: PtrWrapper<T> + PtrNew<T>> Ord for PacketWrapper<T, P> {
+impl<T: Packet> Ord for SeqPacket<T> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.ptr.seq().cmp(&other.ptr.seq())
+        self.0.seq().cmp(&other.0.seq())
     }
 }
 
@@ -149,16 +128,7 @@ mod tests {
             data: vec![4, 5, 6],
         };
 
-        assert_eq!(
-            PacketWrapper {
-                ptr: Rc::new(packet1),
-                _phantom: PhantomData
-            },
-            PacketWrapper {
-                ptr: Rc::new(packet2),
-                _phantom: PhantomData
-            }
-        );
+        assert_eq!(SeqPacket::new(packet1), SeqPacket::new(packet2));
     }
 
     #[test]
@@ -181,16 +151,7 @@ mod tests {
             data: vec![4, 5, 6],
         };
 
-        assert_ne!(
-            PacketWrapper {
-                ptr: Rc::new(packet1),
-                _phantom: PhantomData
-            },
-            PacketWrapper {
-                ptr: Rc::new(packet2),
-                _phantom: PhantomData
-            }
-        );
+        assert_ne!(SeqPacket::new(packet1), SeqPacket::new(packet2));
     }
 
     #[test]
@@ -213,15 +174,7 @@ mod tests {
             data: vec![4, 5, 6],
         };
 
-        assert!(
-            PacketWrapper {
-                ptr: Rc::new(packet1),
-                _phantom: PhantomData
-            } > PacketWrapper {
-                ptr: Rc::new(packet2),
-                _phantom: PhantomData
-            }
-        );
+        assert!(SeqPacket::new(packet1) > SeqPacket::new(packet2));
     }
 
     #[test]
@@ -244,14 +197,6 @@ mod tests {
             data: vec![4, 5, 6],
         };
 
-        assert!(
-            PacketWrapper {
-                ptr: Rc::new(packet1),
-                _phantom: PhantomData
-            } < PacketWrapper {
-                ptr: Rc::new(packet2),
-                _phantom: PhantomData
-            }
-        );
+        assert!(SeqPacket::new(packet1) < SeqPacket::new(packet2));
     }
 }

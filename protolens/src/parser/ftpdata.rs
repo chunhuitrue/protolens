@@ -10,22 +10,19 @@ use crate::packet::*;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 
-pub struct FtpDataParser<T, P>
+pub struct FtpDataParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     cb_body_start: Option<CbBodyEvt>,
     cb_body: Option<CbFtpBody>,
     cb_body_stop: Option<CbBodyEvt>,
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> FtpDataParser<T, P>
+impl<T> FtpDataParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) fn new() -> Self {
         Self {
@@ -33,12 +30,11 @@ where
             cb_body: None,
             cb_body_stop: None,
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
     async fn parser_inner(
-        strm: *const PktStrm<T, P>,
+        strm: *const PktStrm<T>,
         cb_body_start: Option<CbBodyEvt>,
         cb_body: Option<CbFtpBody>,
         cb_body_stop: Option<CbBodyEvt>,
@@ -47,7 +43,7 @@ where
     ) -> Result<(), ()> {
         let stm;
         unsafe {
-            stm = &mut *(strm as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T>);
         }
 
         if let Some(cb) = cb_body_start {
@@ -75,15 +71,13 @@ where
     }
 }
 
-impl<T, P> Parser for FtpDataParser<T, P>
+impl<T> Parser for FtpDataParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
-    type PacketType = T;
-    type PtrType = P;
+    type T = T;
 
-    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::parser_inner(
             strm,
             self.cb_body_start.clone(),
@@ -94,7 +88,7 @@ where
         )))
     }
 
-    fn s2c_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn s2c_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::parser_inner(
             strm,
             self.cb_body_start.clone(),
@@ -106,24 +100,21 @@ where
     }
 }
 
-pub(crate) struct FtpDataFactory<T, P> {
+pub(crate) struct FtpDataFactory<T> {
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ParserFactory<T, P> for FtpDataFactory<T, P>
+impl<T> ParserFactory<T> for FtpDataFactory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
     fn new() -> Self {
         Self {
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>> {
         let mut parser = Box::new(FtpDataParser::new());
         parser.cb_body_start = prolens.cb_ftp_body_start.clone();
         parser.cb_body = prolens.cb_ftp_body.clone();
@@ -185,13 +176,13 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_ftp_body_start(body_start_callback);
         protolens.set_cb_ftp_body(body_callback);
         protolens.set_cb_ftp_body_stop(body_stop_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::FtpData);
+        protolens.set_task_parser(&mut task, L7Proto::FtpData);
 
         loop {
             let now = SystemTime::now()

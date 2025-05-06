@@ -15,38 +15,34 @@ pub trait ReadnCbFn: FnMut(&[u8], u32, *mut c_void) {}
 impl<F: FnMut(&[u8], u32, *mut c_void)> ReadnCbFn for F {}
 pub(crate) type CbReadn = Rc<RefCell<dyn ReadnCbFn + 'static>>;
 
-pub struct ReadnParser<T, P>
+pub struct ReadnParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) cb_readn: Option<CbReadn>,
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ReadnParser<T, P>
+impl<T> ReadnParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) fn new() -> Self {
         Self {
             cb_readn: None,
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
     async fn c2s_parser_inner(
         cb_readn: Option<CbReadn>,
         read_size: usize,
-        strm: *const PktStrm<T, P>,
+        strm: *const PktStrm<T>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm;
         unsafe {
-            stm = &mut *(strm as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T>);
         }
 
         while !stm.fin() {
@@ -63,25 +59,22 @@ where
     }
 }
 
-impl<T, P> Default for ReadnParser<T, P>
+impl<T> Default for ReadnParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, P> Parser for ReadnParser<T, P>
+impl<T> Parser for ReadnParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
-    type PacketType = T;
-    type PtrType = P;
+    type T = T;
 
-    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
             self.cb_readn.clone(),
             MAX_READN,
@@ -91,24 +84,21 @@ where
     }
 }
 
-pub(crate) struct ReadnFactory<T, P> {
+pub(crate) struct ReadnFactory<T> {
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ParserFactory<T, P> for ReadnFactory<T, P>
+impl<T> ParserFactory<T> for ReadnFactory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
     fn new() -> Self {
         Self {
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>> {
         let mut parser = Box::new(ReadnParser::new());
         parser.cb_readn = prolens.cb_readn.clone();
         parser
@@ -136,11 +126,11 @@ mod tests {
             *seq_clone.borrow_mut() = seq;
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readn(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readn);
+        protolens.set_task_parser(&mut task, L7Proto::Readn);
 
         protolens.run_task(&mut task, pkt1);
 
@@ -167,11 +157,11 @@ mod tests {
             seq_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readn(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readn);
+        protolens.set_task_parser(&mut task, L7Proto::Readn);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -212,11 +202,11 @@ mod tests {
             seq_values_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readn(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readn);
+        protolens.set_task_parser(&mut task, L7Proto::Readn);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -284,11 +274,11 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readn(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readn);
+        protolens.set_task_parser(&mut task, L7Proto::Readn);
 
         protolens.run_task(&mut task, pkt1);
 
@@ -359,11 +349,11 @@ mod tests {
             seq_values_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readn(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readn);
+        protolens.set_task_parser(&mut task, L7Proto::Readn);
 
         protolens.run_task(&mut task, pkt);
 

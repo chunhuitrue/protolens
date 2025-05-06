@@ -13,42 +13,36 @@ pub trait RawPktCbFn<T>: FnMut(T, *mut c_void) {}
 impl<F, T> RawPktCbFn<T> for F where F: FnMut(T, *mut c_void) {}
 pub(crate) type CbRawPkt<T> = Rc<RefCell<dyn RawPktCbFn<T> + 'static>>;
 
-pub(crate) struct RawPacketParser<T, P>
+pub(crate) struct RawPacketParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) cb_raw_pkt: Option<CbRawPkt<T>>,
-    _phantom: PhantomData<P>,
 }
 
-impl<T, P> RawPacketParser<T, P>
+impl<T> RawPacketParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub fn new() -> Self {
-        Self {
-            cb_raw_pkt: None,
-            _phantom: PhantomData,
-        }
+        Self { cb_raw_pkt: None }
     }
 
     async fn c2s_parser_inner(
         cb_raw_pkt: Option<CbRawPkt<T>>,
-        strm: *const PktStrm<T, P>,
+        strm: *const PktStrm<T>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm;
         unsafe {
-            stm = &mut *(strm as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T>);
         }
 
         while !stm.fin() {
             let pkt = stm.next_raw_pkt().await;
             if let Some(ref cb) = cb_raw_pkt {
-                if let Some(wrapper) = pkt {
-                    cb.borrow_mut()((*wrapper.ptr).clone(), cb_ctx);
+                if let Some(pkt) = pkt {
+                    cb.borrow_mut()(pkt.clone(), cb_ctx);
                 }
             }
         }
@@ -56,25 +50,22 @@ where
     }
 }
 
-impl<T, P> Default for RawPacketParser<T, P>
+impl<T> Default for RawPacketParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, P> Parser for RawPacketParser<T, P>
+impl<T> Parser for RawPacketParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
-    type PacketType = T;
-    type PtrType = P;
+    type T = T;
 
-    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
             self.cb_raw_pkt.clone(),
             strm,
@@ -83,24 +74,21 @@ where
     }
 }
 
-pub(crate) struct RawPacketFactory<T, P> {
+pub(crate) struct RawPacketFactory<T> {
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ParserFactory<T, P> for RawPacketFactory<T, P>
+impl<T> ParserFactory<T> for RawPacketFactory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
     fn new() -> Self {
         Self {
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>> {
         let mut parser = Box::new(RawPacketParser::new());
         parser.cb_raw_pkt = prolens.cb_raw_pkt.clone();
         parser
@@ -144,11 +132,11 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_raw_pkt(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::RawPacket);
+        protolens.set_task_parser(&mut task, L7Proto::RawPacket);
 
         dbg!("1 task run");
         protolens.run_task(&mut task, pkt3);

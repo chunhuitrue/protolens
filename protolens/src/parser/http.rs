@@ -27,10 +27,9 @@ use phf::phf_set;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 
-pub struct HttpParser<T, P>
+pub struct HttpParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     cb_start_line: Option<CbStartLine>,
     cb_header: Option<CbHeader>,
@@ -38,13 +37,11 @@ where
     cb_body: Option<CbHttpBody>,
     cb_body_stop: Option<CbBodyEvt>,
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> HttpParser<T, P>
+impl<T> HttpParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) fn new() -> Self {
         Self {
@@ -54,19 +51,18 @@ where
             cb_body: None,
             cb_body_stop: None,
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
     async fn parser_inner(
-        strm: *const PktStrm<T, P>,
+        strm: *const PktStrm<T>,
         cb_http: HttpCallbacks,
         cb_ctx: *mut c_void,
         start_line_parser: fn(&[u8]) -> HttpVersion,
     ) -> Result<(), ()> {
         let stm;
         unsafe {
-            stm = &mut *(strm as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T>);
         }
 
         loop {
@@ -107,7 +103,7 @@ where
     }
 
     async fn header(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         cb_header: Option<&CbHeader>,
         cb_ctx: *mut c_void,
         dir: Direction,
@@ -176,7 +172,7 @@ where
     }
 
     async fn multi_body(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         out_bdry: &str,
         bdry: &str,
         cb_http: &HttpCallbacks,
@@ -218,7 +214,7 @@ where
     }
 
     async fn mime_body(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         params: HttpBodyParams<'_>,
         ce: &Option<Vec<Encoding>>,
         te: &Option<Vec<Encoding>>,
@@ -244,7 +240,7 @@ where
     }
 
     async fn size_body(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         size: usize,
         params: HttpBodyParams<'_>,
     ) -> Result<(), ()> {
@@ -268,7 +264,7 @@ where
     }
 
     async fn chunk_body(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         cb_http: &HttpCallbacks,
         cb_ctx: *mut c_void,
         ce: &Option<Vec<Encoding>>,
@@ -310,7 +306,7 @@ where
         Ok(())
     }
 
-    async fn tailer(stm: &mut PktStrm<T, P>) -> Result<(), ()> {
+    async fn tailer(stm: &mut PktStrm<T>) -> Result<(), ()> {
         loop {
             let (line, _seq) = stm.readline_str().await?;
             if line == "\r\n" {
@@ -320,21 +316,19 @@ where
     }
 }
 
-impl<T, P> Parser for HttpParser<T, P>
+impl<T> Parser for HttpParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
-    type PacketType = T;
-    type PtrType = P;
+    type T = T;
 
-    fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
+    fn dir_confirm(&self) -> DirConfirmFn<Self::T> {
         |c2s_strm, s2c_strm, c2s_port, s2c_port| {
             let stm_c2s;
             let stm_s2c;
             unsafe {
-                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
-                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
+                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T>);
+                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T>);
             }
 
             if s2c_port == HTTP_PORT {
@@ -370,7 +364,7 @@ where
         }
     }
 
-    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         let cb_http = HttpCallbacks {
             start_line: self.cb_start_line.clone(),
             header: self.cb_header.clone(),
@@ -387,7 +381,7 @@ where
         )))
     }
 
-    fn s2c_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn s2c_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         let cb_http = HttpCallbacks {
             start_line: self.cb_start_line.clone(),
             header: self.cb_header.clone(),
@@ -405,24 +399,21 @@ where
     }
 }
 
-pub(crate) struct HttpFactory<T, P> {
+pub(crate) struct HttpFactory<T> {
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ParserFactory<T, P> for HttpFactory<T, P>
+impl<T> ParserFactory<T> for HttpFactory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
     fn new() -> Self {
         Self {
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>> {
         let mut parser = Box::new(HttpParser::new());
         parser.cb_start_line = prolens.cb_http_start_line.clone();
         parser.cb_header = prolens.cb_http_header.clone();
@@ -902,7 +893,7 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_http_start_line(start_line_callback);
         protolens.set_cb_http_header(header_callback);
         protolens.set_cb_http_body_start(body_start_callback);
@@ -910,7 +901,7 @@ mod tests {
         protolens.set_cb_http_body_stop(body_stop_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Http);
+        protolens.set_task_parser(&mut task, L7Proto::Http);
 
         loop {
             let now = SystemTime::now()
@@ -1079,7 +1070,7 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_http_start_line(start_line_callback);
         protolens.set_cb_http_header(header_callback);
         protolens.set_cb_http_body_start(body_start_callback);
@@ -1087,7 +1078,7 @@ mod tests {
         protolens.set_cb_http_body_stop(body_stop_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Http);
+        protolens.set_task_parser(&mut task, L7Proto::Http);
 
         loop {
             let now = SystemTime::now()
@@ -1268,7 +1259,7 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_http_start_line(start_line_callback);
         protolens.set_cb_http_header(header_callback);
         protolens.set_cb_http_body_start(body_start_callback);
@@ -1276,7 +1267,7 @@ mod tests {
         protolens.set_cb_http_body_stop(body_stop_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Http);
+        protolens.set_task_parser(&mut task, L7Proto::Http);
 
         let mut seq = 1000;
         for line in lines.iter() {

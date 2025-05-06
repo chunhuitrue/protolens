@@ -22,4 +22,10 @@ fn benches(c: &mut Criterion) {
 criterion_group!(normal_benches, benches);
 criterion_group!(flame_task, task_init_flame);
 criterion_group!(flame_http_new_task, http_new_task_flame);
-criterion_main!(normal_benches, flame_task, flame_http_new_task);
+criterion_group!(flame_smtp_new_task, smtp_new_task_flame);
+criterion_main!(
+    normal_benches,
+    flame_task,
+    flame_http_new_task,
+    flame_smtp_new_task
+);

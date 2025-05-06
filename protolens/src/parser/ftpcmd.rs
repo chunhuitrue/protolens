@@ -22,22 +22,19 @@ use std::marker::PhantomData;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
-pub struct FtpCmdParser<T, P>
+pub struct FtpCmdParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     cb_clt: Option<CbClt>,
     cb_srv: Option<CbSrv>,
     cb_link: Option<CbFtpLink>,
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> FtpCmdParser<T, P>
+impl<T> FtpCmdParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) fn new() -> Self {
         Self {
@@ -45,19 +42,18 @@ where
             cb_srv: None,
             cb_link: None,
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
     async fn c2s_parser_inner(
-        strm: *const PktStrm<T, P>,
+        strm: *const PktStrm<T>,
         cb_clt: Option<CbClt>,
         cb_link: Option<CbFtpLink>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm;
         unsafe {
-            stm = &mut *(strm as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T>);
         }
 
         loop {
@@ -84,14 +80,14 @@ where
     }
 
     async fn s2c_parser_inner(
-        strm: *const PktStrm<T, P>,
+        strm: *const PktStrm<T>,
         cb_srv: Option<CbSrv>,
         cb_link: Option<CbFtpLink>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm;
         unsafe {
-            stm = &mut *(strm as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T>);
         }
 
         loop {
@@ -118,21 +114,19 @@ where
     }
 }
 
-impl<T, P> Parser for FtpCmdParser<T, P>
+impl<T> Parser for FtpCmdParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
-    type PacketType = T;
-    type PtrType = P;
+    type T = T;
 
-    fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
+    fn dir_confirm(&self) -> DirConfirmFn<Self::T> {
         |c2s_strm, s2c_strm, c2s_port, s2c_port| {
             let stm_c2s;
             let stm_s2c;
             unsafe {
-                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
-                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
+                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T>);
+                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T>);
             }
 
             if s2c_port == FTP_PORT {
@@ -171,7 +165,7 @@ where
         }
     }
 
-    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
             strm,
             self.cb_clt.clone(),
@@ -180,7 +174,7 @@ where
         )))
     }
 
-    fn s2c_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn s2c_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::s2c_parser_inner(
             strm,
             self.cb_srv.clone(),
@@ -190,24 +184,21 @@ where
     }
 }
 
-pub(crate) struct FtpCmdFactory<T, P> {
+pub(crate) struct FtpCmdFactory<T> {
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ParserFactory<T, P> for FtpCmdFactory<T, P>
+impl<T> ParserFactory<T> for FtpCmdFactory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
     fn new() -> Self {
         Self {
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>> {
         let mut parser = Box::new(FtpCmdParser::new());
         parser.cb_clt = prolens.cb_ftp_clt.clone();
         parser.cb_srv = prolens.cb_ftp_srv.clone();
@@ -592,11 +583,11 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_ftp_srv(srv_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::FtpCmd);
+        protolens.set_task_parser(&mut task, L7Proto::FtpCmd);
 
         let mut seq = 1000;
         for line in lines {
@@ -629,11 +620,11 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_ftp_clt(clt_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::FtpCmd);
+        protolens.set_task_parser(&mut task, L7Proto::FtpCmd);
 
         let mut seq = 1000;
         for line in lines {
@@ -686,13 +677,13 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_ftp_clt(clt_callback);
         protolens.set_cb_ftp_srv(srv_callback);
         protolens.set_cb_ftp_link(link_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::FtpCmd);
+        protolens.set_task_parser(&mut task, L7Proto::FtpCmd);
 
         loop {
             let now = SystemTime::now()

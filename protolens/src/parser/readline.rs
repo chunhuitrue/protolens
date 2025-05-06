@@ -13,37 +13,33 @@ pub trait ReadLineCbFn: FnMut(&[u8], u32, *mut c_void) {}
 impl<F: FnMut(&[u8], u32, *mut c_void)> ReadLineCbFn for F {}
 pub(crate) type CbReadline = Rc<RefCell<dyn ReadLineCbFn + 'static>>;
 
-pub struct ReadlineParser<T, P>
+pub struct ReadlineParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) cb_readline: Option<CbReadline>,
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ReadlineParser<T, P>
+impl<T> ReadlineParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub fn new() -> Self {
         Self {
             cb_readline: None,
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
     async fn c2s_parser_inner(
         cb_readline: Option<CbReadline>,
-        strm: *const PktStrm<T, P>,
+        strm: *const PktStrm<T>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm;
         unsafe {
-            stm = &mut *(strm as *mut PktStrm<T, P>);
+            stm = &mut *(strm as *mut PktStrm<T>);
         }
 
         while !stm.fin() {
@@ -61,25 +57,22 @@ where
     }
 }
 
-impl<T, P> Default for ReadlineParser<T, P>
+impl<T> Default for ReadlineParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T, P> Parser for ReadlineParser<T, P>
+impl<T> Parser for ReadlineParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
-    type PacketType = T;
-    type PtrType = P;
+    type T = T;
 
-    fn c2s_parser(&self, strm: *const PktStrm<T, P>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
             self.cb_readline.clone(),
             strm,
@@ -88,24 +81,21 @@ where
     }
 }
 
-pub(crate) struct ReadlineFactory<T, P> {
+pub(crate) struct ReadlineFactory<T> {
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ParserFactory<T, P> for ReadlineFactory<T, P>
+impl<T> ParserFactory<T> for ReadlineFactory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
     fn new() -> Self {
         Self {
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>> {
         let mut parser = Box::new(ReadlineParser::new());
         parser.cb_readline = prolens.cb_readline.clone();
         parser
@@ -147,12 +137,12 @@ mod tests {
             raw_seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
         protolens.set_cb_task_c2s(stm_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         protolens.run_task(&mut task, pkt1);
 
@@ -192,11 +182,11 @@ mod tests {
             seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         dbg!("run1");
         protolens.run_task(&mut task, pkt1);
@@ -244,11 +234,11 @@ mod tests {
             seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         // 乱序发送包
         protolens.run_task(&mut task, pkt_syn);
@@ -287,13 +277,13 @@ mod tests {
             seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task1 = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task1.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task1, L7Proto::Readline);
         let mut task2 = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task2.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task2, L7Proto::Readline);
 
         protolens.run_task(&mut task1, pkt1.clone());
         // 验证收到的行是否正确
@@ -328,11 +318,11 @@ mod tests {
             lines_clone.borrow_mut().push(line.to_vec());
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         protolens.run_task(&mut task, pkt1);
 
@@ -376,11 +366,11 @@ mod tests {
             seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -439,11 +429,11 @@ mod tests {
             seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -488,11 +478,11 @@ mod tests {
             seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -531,11 +521,11 @@ mod tests {
             seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -576,11 +566,11 @@ mod tests {
             seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -625,11 +615,11 @@ mod tests {
             seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -680,11 +670,11 @@ mod tests {
             seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
@@ -744,11 +734,11 @@ mod tests {
             seqs_clone.borrow_mut().push(seq);
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_readline(callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Readline);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
 
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);

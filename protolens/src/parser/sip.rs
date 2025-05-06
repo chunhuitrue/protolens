@@ -14,10 +14,9 @@ use phf::phf_set;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 
-pub struct SipParser<T, P>
+pub struct SipParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     cb_start_line: Option<CbStartLine>,
     cb_header: Option<CbHeader>,
@@ -25,13 +24,11 @@ where
     cb_body: Option<CbSipBody>,
     cb_body_stop: Option<CbBodyEvt>,
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> SipParser<T, P>
+impl<T> SipParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) fn new() -> Self {
         Self {
@@ -41,15 +38,10 @@ where
             cb_body: None,
             cb_body_stop: None,
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn bdir_parser(
-        pkt: PacketWrapper<T, P>,
-        cb_sip: SipCallbacks,
-        cb_ctx: *mut c_void,
-    ) -> Result<(), ()> {
+    fn bdir_parser(pkt: T, cb_sip: SipCallbacks, cb_ctx: *mut c_void) -> Result<(), ()> {
         let dir = Self::pkt_dir(&pkt);
         if dir == Direction::Unknown {
             return Ok(());
@@ -77,8 +69,8 @@ where
         Ok(())
     }
 
-    fn pkt_dir(pkt: &PacketWrapper<T, P>) -> Direction {
-        let payload = pkt.ptr.payload();
+    fn pkt_dir(pkt: &T) -> Direction {
+        let payload = pkt.payload();
         if req(unsafe { std::str::from_utf8_unchecked(payload) }) {
             return Direction::C2s;
         } else if rsp(unsafe { std::str::from_utf8_unchecked(payload) }) {
@@ -88,7 +80,7 @@ where
     }
 
     fn header(
-        pktdata: &mut PktData<T, P>,
+        pktdata: &mut PktData<T>,
         dir: Direction,
         cb_sip: &SipCallbacks,
         cb_ctx: *mut c_void,
@@ -117,7 +109,7 @@ where
     }
 
     fn body(
-        pktdata: &mut PktData<T, P>,
+        pktdata: &mut PktData<T>,
         size: usize,
         dir: Direction,
         cb_sip: &SipCallbacks,
@@ -133,34 +125,26 @@ where
     }
 }
 
-impl<T, P> Parser for SipParser<T, P>
+impl<T> Parser for SipParser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
-    type PacketType = T;
-    type PtrType = P;
+    type T = T;
 
-    fn pkt_bdir_parser(&self) -> Option<UdpParserFn<T, P>> {
-        struct ParserImpl<T, P> {
+    fn pkt_bdir_parser(&self) -> Option<UdpParserFn<T>> {
+        struct ParserImpl<T> {
             cb_sip: SipCallbacks,
-            _phantom: PhantomData<(T, P)>,
+            _phantom: PhantomData<T>,
         }
 
-        impl<T, P> UdpParser for ParserImpl<T, P>
+        impl<T> UdpParser for ParserImpl<T>
         where
-            T: PacketBind,
-            P: PtrWrapper<T> + PtrNew<T>,
+            T: Packet,
         {
-            type PacketType = T;
-            type PtrType = P;
+            type T = T;
 
-            fn parse(
-                &self,
-                pkt: PacketWrapper<Self::PacketType, Self::PtrType>,
-                cb_ctx: *mut c_void,
-            ) -> Result<(), ()> {
-                SipParser::<T, P>::bdir_parser(pkt, self.cb_sip.clone(), cb_ctx)
+            fn parse(&self, pkt: Self::T, cb_ctx: *mut c_void) -> Result<(), ()> {
+                SipParser::<T>::bdir_parser(pkt, self.cb_sip.clone(), cb_ctx)
             }
         }
 
@@ -179,24 +163,21 @@ where
     }
 }
 
-pub(crate) struct SipFactory<T, P> {
+pub(crate) struct SipFactory<T> {
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ParserFactory<T, P> for SipFactory<T, P>
+impl<T> ParserFactory<T> for SipFactory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
     fn new() -> Self {
         Self {
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>> {
         let mut parser = Box::new(SipParser::new());
         parser.cb_start_line = prolens.cb_sip_start_line.clone();
         parser.cb_header = prolens.cb_sip_header.clone();
@@ -360,7 +341,7 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_sip_start_line(start_line_callback);
         protolens.set_cb_sip_header(header_callback);
         protolens.set_cb_sip_body_start(body_start_callback);
@@ -368,7 +349,7 @@ mod tests {
         protolens.set_cb_sip_body_stop(body_stop_callback);
 
         let mut task = protolens.new_task(TransProto::Udp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Sip);
+        protolens.set_task_parser(&mut task, L7Proto::Sip);
 
         loop {
             let now = SystemTime::now()

@@ -21,12 +21,9 @@ pub mod readline;
 pub mod readn;
 
 use crate::Direction;
-use crate::PacketBind;
-use crate::PacketWrapper;
+use crate::Packet;
 use crate::PktStrm;
 use crate::Prolens;
-use crate::PtrNew;
-use crate::PtrWrapper;
 use crate::ReadRet;
 use futures::Future;
 use nom::{
@@ -43,15 +40,14 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 pub(crate) type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
-pub(crate) type DirConfirmFn<T, P> =
-    fn(*const PktStrm<T, P>, *const PktStrm<T, P>, u16, u16) -> Option<bool>;
-pub(crate) type PktDirConfirmFn<T, P> = fn(&PacketWrapper<T, P>) -> Option<bool>;
+pub(crate) type DirConfirmFn<T> =
+    fn(*const PktStrm<T>, *const PktStrm<T>, u16, u16) -> Option<bool>;
+pub(crate) type PktDirConfirmFn<T> = fn(&T) -> Option<bool>;
 
 pub(crate) trait Parser {
-    type PacketType: PacketBind;
-    type PtrType: PtrWrapper<Self::PacketType> + PtrNew<Self::PacketType>;
+    type T: Packet;
 
-    fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
+    fn dir_confirm(&self) -> DirConfirmFn<Self::T> {
         |_c2s_strm, _s2c_strm, _c2s_port, _s2c_port| {
             Some(true) // The default is that the first package to arrive is c2s.
         }
@@ -59,7 +55,7 @@ pub(crate) trait Parser {
 
     fn c2s_parser(
         &self,
-        _strm: *const PktStrm<Self::PacketType, Self::PtrType>,
+        _strm: *const PktStrm<Self::T>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
@@ -67,7 +63,7 @@ pub(crate) trait Parser {
 
     fn s2c_parser(
         &self,
-        _strm: *const PktStrm<Self::PacketType, Self::PtrType>,
+        _strm: *const PktStrm<Self::T>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
@@ -75,53 +71,47 @@ pub(crate) trait Parser {
 
     fn bdir_parser(
         &self,
-        _c2s_strm: *const PktStrm<Self::PacketType, Self::PtrType>,
-        _s2c_strm: *const PktStrm<Self::PacketType, Self::PtrType>,
+        _c2s_strm: *const PktStrm<Self::T>,
+        _s2c_strm: *const PktStrm<Self::T>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
     }
 
-    fn pkt_dir_confirm(&self) -> PktDirConfirmFn<Self::PacketType, Self::PtrType> {
+    fn pkt_dir_confirm(&self) -> PktDirConfirmFn<Self::T> {
         |_pkt| {
             Some(true) // The default is that the first package to arrive is c2s.
         }
     }
 
-    fn pkt_c2s_parser(&self) -> Option<UdpParserFn<Self::PacketType, Self::PtrType>> {
+    fn pkt_c2s_parser(&self) -> Option<UdpParserFn<Self::T>> {
         None
     }
 
-    fn pkt_s2c_parser(&self) -> Option<UdpParserFn<Self::PacketType, Self::PtrType>> {
+    fn pkt_s2c_parser(&self) -> Option<UdpParserFn<Self::T>> {
         None
     }
 
-    fn pkt_bdir_parser(&self) -> Option<UdpParserFn<Self::PacketType, Self::PtrType>> {
+    fn pkt_bdir_parser(&self) -> Option<UdpParserFn<Self::T>> {
         None
     }
 }
 
 pub trait UdpParser {
-    type PacketType: PacketBind;
-    type PtrType: PtrWrapper<Self::PacketType> + PtrNew<Self::PacketType>;
+    type T: Packet;
 
-    fn parse(
-        &self,
-        pkt: PacketWrapper<Self::PacketType, Self::PtrType>,
-        cb_ctx: *mut c_void,
-    ) -> Result<(), ()>;
+    fn parse(&self, pkt: Self::T, cb_ctx: *mut c_void) -> Result<(), ()>;
 }
-pub type UdpParserFn<T, P> = Box<dyn UdpParser<PacketType = T, PtrType = P>>;
+pub type UdpParserFn<T> = Box<dyn UdpParser<T = T>>;
 
-pub(crate) trait ParserFactory<T, P>
+pub(crate) trait ParserFactory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     fn new() -> Self
     where
         Self: Sized;
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>>;
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>>;
 }
 
 pub trait OrdPktCbFn<T>: FnMut(T, *mut c_void, Direction) {}
@@ -196,15 +186,14 @@ pub(crate) struct Callbacks {
     pub(crate) dir: Direction,
 }
 
-pub(crate) async fn header<T, P>(
-    stm: &mut PktStrm<T, P>,
+pub(crate) async fn header<T>(
+    stm: &mut PktStrm<T>,
     cb_header: Option<&CbHeader>,
     cb_ctx: *mut c_void,
     dir: Direction,
 ) -> Result<(Option<String>, Option<TransferEncoding>), ()>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     let mut cont_type = false;
     let mut boundary = None;
@@ -253,8 +242,8 @@ where
     }
 }
 
-pub(crate) async fn body<T, P>(
-    stm: &mut PktStrm<T, P>,
+pub(crate) async fn body<T>(
+    stm: &mut PktStrm<T>,
     te: Option<TransferEncoding>,
     cb_body_start: Option<&CbBodyEvt>,
     cb_body: Option<&CbBody>,
@@ -263,8 +252,7 @@ pub(crate) async fn body<T, P>(
     dir: Direction,
 ) -> Result<bool, ()>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     if let Some(cb) = cb_body_start {
         cb.borrow_mut()(cb_ctx, dir);
@@ -286,16 +274,15 @@ where
     Ok(true)
 }
 
-pub(crate) async fn multi_body<T, P>(
-    stm: &mut PktStrm<T, P>,
+pub(crate) async fn multi_body<T>(
+    stm: &mut PktStrm<T>,
     out_bdry: &str,
     bdry: &str,
     cb: &Callbacks,
     cb_ctx: *mut c_void,
 ) -> Result<(), ()>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     preamble(stm, bdry).await?;
     loop {
@@ -330,10 +317,9 @@ where
     Ok(())
 }
 
-pub(crate) async fn preamble<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(), ()>
+pub(crate) async fn preamble<T>(stm: &mut PktStrm<T>, bdry: &str) -> Result<(), ()>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     let params = MimeBodyParams {
         te: None,
@@ -360,13 +346,9 @@ pub(crate) struct MimeBodyParams<'a> {
     dir: Direction,
 }
 
-pub(crate) async fn mime_body<T, P>(
-    stm: &mut PktStrm<T, P>,
-    params: MimeBodyParams<'_>,
-) -> Result<(), ()>
+pub(crate) async fn mime_body<T>(stm: &mut PktStrm<T>, params: MimeBodyParams<'_>) -> Result<(), ()>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     if let Some(cb) = params.cb_body_start {
         cb.borrow_mut()(params.cb_ctx, params.dir);
@@ -388,10 +370,9 @@ where
     Ok(())
 }
 
-pub(crate) async fn epilogue<T, P>(stm: &mut PktStrm<T, P>, bdry: &str) -> Result<(), ()>
+pub(crate) async fn epilogue<T>(stm: &mut PktStrm<T>, bdry: &str) -> Result<(), ()>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     loop {
         let (line, _seq) = stm.readline_str().await?;

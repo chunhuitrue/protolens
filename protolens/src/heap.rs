@@ -33,10 +33,6 @@ impl<T: Ord> Heap<T> {
         self.len == 0
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.len = 0;
-    }
-
     pub(crate) fn push(&mut self, item: T) -> bool {
         if self.len >= self.max_size {
             return false;
@@ -126,14 +122,12 @@ impl<T: Ord> Heap<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PacketWrapper;
+    use crate::packet::SeqPacket;
     use crate::test_utils::MyPacket;
-    use std::marker::PhantomData;
-    use std::rc::Rc;
 
     #[test]
     fn test_memory_size() {
-        let heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>>::new(32);
+        let heap = Heap::<MyPacket>::new(32);
         assert_eq!(heap.capacity(), 32);
     }
 
@@ -159,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_packet_ordering() {
-        let mut heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>>::new(5);
+        let mut heap = Heap::<SeqPacket<MyPacket>>::new(5);
 
         let packet1 = MyPacket {
             sport: 12345,
@@ -188,28 +182,19 @@ mod tests {
             data: vec![7, 8, 9],
         };
 
-        heap.push(PacketWrapper {
-            ptr: Rc::new(packet1.clone()),
-            _phantom: PhantomData,
-        });
-        heap.push(PacketWrapper {
-            ptr: Rc::new(packet2.clone()),
-            _phantom: PhantomData,
-        });
-        heap.push(PacketWrapper {
-            ptr: Rc::new(packet3.clone()),
-            _phantom: PhantomData,
-        });
+        heap.push(SeqPacket::new(packet1.clone()));
+        heap.push(SeqPacket::new(packet2.clone()));
+        heap.push(SeqPacket::new(packet3.clone()));
 
-        assert_eq!(heap.pop().map(|p| p.ptr.sequence), Some(990));
-        assert_eq!(heap.pop().map(|p| p.ptr.sequence), Some(995));
-        assert_eq!(heap.pop().map(|p| p.ptr.sequence), Some(1000));
+        assert_eq!(heap.pop().map(|p| p.inner().sequence), Some(990));
+        assert_eq!(heap.pop().map(|p| p.inner().sequence), Some(995));
+        assert_eq!(heap.pop().map(|p| p.inner().sequence), Some(1000));
         assert_eq!(heap.pop(), None);
     }
 
     #[test]
     fn test_packet_ordering_with_syn_fin() {
-        let mut heap = Heap::<PacketWrapper<MyPacket, Rc<MyPacket>>>::new(5);
+        let mut heap = Heap::<SeqPacket<MyPacket>>::new(5);
 
         let syn_packet = MyPacket {
             sport: 12345,
@@ -238,30 +223,21 @@ mod tests {
             data: vec![],
         };
 
-        heap.push(PacketWrapper {
-            ptr: Rc::new(fin_packet.clone()),
-            _phantom: PhantomData,
-        });
-        heap.push(PacketWrapper {
-            ptr: Rc::new(data_packet.clone()),
-            _phantom: PhantomData,
-        });
-        heap.push(PacketWrapper {
-            ptr: Rc::new(syn_packet.clone()),
-            _phantom: PhantomData,
-        });
+        heap.push(SeqPacket::new(fin_packet.clone()));
+        heap.push(SeqPacket::new(data_packet.clone()));
+        heap.push(SeqPacket::new(syn_packet.clone()));
 
-        let first = heap.pop().unwrap().ptr;
-        assert!(first.syn_flag);
-        assert_eq!(first.sequence, 100);
+        let first = heap.pop().unwrap();
+        assert!(first.inner().syn_flag);
+        assert_eq!(first.inner().sequence, 100);
 
-        let second = heap.pop().unwrap().ptr;
-        assert!(!second.syn_flag && !second.fin_flag);
-        assert_eq!(second.sequence, 101);
+        let second = heap.pop().unwrap();
+        assert!(!second.inner().syn_flag && !second.inner().fin_flag);
+        assert_eq!(second.inner().sequence, 101);
 
-        let third = heap.pop().unwrap().ptr;
-        assert!(third.fin_flag);
-        assert_eq!(third.sequence, 104);
+        let third = heap.pop().unwrap();
+        assert!(third.inner().fin_flag);
+        assert_eq!(third.inner().sequence, 104);
 
         assert_eq!(heap.pop(), None);
     }

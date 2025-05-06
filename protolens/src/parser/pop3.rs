@@ -27,10 +27,9 @@ use nom::{
 use std::ffi::c_void;
 use std::marker::PhantomData;
 
-pub struct Pop3Parser<T, P>
+pub struct Pop3Parser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     cb_header: Option<CbHeader>,
     cb_body_start: Option<CbBodyEvt>,
@@ -39,13 +38,11 @@ where
     cb_clt: Option<CbClt>,
     cb_srv: Option<CbSrv>,
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> Pop3Parser<T, P>
+impl<T> Pop3Parser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T>,
+    T: Packet,
 {
     pub(crate) fn new() -> Self {
         Self {
@@ -56,18 +53,17 @@ where
             cb_clt: None,
             cb_srv: None,
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
     async fn c2s_parser_inner(
-        stream: *const PktStrm<T, P>,
+        stream: *const PktStrm<T>,
         cb_pop3: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm: &mut PktStrm<T>;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(stream as *mut PktStrm<T>);
         }
 
         loop {
@@ -85,13 +81,13 @@ where
     }
 
     async fn s2c_parser_inner(
-        stream: *const PktStrm<T, P>,
+        stream: *const PktStrm<T>,
         cb_pop3: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T, P>;
+        let stm: &mut PktStrm<T>;
         unsafe {
-            stm = &mut *(stream as *mut PktStrm<T, P>);
+            stm = &mut *(stream as *mut PktStrm<T>);
         }
 
         loop {
@@ -113,7 +109,7 @@ where
     }
 
     async fn parser_inner(
-        stm: &mut PktStrm<T, P>,
+        stm: &mut PktStrm<T>,
         cb_pop3: &Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
@@ -136,21 +132,19 @@ where
     }
 }
 
-impl<T, P> Parser for Pop3Parser<T, P>
+impl<T> Parser for Pop3Parser<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
-    type PacketType = T;
-    type PtrType = P;
+    type T = T;
 
-    fn dir_confirm(&self) -> DirConfirmFn<Self::PacketType, Self::PtrType> {
+    fn dir_confirm(&self) -> DirConfirmFn<Self::T> {
         |c2s_strm, s2c_strm, c2s_port, s2c_port| {
             let stm_c2s;
             let stm_s2c;
             unsafe {
-                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T, P>);
-                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T, P>);
+                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T>);
+                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T>);
             }
 
             if s2c_port == POP3_PORT {
@@ -186,11 +180,7 @@ where
         }
     }
 
-    fn c2s_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+    fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         let cb_pop3 = Callbacks {
             header: None,
             body_start: None,
@@ -203,11 +193,7 @@ where
         Some(Box::pin(Self::c2s_parser_inner(stream, cb_pop3, cb_ctx)))
     }
 
-    fn s2c_parser(
-        &self,
-        stream: *const PktStrm<T, P>,
-        cb_ctx: *mut c_void,
-    ) -> Option<ParserFuture> {
+    fn s2c_parser(&self, stream: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         let cb_pop3 = Callbacks {
             header: self.cb_header.clone(),
             body_start: self.cb_body_start.clone(),
@@ -221,24 +207,21 @@ where
     }
 }
 
-pub(crate) struct Pop3Factory<T, P> {
+pub(crate) struct Pop3Factory<T> {
     _phantom_t: PhantomData<T>,
-    _phantom_p: PhantomData<P>,
 }
 
-impl<T, P> ParserFactory<T, P> for Pop3Factory<T, P>
+impl<T> ParserFactory<T> for Pop3Factory<T>
 where
-    T: PacketBind,
-    P: PtrWrapper<T> + PtrNew<T> + 'static,
+    T: Packet + 'static,
 {
     fn new() -> Self {
         Self {
             _phantom_t: PhantomData,
-            _phantom_p: PhantomData,
         }
     }
 
-    fn create(&self, prolens: &Prolens<T, P>) -> Box<dyn Parser<PacketType = T, PtrType = P>> {
+    fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>> {
         let mut parser = Box::new(Pop3Parser::new());
         parser.cb_header = prolens.cb_pop3_header.clone();
         parser.cb_body_start = prolens.cb_pop3_body_start.clone();
@@ -347,11 +330,11 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_pop3_clt(clt_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Pop3);
+        protolens.set_task_parser(&mut task, L7Proto::Pop3);
 
         // First packet has no data, confirm_dir will try again next time
         let mut seq = 1000;
@@ -424,12 +407,12 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_pop3_header(header_callback);
         protolens.set_cb_pop3_body(body_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Pop3);
+        protolens.set_task_parser(&mut task, L7Proto::Pop3);
 
         let mut seq = 1000;
         for line in lines {
@@ -540,14 +523,14 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_pop3_header(header_callback);
         protolens.set_cb_pop3_body_start(body_start_callback);
         protolens.set_cb_pop3_body(body_callback);
         protolens.set_cb_pop3_body_stop(body_stop_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Pop3);
+        protolens.set_task_parser(&mut task, L7Proto::Pop3);
 
         let mut seq = 1000;
         for line in lines.iter() {
@@ -680,7 +663,7 @@ mod tests {
             }
         };
 
-        let mut protolens = Prolens::<CapPacket, Rc<CapPacket>>::default();
+        let mut protolens = Prolens::<CapPacket>::default();
         protolens.set_cb_pop3_header(header_callback);
         protolens.set_cb_pop3_body_start(body_start_callback);
         protolens.set_cb_pop3_body(body_callback);
@@ -689,7 +672,7 @@ mod tests {
         protolens.set_cb_pop3_srv(srv_callback);
 
         let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(task.as_mut(), L7Proto::Pop3);
+        protolens.set_task_parser(&mut task, L7Proto::Pop3);
 
         loop {
             let now = SystemTime::now()
