@@ -25,14 +25,11 @@ where
 
     async fn parser_inner(
         cb_ord_pkt: Option<CbOrdPkt<T>>,
-        strm: *const PktStrm<T>,
+        strm: *mut PktStrm<T>,
         dir: Direction,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm;
-        unsafe {
-            stm = &mut *(strm as *mut PktStrm<T>);
-        }
+        let stm = unsafe { &mut *strm };
 
         while !stm.fin() {
             let pkt = stm.next_ord_pkt().await;
@@ -62,7 +59,7 @@ where
 {
     type T = T;
 
-    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *mut PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::parser_inner(
             self.cb_ord_pkt.clone(),
             strm,
@@ -71,7 +68,7 @@ where
         )))
     }
 
-    fn s2c_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn s2c_parser(&self, strm: *mut PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::parser_inner(
             self.cb_ord_pkt.clone(),
             strm,

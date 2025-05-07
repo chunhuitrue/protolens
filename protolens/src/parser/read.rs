@@ -38,13 +38,10 @@ where
     async fn c2s_parser_inner(
         cb_read: Option<CbRead>,
         read_size: usize,
-        strm: *const PktStrm<T>,
+        strm: *mut PktStrm<T>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm;
-        unsafe {
-            stm = &mut *(strm as *mut PktStrm<T>);
-        }
+        let stm = unsafe { &mut *strm };
 
         while !stm.fin() {
             match stm.read_err(read_size).await {
@@ -75,7 +72,7 @@ where
 {
     type T = T;
 
-    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *mut PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
             self.cb_read.clone(),
             MAX_READ,

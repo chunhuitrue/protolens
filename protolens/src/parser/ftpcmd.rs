@@ -46,15 +46,12 @@ where
     }
 
     async fn c2s_parser_inner(
-        strm: *const PktStrm<T>,
+        strm: *mut PktStrm<T>,
         cb_clt: Option<CbClt>,
         cb_link: Option<CbFtpLink>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm;
-        unsafe {
-            stm = &mut *(strm as *mut PktStrm<T>);
-        }
+        let stm = unsafe { &mut *strm };
 
         loop {
             let (line, seq) = stm.readline_str().await?;
@@ -80,15 +77,12 @@ where
     }
 
     async fn s2c_parser_inner(
-        strm: *const PktStrm<T>,
+        strm: *mut PktStrm<T>,
         cb_srv: Option<CbSrv>,
         cb_link: Option<CbFtpLink>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm;
-        unsafe {
-            stm = &mut *(strm as *mut PktStrm<T>);
-        }
+        let stm = unsafe { &mut *strm };
 
         loop {
             let (line, seq) = stm.readline_str().await?;
@@ -122,12 +116,8 @@ where
 
     fn dir_confirm(&self) -> DirConfirmFn<Self::T> {
         |c2s_strm, s2c_strm, c2s_port, s2c_port| {
-            let stm_c2s;
-            let stm_s2c;
-            unsafe {
-                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T>);
-                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T>);
-            }
+            let stm_c2s = unsafe { &mut *c2s_strm };
+            let stm_s2c = unsafe { &mut *s2c_strm };
 
             if s2c_port == FTP_PORT {
                 return Some(true);
@@ -165,7 +155,7 @@ where
         }
     }
 
-    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *mut PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
             strm,
             self.cb_clt.clone(),
@@ -174,7 +164,7 @@ where
         )))
     }
 
-    fn s2c_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn s2c_parser(&self, strm: *mut PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::s2c_parser_inner(
             strm,
             self.cb_srv.clone(),

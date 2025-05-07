@@ -169,17 +169,23 @@ where
 
     fn set_parser(&mut self, parser: Box<dyn Parser<T = T>>) {
         self.dir_confirm_parser = Some(parser.dir_confirm());
-        self.c2s_parser = parser.c2s_parser(&self.strm_c2s, self.cb_ctx);
-        self.s2c_parser = parser.s2c_parser(&self.strm_s2c, self.cb_ctx);
-        self.bdir_parser = parser.bdir_parser(&self.strm_c2s, &self.strm_s2c, self.cb_ctx);
+        self.c2s_parser = parser.c2s_parser(&mut self.strm_c2s, self.cb_ctx);
+        self.s2c_parser = parser.s2c_parser(&mut self.strm_s2c, self.cb_ctx);
+        if self.c2s_parser.is_none() && self.s2c_parser.is_none() {
+            self.bdir_parser =
+                parser.bdir_parser(&mut self.strm_c2s, &mut self.strm_s2c, self.cb_ctx);
+        }
         self.parser_set = true;
     }
 
     fn confirm_dir(&mut self) {
         if let Some(dir_confirm_parser) = &self.dir_confirm_parser {
-            if let Some(c2s_dir) =
-                dir_confirm_parser(&self.strm_c2s, &self.strm_s2c, self.c2s_port, self.s2c_port)
-            {
+            if let Some(c2s_dir) = dir_confirm_parser(
+                &mut self.strm_c2s,
+                &mut self.strm_s2c,
+                self.c2s_port,
+                self.s2c_port,
+            ) {
                 if !c2s_dir {
                     std::mem::swap(&mut self.c2s_ip, &mut self.s2c_ip);
                     std::mem::swap(&mut self.c2s_port, &mut self.s2c_port);
@@ -397,7 +403,9 @@ where
         self.dir_confirm_parser = Some(parser.pkt_dir_confirm());
         self.c2s_parser = parser.pkt_c2s_parser();
         self.s2c_parser = parser.pkt_s2c_parser();
-        self.bdir_parser = parser.pkt_bdir_parser();
+        if self.c2s_parser.is_none() && self.s2c_parser.is_none() {
+            self.bdir_parser = parser.pkt_bdir_parser();
+        }
         self.parser_set = true;
     }
 

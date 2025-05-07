@@ -34,14 +34,11 @@ where
     }
 
     async fn c2s_parser_inner(
-        strm: *const PktStrm<T>,
+        strm: *mut PktStrm<T>,
         cb_next_byte: Option<CbByte>,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm;
-        unsafe {
-            stm = &mut *(strm as *mut PktStrm<T>);
-        };
+        let stm = unsafe { &mut *strm };
 
         while let Some(byte) = stm.next().await {
             if let Some(ref cb) = cb_next_byte {
@@ -67,7 +64,7 @@ where
 {
     type T = T;
 
-    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *mut PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::c2s_parser_inner(
             strm,
             self.cb_next_byte.clone(),

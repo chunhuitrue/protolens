@@ -57,14 +57,11 @@ where
     }
 
     async fn c2s_parser_inner(
-        stream: *const PktStrm<T>,
+        strm: *mut PktStrm<T>,
         cb_pop3: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T>;
-        unsafe {
-            stm = &mut *(stream as *mut PktStrm<T>);
-        }
+        let stm = unsafe { &mut *strm };
 
         loop {
             let (line, seq) = stm.read_clean_line_str().await?;
@@ -81,14 +78,11 @@ where
     }
 
     async fn s2c_parser_inner(
-        stream: *const PktStrm<T>,
+        strm: *mut PktStrm<T>,
         cb_pop3: Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm: &mut PktStrm<T>;
-        unsafe {
-            stm = &mut *(stream as *mut PktStrm<T>);
-        }
+        let stm = unsafe { &mut *strm };
 
         loop {
             let (line, seq) = stm.read_clean_line_str().await?;
@@ -140,12 +134,8 @@ where
 
     fn dir_confirm(&self) -> DirConfirmFn<Self::T> {
         |c2s_strm, s2c_strm, c2s_port, s2c_port| {
-            let stm_c2s;
-            let stm_s2c;
-            unsafe {
-                stm_c2s = &mut *(c2s_strm as *mut PktStrm<T>);
-                stm_s2c = &mut *(s2c_strm as *mut PktStrm<T>);
-            }
+            let stm_c2s = unsafe { &mut *c2s_strm };
+            let stm_s2c = unsafe { &mut *s2c_strm };
 
             if s2c_port == POP3_PORT {
                 return Some(true);
@@ -180,7 +170,7 @@ where
         }
     }
 
-    fn c2s_parser(&self, stream: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, stream: *mut PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         let cb_pop3 = Callbacks {
             header: None,
             body_start: None,
@@ -193,7 +183,7 @@ where
         Some(Box::pin(Self::c2s_parser_inner(stream, cb_pop3, cb_ctx)))
     }
 
-    fn s2c_parser(&self, stream: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn s2c_parser(&self, stream: *mut PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         let cb_pop3 = Callbacks {
             header: self.cb_header.clone(),
             body_start: self.cb_body_start.clone(),

@@ -34,17 +34,14 @@ where
     }
 
     async fn parser_inner(
-        strm: *const PktStrm<T>,
+        strm: *mut PktStrm<T>,
         cb_body_start: Option<CbBodyEvt>,
         cb_body: Option<CbFtpBody>,
         cb_body_stop: Option<CbBodyEvt>,
         dir: Direction,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
-        let stm;
-        unsafe {
-            stm = &mut *(strm as *mut PktStrm<T>);
-        }
+        let stm = unsafe { &mut *strm };
 
         if let Some(cb) = cb_body_start {
             cb.borrow_mut()(cb_ctx, dir);
@@ -77,7 +74,7 @@ where
 {
     type T = T;
 
-    fn c2s_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn c2s_parser(&self, strm: *mut PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::parser_inner(
             strm,
             self.cb_body_start.clone(),
@@ -88,7 +85,7 @@ where
         )))
     }
 
-    fn s2c_parser(&self, strm: *const PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
+    fn s2c_parser(&self, strm: *mut PktStrm<T>, cb_ctx: *mut c_void) -> Option<ParserFuture> {
         Some(Box::pin(Self::parser_inner(
             strm,
             self.cb_body_start.clone(),

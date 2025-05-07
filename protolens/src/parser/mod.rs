@@ -40,8 +40,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 pub(crate) type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
-pub(crate) type DirConfirmFn<T> =
-    fn(*const PktStrm<T>, *const PktStrm<T>, u16, u16) -> Option<bool>;
+pub(crate) type DirConfirmFn<T> = fn(*mut PktStrm<T>, *mut PktStrm<T>, u16, u16) -> Option<bool>;
 pub(crate) type PktDirConfirmFn<T> = fn(&T) -> Option<bool>;
 
 pub(crate) trait Parser {
@@ -55,7 +54,7 @@ pub(crate) trait Parser {
 
     fn c2s_parser(
         &self,
-        _strm: *const PktStrm<Self::T>,
+        _strm: *mut PktStrm<Self::T>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
@@ -63,7 +62,7 @@ pub(crate) trait Parser {
 
     fn s2c_parser(
         &self,
-        _strm: *const PktStrm<Self::T>,
+        _strm: *mut PktStrm<Self::T>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
@@ -71,8 +70,8 @@ pub(crate) trait Parser {
 
     fn bdir_parser(
         &self,
-        _c2s_strm: *const PktStrm<Self::T>,
-        _s2c_strm: *const PktStrm<Self::T>,
+        _c2s_strm: *mut PktStrm<Self::T>,
+        _s2c_strm: *mut PktStrm<Self::T>,
         _cb_ctx: *mut c_void,
     ) -> Option<ParserFuture> {
         None
