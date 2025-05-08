@@ -19,7 +19,7 @@ use crate::octet::*;
 use crate::rawpacket::*;
 #[cfg(test)]
 use crate::read::*;
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 use crate::readline::*;
 #[cfg(test)]
 use crate::readn::*;
@@ -121,7 +121,7 @@ where
     cb_byte: Option<CbByte>,
     #[cfg(test)]
     cb_read: Option<CbRead>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "bench"))]
     cb_readline: Option<CbReadline>,
     #[cfg(test)]
     cb_readn: Option<CbReadn>,
@@ -149,7 +149,7 @@ where
             cb_byte: None,
             #[cfg(test)]
             cb_read: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "bench"))]
             cb_readline: None,
             #[cfg(test)]
             cb_readn: None,
@@ -228,12 +228,13 @@ where
             self.parsers
                 .insert(L7Proto::Read, Box::new(ReadFactory::<T>::new()));
             self.parsers
-                .insert(L7Proto::Readline, Box::new(ReadlineFactory::<T>::new()));
-            self.parsers
                 .insert(L7Proto::Readn, Box::new(ReadnFactory::<T>::new()));
             self.parsers
                 .insert(L7Proto::ReadOctet, Box::new(ReadOctetFactory::<T>::new()));
         }
+        #[cfg(any(test, feature = "bench"))]
+        self.parsers
+            .insert(L7Proto::Readline, Box::new(ReadlineFactory::<T>::new()));
     }
 
     pub fn new_task(&self, l4_proto: TransProto) -> Task<T> {
@@ -325,7 +326,7 @@ where
         self.cb_read = Some(Rc::new(RefCell::new(callback)));
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "bench"))]
     pub fn set_cb_readline<F>(&mut self, callback: F)
     where
         F: ReadLineCbFn + 'static,

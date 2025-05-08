@@ -41,7 +41,6 @@ where
 
         while !stm.fin() {
             let (line, seq) = stm.readline().await?;
-            dbg!(std::str::from_utf8(line).unwrap());
 
             if line.is_empty() {
                 break;

@@ -15,7 +15,7 @@ pub mod octet;
 pub mod rawpacket;
 #[cfg(test)]
 pub mod read;
-#[cfg(test)]
+#[cfg(any(test, feature = "bench"))]
 pub mod readline;
 #[cfg(test)]
 pub mod readn;
