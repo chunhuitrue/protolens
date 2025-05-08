@@ -818,42 +818,33 @@ pub mod bench {
     use std::env;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    pub fn task_new(c: &mut Criterion) {
-        let protolens = Prolens::<CapPacket>::default();
-
-        let mut group = c.benchmark_group("task_new");
-        group.throughput(Throughput::Elements(1));
-        group.bench_function("task_new", |b| {
-            b.iter(|| black_box(protolens.new_task(TransProto::Tcp)))
-        });
-        group.finish();
-    }
-
-    pub fn task_init(c: &mut Criterion) {
+    pub fn new_task(c: &mut Criterion) {
         let protolens = Prolens::<Box<CapPacket>>::default();
 
-        let mut group = c.benchmark_group("task_init");
+        let mut group = c.benchmark_group("new_task");
         group.throughput(Throughput::Elements(1));
-        group.bench_function("task_init", |b| {
+        group.bench_function("new_task", |b| {
             b.iter(|| {
                 let mut task = black_box(protolens.new_task(TransProto::Tcp));
                 protolens.set_task_parser(&mut task, L7Proto::Http);
+                black_box(());
             })
         });
         group.finish();
     }
 
-    pub fn task_init_flame(c: &mut Criterion) {
+    pub fn new_task_flame(c: &mut Criterion) {
         let protolens = Prolens::<Box<CapPacket>>::default();
 
         let num = 100000;
-        let mut group = c.benchmark_group("task_init_flame");
+        let mut group = c.benchmark_group("new_task_flame");
         group.throughput(Throughput::Elements(num));
-        group.bench_function("task_init_flame", |b| {
+        group.bench_function("new_task_flame", |b| {
             b.iter(|| {
                 for _ in 0..num {
                     let mut task = black_box(protolens.new_task(TransProto::Tcp));
                     protolens.set_task_parser(&mut task, L7Proto::Http);
+                    black_box(());
                 }
             })
         });
@@ -861,62 +852,74 @@ pub mod bench {
     }
 
     pub fn readline100(c: &mut Criterion) {
-        readline(c, 100, "readline100", false);
+        readline(c, 100, "readline100");
     }
 
     pub fn readline100_new_task(c: &mut Criterion) {
-        readline(c, 100, "readline100_new_task", true);
+        readline_new_task(c, 100, "readline100_new_task");
     }
 
     pub fn readline500(c: &mut Criterion) {
-        readline(c, 500, "readline500", false);
+        readline(c, 500, "readline500");
     }
 
     pub fn readline500_new_task(c: &mut Criterion) {
-        readline(c, 500, "readline500_new_task", true);
+        readline_new_task(c, 500, "readline500_new_task");
     }
 
     pub fn readline1000(c: &mut Criterion) {
-        readline(c, 1000, "readline1000", false);
+        readline(c, 1000, "readline1000");
     }
 
     pub fn readline1000_new_task(c: &mut Criterion) {
-        readline(c, 1000, "readline1000_new_task", true);
+        readline_new_task(c, 1000, "readline1000_new_task");
     }
 
-    fn readline(c: &mut Criterion, pkt_len: usize, name: &str, new_task: bool) {
-        let pkt_len = pkt_len.max(100);
-        let lines_per_pkt = pkt_len / 10;
+    const PKT_NUM: usize = 100;
+    const LINE_LEN: usize = 10;
 
-        let mut payload = Vec::with_capacity(pkt_len);
-        for _ in 0..lines_per_pkt {
-            payload.extend_from_slice(&[b'A'; 8]);
-            payload.extend_from_slice(b"\r\n");
-        }
-
-        let mut packets = Vec::with_capacity(100);
-        let mut seq = 1000;
-        for _ in 0..100 {
-            let pkt = build_pkt_payload(seq, &payload);
-            let _ = pkt.decode();
-            packets.push(Box::new(pkt));
-            seq += payload.len() as u32;
-        }
-
-        let mut protolens = black_box(Prolens::<Box<CapPacket>>::default());
-        let mut task = black_box(protolens.new_task(TransProto::Tcp));
-        protolens.set_task_parser(&mut task, L7Proto::Readline);
+    fn readline(c: &mut Criterion, payload_len: usize, name: &str) {
+        let packets = readline_packets(payload_len);
 
         let mut group = c.benchmark_group("readline");
-        group.throughput(Throughput::Bytes((payload.len() * 100) as u64));
+        group.throughput(Throughput::Bytes((payload_len * PKT_NUM) as u64));
         group.bench_function(name, |b| {
             b.iter_with_setup(
-                || black_box(packets.clone()),
-                |packets| {
-                    if new_task {
-                        task = black_box(protolens.new_task(TransProto::Tcp));
-                        protolens.set_task_parser(&mut task, L7Proto::Readline);
+                || {
+                    let packets_clone = packets.clone();
+
+                    let protolens = black_box(Prolens::<Box<CapPacket>>::default());
+                    let mut task = black_box(protolens.new_task(TransProto::Tcp));
+                    protolens.set_task_parser(&mut task, L7Proto::Readline);
+
+                    (protolens, task, packets_clone)
+                },
+                |(mut protolens, mut task, packets)| {
+                    for pkt in packets {
+                        black_box(protolens.run_task(&mut task, pkt));
                     }
+                },
+            )
+        });
+        group.finish();
+    }
+
+    fn readline_new_task(c: &mut Criterion, payload_len: usize, name: &str) {
+        let packets = readline_packets(payload_len);
+
+        let mut group = c.benchmark_group("readline");
+        group.throughput(Throughput::Bytes((payload_len * PKT_NUM) as u64));
+        group.bench_function(name, |b| {
+            b.iter_with_setup(
+                || {
+                    let packets_clone = packets.clone();
+                    let protolens = black_box(Prolens::<Box<CapPacket>>::default());
+
+                    (protolens, packets_clone)
+                },
+                |(mut protolens, packets)| {
+                    let mut task = black_box(protolens.new_task(TransProto::Tcp));
+                    protolens.set_task_parser(&mut task, L7Proto::Readline);
 
                     for pkt in packets {
                         black_box(protolens.run_task(&mut task, pkt));
@@ -927,33 +930,46 @@ pub mod bench {
         group.finish();
     }
 
+    fn readline_packets(payload_len: usize) -> Vec<Box<CapPacket>> {
+        let lines_per_pkt = payload_len / LINE_LEN;
+
+        let mut payload = Vec::with_capacity(payload_len);
+        for _ in 0..lines_per_pkt {
+            payload.extend_from_slice(&[b'A'; LINE_LEN - 2]);
+            payload.extend_from_slice(b"\r\n");
+        }
+
+        let mut packets = Vec::with_capacity(PKT_NUM);
+        let mut seq = 1000;
+        for _ in 0..PKT_NUM {
+            let pkt = build_pkt_payload(seq, &payload);
+            let _ = pkt.decode();
+            packets.push(Box::new(pkt));
+            seq += payload.len() as u32;
+        }
+
+        packets
+    }
+
     // 预先分配task，只测解码过程
     pub fn http(c: &mut Criterion) {
-        bench_proto(
-            c,
-            "http",
-            "http_mime",
-            TransProto::Tcp,
-            L7Proto::Http,
-            false,
-        );
+        bench_proto(c, "http", "http_mime", TransProto::Tcp, L7Proto::Http);
     }
 
     // 不预先分配task
     pub fn http_new_task(c: &mut Criterion) {
-        bench_proto(
+        bench_proto_new_task(
             c,
             "http_new_task",
             "http_mime",
             TransProto::Tcp,
             L7Proto::Http,
-            true,
         );
     }
 
     // 不预先分配task，多次执行采集perf数据
     pub fn http_new_task_flame(c: &mut Criterion) {
-        bench_proto_task(
+        bench_proto_task_flame(
             c,
             "http_new_task_flame",
             "http_mime",
@@ -963,24 +979,17 @@ pub mod bench {
     }
 
     pub fn smtp(c: &mut Criterion) {
-        bench_proto(c, "smtp", "smtp", TransProto::Tcp, L7Proto::Smtp, false);
+        bench_proto(c, "smtp", "smtp", TransProto::Tcp, L7Proto::Smtp);
     }
 
     // smtp.pcap比http_mime.pcap更有代表性
     pub fn smtp_new_task(c: &mut Criterion) {
-        bench_proto(
-            c,
-            "smtp_new_task",
-            "smtp",
-            TransProto::Tcp,
-            L7Proto::Smtp,
-            true,
-        );
+        bench_proto_new_task(c, "smtp_new_task", "smtp", TransProto::Tcp, L7Proto::Smtp);
     }
 
     // smtp.pcap比http_mime.pcap更有代表性
     pub fn smtp_new_task_flame(c: &mut Criterion) {
-        bench_proto_task(
+        bench_proto_task_flame(
             c,
             "smtp_new_task_flame",
             "smtp",
@@ -990,63 +999,77 @@ pub mod bench {
     }
 
     pub fn pop3(c: &mut Criterion) {
-        bench_proto(c, "pop3", "pop3", TransProto::Tcp, L7Proto::Pop3, false);
+        bench_proto(c, "pop3", "pop3", TransProto::Tcp, L7Proto::Pop3);
+    }
+
+    pub fn pop3_new_task(c: &mut Criterion) {
+        bench_proto_new_task(c, "pop3_new_task", "pop3", TransProto::Tcp, L7Proto::Pop3);
     }
 
     pub fn imap(c: &mut Criterion) {
-        bench_proto(c, "imap", "imap", TransProto::Tcp, L7Proto::Imap, false);
+        bench_proto(c, "imap", "imap", TransProto::Tcp, L7Proto::Imap);
+    }
+
+    pub fn imap_new_task(c: &mut Criterion) {
+        bench_proto_new_task(c, "imap_new_task", "imap", TransProto::Tcp, L7Proto::Imap);
     }
 
     pub fn sip(c: &mut Criterion) {
-        bench_proto(c, "sip", "sip", TransProto::Udp, L7Proto::Sip, false);
+        bench_proto(c, "sip", "sip", TransProto::Udp, L7Proto::Sip);
     }
 
-    fn bench_proto(
+    pub fn sip_new_task(c: &mut Criterion) {
+        bench_proto_new_task(c, "sip_new_task", "sip", TransProto::Udp, L7Proto::Sip);
+    }
+
+    fn bench_proto(c: &mut Criterion, name: &str, pcap_name: &str, l4: TransProto, l7: L7Proto) {
+        let (packets, total_bytes) = read_pcap_packets(pcap_name);
+
+        let mut group = c.benchmark_group(name);
+        group.throughput(Throughput::Bytes(total_bytes as u64));
+        group.bench_function(name, |b| {
+            b.iter_with_setup(
+                || {
+                    let packets_clone = packets.clone();
+
+                    let protolens = black_box(Prolens::<Box<CapPacket>>::default());
+                    let mut task = black_box(protolens.new_task(l4));
+                    protolens.set_task_parser(&mut task, l7);
+
+                    (protolens, task, packets_clone)
+                },
+                |(mut protolens, mut task, packets)| {
+                    for pkt in packets {
+                        black_box(protolens.run_task(&mut task, pkt));
+                    }
+                },
+            )
+        });
+        group.finish();
+    }
+
+    fn bench_proto_new_task(
         c: &mut Criterion,
         name: &str,
         pcap_name: &str,
         l4: TransProto,
         l7: L7Proto,
-        new_task: bool,
     ) {
-        let project_root = env::current_dir().unwrap();
-        let file_path = project_root.join(format!("tests/pcap/{}.pcap", pcap_name));
-        let mut cap = Capture::init(file_path).unwrap();
-
-        let mut total_bytes = 0;
-        let mut packets = Vec::new();
-        loop {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            let pkt = cap.next_packet(now);
-            if pkt.is_none() {
-                break;
-            }
-            let pkt = pkt.unwrap();
-            if pkt.decode().is_err() {
-                continue;
-            }
-
-            total_bytes += pkt.payload_len();
-            packets.push(Box::new(pkt));
-        }
-
-        let mut protolens = black_box(Prolens::<Box<CapPacket>>::default());
-        let mut task = black_box(protolens.new_task(l4));
-        protolens.set_task_parser(&mut task, l7);
+        let (packets, total_bytes) = read_pcap_packets(pcap_name);
 
         let mut group = c.benchmark_group(name);
-        group.throughput(Throughput::Bytes(total_bytes.into()));
+        group.throughput(Throughput::Bytes(total_bytes as u64));
         group.bench_function(name, |b| {
             b.iter_with_setup(
-                || black_box(packets.clone()),
-                |packets| {
-                    if new_task {
-                        task = black_box(protolens.new_task(l4));
-                        protolens.set_task_parser(&mut task, l7);
-                    }
+                || {
+                    let packets_clone = packets.clone();
+                    let protolens = black_box(Prolens::<Box<CapPacket>>::default());
+
+                    (protolens, packets_clone)
+                },
+                |(mut protolens, packets)| {
+                    let mut task = black_box(protolens.new_task(l4));
+                    protolens.set_task_parser(&mut task, l7);
 
                     for pkt in packets {
                         black_box(protolens.run_task(&mut task, pkt));
@@ -1057,44 +1080,20 @@ pub mod bench {
         group.finish();
     }
 
-    fn bench_proto_task(
+    fn bench_proto_task_flame(
         c: &mut Criterion,
         name: &str,
         pcap_name: &str,
         l4: TransProto,
         l7: L7Proto,
     ) {
-        let project_root = env::current_dir().unwrap();
-        let file_path = project_root.join(format!("tests/pcap/{}.pcap", pcap_name));
-        let mut cap = Capture::init(file_path).unwrap();
-
-        let mut total_bytes = 0;
-        let mut packets = Vec::new();
-        loop {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            let pkt = cap.next_packet(now);
-            if pkt.is_none() {
-                break;
-            }
-            let pkt = pkt.unwrap();
-            if pkt.decode().is_err() {
-                continue;
-            }
-
-            total_bytes += pkt.payload_len();
-            packets.push(Box::new(pkt));
-        }
+        let (packets, total_bytes) = read_pcap_packets(pcap_name);
 
         let mut protolens = black_box(Prolens::<Box<CapPacket>>::default());
 
         let num = 10000;
         let mut group = c.benchmark_group(name);
-        group.throughput(Throughput::Bytes(
-            std::convert::Into::<u64>::into(total_bytes) * num,
-        ));
+        group.throughput(Throughput::Bytes(total_bytes as u64 * num));
         group.bench_function(name, |b| {
             b.iter_with_setup(
                 || packets.clone(),
@@ -1111,5 +1110,33 @@ pub mod bench {
             )
         });
         group.finish();
+    }
+
+    fn read_pcap_packets(pcap_name: &str) -> (Vec<Box<CapPacket>>, usize) {
+        let project_root = env::current_dir().unwrap();
+        let file_path = project_root.join(format!("tests/pcap/{}.pcap", pcap_name));
+        let mut cap = Capture::init(file_path).unwrap();
+
+        let mut total_bytes = 0;
+        let mut packets = Vec::new();
+        loop {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let pkt = cap.next_packet(now);
+            if pkt.is_none() {
+                break;
+            }
+            let pkt = pkt.unwrap();
+            if pkt.decode().is_err() {
+                continue;
+            }
+
+            total_bytes += pkt.payload_len();
+            packets.push(Box::new(pkt));
+        }
+
+        (packets, total_bytes.try_into().unwrap())
     }
 }
