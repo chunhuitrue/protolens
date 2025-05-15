@@ -4,14 +4,13 @@ use crate::ParserFuture;
 use crate::PktStrm;
 use crate::Prolens;
 use crate::packet::*;
-use futures::StreamExt;
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-pub trait ByteCbFn: FnMut(u8, *mut c_void) {}
-impl<F: FnMut(u8, *mut c_void)> ByteCbFn for F {}
+pub trait ByteCbFn: FnMut(u8, u32, *mut c_void) {}
+impl<F: FnMut(u8, u32, *mut c_void)> ByteCbFn for F {}
 pub(crate) type CbByte = Rc<RefCell<dyn ByteCbFn + 'static>>;
 
 pub struct ByteParser<T>
@@ -40,9 +39,9 @@ where
     ) -> Result<(), ()> {
         let stm = unsafe { &mut *strm };
 
-        while let Some(byte) = stm.next().await {
+        while let Ok((byte, seq)) = stm.next_byte().await {
             if let Some(ref cb) = cb_next_byte {
-                cb.borrow_mut()(byte, cb_ctx);
+                cb.borrow_mut()(byte, seq, cb_ctx);
             }
         }
         Ok(())
@@ -100,16 +99,16 @@ mod tests {
     use crate::test_utils::*;
 
     #[test]
-    fn test_stream_next_single_packet() {
+    fn test_next_byte_single_packet() {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, true);
         let _ = pkt1.decode();
 
-        let vec = Rc::new(RefCell::new(Vec::new()));
-        let vec_clone = Rc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
+        let callback = move |byte: u8, _seq: u32, _cb_ctx: *mut c_void| {
             dbg!("in callback. push one byte");
-            vec_clone.borrow_mut().push(byte);
+            data_clone.borrow_mut().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -120,11 +119,11 @@ mod tests {
 
         protolens.run_task(&mut task, pkt1);
 
-        assert_eq!(*vec.borrow(), (1..=10).collect::<Vec<u8>>());
+        assert_eq!(*data.borrow(), (1..=10).collect::<Vec<u8>>());
     }
 
     #[test]
-    fn test_stream_next_multiple_packets() {
+    fn test_next_byte_multiple_packets() {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, false);
         let seq2 = 11;
@@ -132,10 +131,10 @@ mod tests {
         let _ = pkt1.decode();
         let _ = pkt2.decode();
 
-        let vec = Rc::new(RefCell::new(Vec::new()));
-        let vec_clone = Rc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
-            vec_clone.borrow_mut().push(byte);
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
+        let callback = move |byte: u8, _seq: u32, _cb_ctx: *mut c_void| {
+            data_clone.borrow_mut().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -148,18 +147,18 @@ mod tests {
         protolens.run_task(&mut task, pkt2);
 
         let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        assert_eq!(*vec.borrow(), expected);
+        assert_eq!(*data.borrow(), expected);
     }
 
     #[test]
-    fn test_stream_next_empty_packet() {
+    fn test_next_byte_empty_packet() {
         let pkt = build_pkt_nodata(1, true);
         let _ = pkt.decode();
 
-        let vec = Rc::new(RefCell::new(Vec::new()));
-        let vec_clone = Rc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
-            vec_clone.borrow_mut().push(byte);
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
+        let callback = move |byte: u8, _seq: u32, _cb_ctx: *mut c_void| {
+            data_clone.borrow_mut().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -170,12 +169,12 @@ mod tests {
 
         protolens.run_task(&mut task, pkt);
 
-        assert_eq!(vec.borrow().len(), 0);
+        assert_eq!(data.borrow().len(), 0);
     }
 
     // 测试多个连续包加一个fin包的情况
     #[test]
-    fn test_stream_next_sequential_with_fin() {
+    fn test_next_byte_sequential_with_fin() {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, false);
         let seq2 = 11;
@@ -190,10 +189,10 @@ mod tests {
         let _ = pkt3.decode();
         let _ = pkt4.decode();
 
-        let vec = Rc::new(RefCell::new(Vec::new()));
-        let vec_clone = Rc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
-            vec_clone.borrow_mut().push(byte);
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
+        let callback = move |byte: u8, _seq: u32, _cb_ctx: *mut c_void| {
+            data_clone.borrow_mut().push(byte);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -207,20 +206,18 @@ mod tests {
         protolens.run_task(&mut task, pkt3);
         protolens.run_task(&mut task, pkt4);
 
-        // 验证收到了三组相同的字节序列 (1-10 重复三次)
+        #[rustfmt::skip]
         let expected: Vec<u8> = vec![
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第一个包的数据
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第二个包的数据
-            1, 2, 3, 4, 5, 6, 7, 8, 9,
-            10, // 第三个包的数据
-                // 第四个包没有数据，只有fin标志
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
         ];
-        assert_eq!(*vec.borrow(), expected);
+        assert_eq!(*data.borrow(), expected);
     }
 
-    // 测试带有纯ACK包的连续数据流
+    // 带有纯ACK包的连续数据流
     #[test]
-    fn test_stream_next_with_pure_ack() {
+    fn test_next_byte_with_pure_ack() {
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, false);
         let seq2 = 11;
@@ -242,7 +239,7 @@ mod tests {
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
+        let callback = move |byte: u8, _seq: u32, _cb_ctx: *mut c_void| {
             vec_clone.borrow_mut().push(byte);
         };
 
@@ -258,21 +255,20 @@ mod tests {
         protolens.run_task(&mut task, pkt3);
         protolens.run_task(&mut task, pkt4);
 
-        // 验证收到了三组相同的字节序列，ACK包不产生数据
+        #[rustfmt::skip]
         let expected: Vec<u8> = vec![
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第一个包的数据
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第二个包的数据
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
             // ACK包没有数据
-            1, 2, 3, 4, 5, 6, 7, 8, 9,
-            10, // 第三个包的数据
-                // 最后的FIN包没有数据
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+            // 最后的FIN包没有数据
         ];
         assert_eq!(*vec.borrow(), expected);
     }
 
-    // 测试乱序到达的数据包
+    // 乱序到达的数据包
     #[test]
-    fn test_stream_next_out_of_order() {
+    fn test_next_byte_out_of_order() {
         // 创建相同的包
         let seq1 = 1;
         let pkt1 = build_pkt(seq1, false);
@@ -293,7 +289,7 @@ mod tests {
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
+        let callback = move |byte: u8, _seq: u32, _cb_ctx: *mut c_void| {
             vec_clone.borrow_mut().push(byte);
         };
 
@@ -315,21 +311,20 @@ mod tests {
         protolens.run_task(&mut task, pkt_ack);
         protolens.run_task(&mut task, pkt4);
 
-        // 验证最终收到的数据应该是有序的，与顺序到达时相同
+        #[rustfmt::skip]
         let expected: Vec<u8> = vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第一个包的数据
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第二个包的数据
             // ACK包没有数据
-            1, 2, 3, 4, 5, 6, 7, 8, 9,
-            10, // 第三个包的数据
-                // 最后的FIN包没有数据
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第三个包的数据
+            // 最后的FIN包没有数据
         ];
         assert_eq!(*vec.borrow(), expected);
     }
 
-    // 测试以SYN包开始的乱序数据流
+    // 以SYN包开始的乱序数据流
     #[test]
-    fn test_stream_next_syn_with_out_of_order() {
+    fn test_next_byte_syn_with_out_of_order() {
         // 创建SYN包
         let seq1 = 1;
         let pkt_syn = build_pkt_syn(seq1);
@@ -356,7 +351,7 @@ mod tests {
 
         let vec = Rc::new(RefCell::new(Vec::new()));
         let vec_clone = Rc::clone(&vec);
-        let callback = move |byte: u8, _cb_ctx: *mut c_void| {
+        let callback = move |byte: u8, _seq: u32, _cb_ctx: *mut c_void| {
             vec_clone.borrow_mut().push(byte);
         };
 
@@ -373,14 +368,14 @@ mod tests {
         protolens.run_task(&mut task, pkt3);
         protolens.run_task(&mut task, pkt4);
 
-        // 验证最终收到的数据应该是有序的
+        #[rustfmt::skip]
         let expected: Vec<u8> = vec![
             // SYN包没有数据
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第一个数据包
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第二个数据包
             // ACK包没有数据
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, // 第三个
-                // FIN包没有数据
+            // FIN包没有数据
         ];
         assert_eq!(*vec.borrow(), expected);
     }

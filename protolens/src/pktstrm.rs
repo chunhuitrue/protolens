@@ -2,25 +2,20 @@ use crate::Heap;
 use crate::packet::*;
 use futures::Future;
 use futures::future::poll_fn;
-use futures_util::stream::{Stream, StreamExt};
 use std::cell::RefCell;
+use std::cmp::min;
 use std::ffi::c_void;
 use std::fmt;
-use std::pin::Pin;
+use std::ptr::copy;
+use std::ptr::copy_nonoverlapping;
 use std::rc::Rc;
-use std::task::Context;
+use std::str::from_utf8_unchecked;
 use std::task::Poll;
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ReadError {
     Eof,    // 连接已结束
     NoData, // 没有足够的数据
-}
-
-enum FillRet {
-    OK,    // 填充正常,
-    Final, // buff满(尝试太多next而没真正读取), 或者fin。无法填充
-    NoPkt, // 当前没有数据包到来，无法填充
 }
 
 #[derive(PartialEq, Debug)]
@@ -39,12 +34,12 @@ where
 {
     heap: Heap<SeqPacket<T>>,
 
-    max_buff: usize,
     buff: Vec<u8>,
+    max_buff: usize,
     buff_start: usize, // 开始的index(绝对值)
     buff_len: usize,
-    buff_next: usize, // pool next的待读取的index（绝对值）
-    read_size: usize, // 已经读取的总字节数
+    buff_cur: usize,      // pool next的待读取的index（绝对值）
+    tot_read_size: usize, // 已经读取的总字节数
 
     next_seq: u32, // 待读取的seq
     fin: bool,
@@ -52,7 +47,9 @@ where
     // 只有成功返回的才会被callback，比如hello\nxxx。对readline来说，hello\n成功读取，然后调用callback。
     // 后续的xxx不会调用callback
     cb_strm: Option<CbStrm>,
-    cb_ctx: *const c_void, // 只在c语言api中使用
+    cb_ctx: *const c_void, // 只在ffi中使用
+
+    move_size: usize,
 }
 
 impl<T> PktStrm<T>
@@ -63,22 +60,20 @@ where
         PktStrm {
             heap: Heap::new(max_pkt_buff),
 
+            buff: vec![0; max_read_buff],
             max_buff: max_read_buff,
-            buff: {
-                let mut data = Vec::with_capacity(max_read_buff);
-                data.extend((0..max_read_buff).map(|_| 0u8));
-                data
-            },
             buff_start: 0,
             buff_len: 0,
-            buff_next: 0,
-            read_size: 0,
+            buff_cur: 0,
+            tot_read_size: 0,
 
             next_seq: 0,
             fin: false,
 
             cb_strm: None,
             cb_ctx,
+
+            move_size: 0,
         }
     }
 
@@ -195,7 +190,7 @@ where
 
     // 严格有序。peek出一个带数据的严格有序的包。否则为none
     pub(crate) fn peek_ord_data(&mut self) -> Option<&T> {
-        if let Some((pkt, _nex_seq)) = self.peek_ord_data_with_seq() {
+        if let Some((pkt, _nex_seq)) = self.peek_ord_data_with_next_seq() {
             Some(pkt)
         } else {
             None
@@ -203,7 +198,7 @@ where
     }
 
     // 严格有序。peek出一个带数据的严格有序的包。同时返回next_seq
-    pub(crate) fn peek_ord_data_with_seq(&mut self) -> Option<(&T, u32)> {
+    pub(crate) fn peek_ord_data_with_next_seq(&mut self) -> Option<(&T, u32)> {
         if self.fin {
             return None;
         }
@@ -262,107 +257,160 @@ where
         }
     }
 
-    // 严格读到n个字节返回。但最大不超过max_buff
-    pub(crate) async fn readn_err(&mut self, n: usize) -> Result<(&[u8], u32), ReadError> {
-        if n > self.max_buff {
-            return Err(ReadError::NoData);
-        }
+    // 异步方式获取下一个严格有序的包。包含载荷为0的
+    pub(crate) fn next_ord_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
+        poll_fn(|_cx| {
+            if self.fin {
+                return Poll::Ready(None);
+            }
+            if let Some(pkt) = self.pop_ord() {
+                return Poll::Ready(Some(pkt));
+            }
+            Poll::Pending
+        })
+    }
 
-        for _ in 0..n {
-            match self.next().await {
-                Some(_byte) => {}
-                None => {
-                    if self.fin {
-                        return Err(ReadError::Eof);
-                    }
-                    return Err(ReadError::NoData);
+    // 异步方式获取下一个原始顺序的包。包含载荷为0的。如果cache中每到来一个包，就调用，那就是原始到来的包顺序
+    #[cfg(test)]
+    pub(crate) fn next_raw_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
+        poll_fn(|_cx| {
+            if let Some(_pkt) = self.peek() {
+                return Poll::Ready(self.pop());
+            }
+            Poll::Pending
+        })
+    }
+
+    async fn buff_fill(&mut self) -> Result<(), ReadError> {
+        poll_fn(|_ctx| {
+            if self.fin {
+                return Poll::Ready(Err(ReadError::Eof));
+            }
+
+            let mut filled = false;
+            let buff_start = self.buff_start;
+            let mut buff_len = self.buff_len;
+            let max_buff = self.max_buff;
+
+            while let Some((pkt, next_seq)) = self.peek_ord_data_with_next_seq() {
+                let seq = pkt.seq();
+                let payload = pkt.payload();
+                let payload_len = payload.len();
+                let payload_off = (next_seq - seq) as usize;
+
+                let space = max_buff - (buff_start + buff_len);
+                if space == 0 {
+                    break;
                 }
+
+                let copy_len = min(payload_len - payload_off, space);
+                if copy_len == 0 {
+                    break;
+                }
+
+                unsafe {
+                    copy_nonoverlapping(
+                        payload[payload_off..].as_ptr(),
+                        self.buff.as_mut_ptr().add(buff_start + buff_len),
+                        copy_len,
+                    );
+                }
+                buff_len += copy_len;
+                self.next_seq += copy_len as u32;
+                filled = true;
+            }
+
+            if filled {
+                self.buff_len = buff_len;
+                Poll::Ready(Ok(()))
+            } else {
+                Poll::Pending::<Result<(), ReadError>>
+            }
+        })
+        .await
+    }
+
+    fn buff_move(&mut self) {
+        if self.buff_start == 0 {
+            return;
+        }
+
+        unsafe {
+            copy(
+                self.buff.as_ptr().add(self.buff_start),
+                self.buff.as_mut_ptr(),
+                self.buff_len,
+            );
+            self.move_size += self.buff_len;
+        }
+        self.buff_cur -= self.buff_start;
+        self.buff_start = 0;
+    }
+
+    async fn buff_refill(&mut self) -> Result<(), ReadError> {
+        self.buff_move();
+        self.buff_fill().await
+    }
+
+    // 返回试读过的数据, start到next - 1
+    // ignore: 忽略尾部的数据长度。比如boundary \r\n
+    fn get_buff_data(&mut self, ignore: usize) -> Result<(&[u8], u32), ReadError> {
+        let seq = self.next_seq - self.buff_len as u32;
+        let data_len = self.buff_cur - self.buff_start;
+        let data = &self.buff[self.buff_start..(self.buff_start + data_len - ignore)];
+
+        if let Some(ref mut cb) = self.cb_strm {
+            let raw_data = &self.buff[self.buff_start..(self.buff_start + data_len)];
+            cb.borrow_mut()(raw_data, seq, self.cb_ctx);
+        }
+
+        let result = Ok((data, seq));
+        self.buff_start += data_len;
+        self.buff_len -= data_len;
+        self.tot_read_size += data_len;
+
+        // 如果数据读空，buff start移到开始位置。可以减少将来move数据的机会
+        if self.buff_len == 0 {
+            self.buff_start = 0;
+            self.buff_cur = 0;
+        }
+
+        result
+    }
+
+    // peek之后buff_cur会会退
+    fn peek_buff_data(&mut self, ignore: usize) -> Result<&[u8], ReadError> {
+        let data_len = self.buff_cur - self.buff_start;
+        let data = &self.buff[self.buff_start..(self.buff_start + data_len - ignore)];
+
+        let result = Ok(data);
+        self.buff_cur -= data_len;
+
+        result
+    }
+
+    fn find_line(&mut self) -> bool {
+        if self.buff_len == 0 {
+            return false;
+        }
+
+        let buff = &self.buff[self.buff_cur..(self.buff_start + self.buff_len)];
+        for &byte in buff.iter() {
+            self.buff_cur += 1;
+            if byte == b'\n' {
+                return true;
             }
         }
-        self.get_buff_data(0)
-    }
-
-    pub(crate) async fn readn(&mut self, n: usize) -> Result<(&[u8], u32), ()> {
-        match self.readn_err(n).await {
-            Ok(result) => Ok(result),
-            Err(_) => Err(()),
-        }
-    }
-
-    // n可以大于MAX_BUFF，但最大返回MAX_BUFF
-    // 比如读1M读数据。循环传入剩余总量，但每次返回最大MAX_BUFF
-    pub(crate) async fn read_err(&mut self, n: usize) -> Result<(&[u8], u32), ReadError> {
-        let num = std::cmp::min(n, self.max_buff);
-        self.readn_err(num).await
-    }
-
-    pub(crate) async fn read(&mut self, n: usize) -> Result<(&[u8], u32), ()> {
-        match self.read_err(n).await {
-            Ok(result) => Ok(result),
-            Err(_) => Err(()),
-        }
-    }
-
-    pub(crate) async fn read2eof(&mut self) -> Result<(&[u8], u32), ReadError> {
-        if self.fin {
-            return Err(ReadError::Eof);
-        }
-
-        let mut get_byte = false;
-        for _ in 0..self.max_buff {
-            match self.next().await {
-                Some(_byte) => get_byte = true,
-                None => break,
-            }
-        }
-
-        if get_byte {
-            self.get_buff_data(0)
-        } else {
-            Err(ReadError::NoData)
-        }
+        false
     }
 
     async fn readline_inner(&mut self, ignore: usize) -> Result<(&[u8], u32), ReadError> {
-        // 0: 正常读取
-        // 1: 读到\r
-        let mut state = 0;
-
-        // 一行最多不能超过buff大小
-        for _ in 0..self.max_buff {
-            match self.next().await {
-                Some(byte) => {
-                    match state {
-                        0 => {
-                            // 正常状态
-                            if byte == b'\r' {
-                                state = 1;
-                            }
-                        }
-                        1 => {
-                            // 已读到\r
-                            if byte == b'\n' {
-                                return self.get_buff_data(ignore);
-                            } else if byte == b'\r' {
-                                state = 1;
-                            } else {
-                                state = 0;
-                            }
-                        }
-                        _ => {
-                            return Err(ReadError::NoData);
-                        }
-                    }
-                }
-                None => {
-                    if self.fin {
-                        return Err(ReadError::Eof);
-                    }
-                    return Err(ReadError::NoData);
-                }
+        loop {
+            if self.find_line() {
+                return self.get_buff_data(ignore);
             }
+            self.buff_refill().await?;
         }
-        Err(ReadError::NoData)
     }
 
     // 包含\r\n
@@ -379,7 +427,7 @@ where
 
     pub(crate) async fn readline_str_err(&mut self) -> Result<(&str, u32), ReadError> {
         let (line, seq) = self.readline_err().await?;
-        Ok((unsafe { std::str::from_utf8_unchecked(line) }, seq))
+        Ok((unsafe { from_utf8_unchecked(line) }, seq))
     }
 
     pub(crate) async fn readline_str(&mut self) -> Result<(&str, u32), ()> {
@@ -401,10 +449,9 @@ where
         }
     }
 
-    // 在read_clean_line基础上，返回str而不是u8
     pub(crate) async fn read_clean_line_str_err(&mut self) -> Result<(&str, u32), ReadError> {
         let (line, seq) = self.read_clean_line_err().await?;
-        Ok((unsafe { std::str::from_utf8_unchecked(line) }, seq))
+        Ok((unsafe { from_utf8_unchecked(line) }, seq))
     }
 
     pub(crate) async fn read_clean_line_str(&mut self) -> Result<(&str, u32), ()> {
@@ -414,50 +461,15 @@ where
         }
     }
 
+    // 带\r\n
     pub(crate) async fn peekline_str_err(&mut self) -> Result<&str, ReadError> {
-        // 0: 正常读取
-        // 1: 读到\r
-        let mut state = 0;
-
-        for i in 0..self.max_buff {
-            match self.next().await {
-                Some(byte) => {
-                    match state {
-                        0 => {
-                            // 正常状态
-                            if byte == b'\r' {
-                                state = 1;
-                            }
-                        }
-                        1 => {
-                            // 已读到\r
-                            if byte == b'\n' {
-                                let data_len = i + 1;
-                                let data =
-                                    &self.buff[self.buff_start..(self.buff_start + data_len)];
-                                let result = Ok(unsafe { std::str::from_utf8_unchecked(data) });
-                                self.buff_next -= data_len;
-                                return result;
-                            } else if byte == b'\r' {
-                                state = 1;
-                            } else {
-                                state = 0;
-                            }
-                        }
-                        _ => {
-                            return Err(ReadError::NoData);
-                        }
-                    }
-                }
-                None => {
-                    if self.fin {
-                        return Err(ReadError::Eof);
-                    }
-                    return Err(ReadError::NoData);
-                }
+        loop {
+            if self.find_line() {
+                let data = self.peek_buff_data(0)?;
+                return Ok(unsafe { from_utf8_unchecked(data) });
             }
+            self.buff_refill().await?;
         }
-        Err(ReadError::NoData)
     }
 
     pub(crate) async fn peekline_str(&mut self) -> Result<&str, ()> {
@@ -467,125 +479,133 @@ where
         }
     }
 
-    // 有或者没有octect
+    // 有或者没有close bdry
     // 有则读到\r\n--bdry
-    // 没有则读到 --bdry
+    // 没有则读到--bdry
     // 但不包括bdry结束的\r\n
     pub(crate) async fn read_mime_octet_err(
         &mut self,
         bdry: &str,
     ) -> Result<(ReadRet, &[u8], u32), ReadError> {
-        // 0: 正常读取
-        // 1: 读到\r
-        // 2: 读到\n
-        // 3: 读到-
-        // 4: 读到第二个-
-        let mut state = 0;
-        let bdry_bytes = bdry.as_bytes();
-        let mut bdry_index = 0;
-        let mut match_len = 0;
+        loop {
+            if self.buff_len == 0 {
+                self.buff_refill().await?;
+            }
 
-        for _ in 0..self.max_buff {
-            match self.next().await {
-                Some(byte) => {
-                    match state {
-                        0 => {
-                            // 正常状态
-                            if byte == b'\r' {
-                                state = 1;
-                                match_len = 1;
-                            } else if byte == b'-' {
-                                state = 3;
-                                match_len = 1;
-                            }
-                        }
-                        1 => {
-                            // 已读到\r
-                            if byte == b'\n' {
-                                state = 2;
-                                match_len += 1;
-                            } else if byte == b'\r' {
-                                state = 1;
-                                match_len = 1;
-                            } else if byte == b'-' {
-                                state = 3;
-                                match_len = 1;
-                            } else {
-                                state = 0;
-                                match_len = 0;
-                            }
-                        }
-                        2 => {
-                            // 已读到\r\n
-                            if byte == b'-' {
-                                state = 3;
-                                match_len += 1;
-                            } else if byte == b'\r' {
-                                state = 1;
-                                match_len = 1;
-                            } else {
-                                state = 0;
-                                match_len = 0;
-                            }
-                        }
-                        3 => {
-                            // 已读到\r\n- 或者 -
-                            if byte == b'-' {
-                                state = 4;
-                                bdry_index = 0;
-                                match_len += 1;
-                            } else if byte == b'\r' {
-                                state = 1;
-                                match_len = 1;
-                            } else {
-                                state = 0;
-                                match_len = 0;
-                            }
-                        }
-                        4 => {
-                            // 已读到\r\n--或--，开始匹配boundary
-                            if bdry_index < bdry_bytes.len() && byte == bdry_bytes[bdry_index] {
-                                bdry_index += 1;
-                                match_len += 1;
-                                if bdry_index == bdry_bytes.len() {
-                                    // dash bdry匹配了，返回
-                                    let (data, seq) = self.get_buff_data(match_len)?;
-                                    return Ok((ReadRet::DashBdry, data, seq));
-                                }
-                            } else if byte == b'\r' {
-                                state = 1;
-                                match_len = 1;
-                            } else if byte == b'-' {
-                                state = 3;
-                                match_len = 1;
-                            } else {
-                                state = 0;
-                                match_len = 0;
-                            }
-                        }
-                        _ => {
-                            return Err(ReadError::NoData);
+            // 0: 正常读取
+            // 1: 读到\r
+            // 2: 读到\n
+            // 3: 读到-
+            // 4: 读到第二个-
+            let mut state = 0;
+            let bdry_bytes = bdry.as_bytes();
+            let mut bdry_index = 0;
+            let mut match_len = 0;
+            let mut count = 0;
+
+            let buff = &self.buff[self.buff_cur..(self.buff_start + self.buff_len)];
+            for (pos, &byte) in buff.iter().enumerate() {
+                count = pos;
+                match state {
+                    0 => {
+                        // 正常状态
+                        if byte == b'\r' {
+                            state = 1;
+                            match_len = 1;
+                        } else if byte == b'-' {
+                            state = 3;
+                            match_len = 1;
                         }
                     }
-                }
-                None => {
-                    // for 循环buff长度过程中如果返回None，不会是到达buff边界，只能是fin
-                    // 如果读到fin都没读到dash bdry。说明有错。
-                    // 虽然此时buff中仍然有读到的数据。但直接出错，不返回数据
-                    if self.fin {
-                        return Err(ReadError::Eof);
+                    1 => {
+                        // 已读到\r
+                        if byte == b'\n' {
+                            state = 2;
+                            match_len += 1;
+                        } else if byte == b'\r' {
+                            state = 1;
+                            match_len = 1;
+                        } else if byte == b'-' {
+                            state = 3;
+                            match_len = 1;
+                        } else {
+                            state = 0;
+                            match_len = 0;
+                        }
                     }
-                    return Err(ReadError::NoData);
+                    2 => {
+                        // 已读到\r\n
+                        if byte == b'-' {
+                            state = 3;
+                            match_len += 1;
+                        } else if byte == b'\r' {
+                            state = 1;
+                            match_len = 1;
+                        } else {
+                            state = 0;
+                            match_len = 0;
+                        }
+                    }
+                    3 => {
+                        // 已读到\r\n- 或者 -
+                        if byte == b'-' {
+                            state = 4;
+                            bdry_index = 0;
+                            match_len += 1;
+                        } else if byte == b'\r' {
+                            state = 1;
+                            match_len = 1;
+                        } else {
+                            state = 0;
+                            match_len = 0;
+                        }
+                    }
+                    4 => {
+                        // 已读到\r\n--或--，开始匹配boundary
+                        if bdry_index < bdry_bytes.len() && byte == bdry_bytes[bdry_index] {
+                            bdry_index += 1;
+                            match_len += 1;
+                            if bdry_index == bdry_bytes.len() {
+                                // case 1: buff中有完整的bdry
+                                self.buff_cur += count + 1;
+                                let (data, seq) = self.get_buff_data(match_len)?;
+                                return Ok((ReadRet::DashBdry, data, seq));
+                            }
+                        } else if byte == b'\r' {
+                            state = 1;
+                            match_len = 1;
+                        } else if byte == b'-' {
+                            state = 3;
+                            match_len = 1;
+                        } else {
+                            state = 0;
+                            match_len = 0;
+                        }
+                    }
+                    _ => {
+                        return Err(ReadError::NoData);
+                    }
                 }
             }
-        }
+            self.buff_cur += count + 1;
 
-        // 处理可能的情况[++++++\r\n--boun]dary
-        if match_len > 0 {
-            self.buff_next -= match_len; // 把match到的部分bdry留在buff中，下次继续match
+            // case 2: buff中全是数据
+            if match_len == 0 {
+                let (data, seq) = self.get_buff_data(0)?;
+                return Ok((ReadRet::Data, data, seq));
+            }
+
+            // case 3: buff中包含部分数据，部分bdry
+            // [++++++\r\n--boun]dary 把match到的部分bdry留在buff中，下次继续match
+            self.buff_cur -= match_len;
+            if self.buff_cur - self.buff_start > 0 {
+                let (data, seq) = self.get_buff_data(0)?;
+                return Ok((ReadRet::Data, data, seq));
+            }
+
+            // case 4: [\r\n--boun]只有部分bdry。说明是上次取走数据后留下的。
+            self.buff_refill().await?;
         }
-        let (data, seq) = self.get_buff_data(0)?;
-        Ok((ReadRet::Data, data, seq))
     }
 
     pub(crate) async fn read_mime_octet(
@@ -598,170 +618,68 @@ where
         }
     }
 
-    pub(crate) fn get_read_size(&self) -> usize {
-        self.read_size
-    }
-
-    // 异步方式获取下一个严格有序的包。包含载荷为0的
-    pub(crate) fn next_ord_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
-        poll_fn(|_cx| {
-            if self.fin {
-                return Poll::Ready(None);
-            }
-            if let Some(pkt) = self.pop_ord() {
-                return Poll::Ready(Some(pkt));
-            }
-            Poll::Pending
-        })
-    }
-
-    // 这个接口没必要提供
-    // 异步方式获取下一个原始顺序的包。包含载荷为0的。如果cache中每到来一个包，就调用，那就是原始到来的包顺序
-    #[cfg(test)]
-    pub(crate) fn next_raw_pkt(&mut self) -> impl Future<Output = Option<T>> + '_ {
-        poll_fn(|_cx| {
-            if let Some(_pkt) = self.peek() {
-                return Poll::Ready(self.pop());
-            }
-            Poll::Pending
-        })
-    }
-
-    // 返回试读过的数据, start到next - 1
-    // ignore: 忽略尾部的数据长度。比如boundary \r\n
-    fn get_buff_data(&mut self, ignore: usize) -> Result<(&[u8], u32), ReadError> {
-        let seq = self.next_seq - self.buff_len as u32;
-        let data_len = self.buff_next - self.buff_start;
-        let data = &self.buff[self.buff_start..(self.buff_start + data_len - ignore)];
-
-        if let Some(ref mut cb) = self.cb_strm {
-            let raw_data = &self.buff[self.buff_start..(self.buff_start + data_len)];
-            cb.borrow_mut()(raw_data, seq, self.cb_ctx);
+    // 严格读到n个字节返回。但最大不超过max_buff
+    pub(crate) async fn readn_err(&mut self, n: usize) -> Result<(&[u8], u32), ReadError> {
+        if n > self.max_buff {
+            return Err(ReadError::NoData);
         }
 
-        let result = Ok((data, seq));
-        self.buff_start += data_len;
-        self.buff_len -= data_len;
-        self.read_size += data_len;
+        loop {
+            if self.buff_len >= n {
+                self.buff_cur = self.buff_start + n;
+                return self.get_buff_data(0);
+            }
+            self.buff_refill().await?;
+        }
+    }
 
-        // 如果数据读空，buff start移到开始位置。可以减少将来move数据的机会
+    pub(crate) async fn readn(&mut self, n: usize) -> Result<(&[u8], u32), ()> {
+        match self.readn_err(n).await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(()),
+        }
+    }
+
+    pub(crate) async fn read_err(&mut self, n: usize) -> Result<(&[u8], u32), ReadError> {
         if self.buff_len == 0 {
-            self.buff_start = 0;
-            self.buff_next = 0;
+            self.buff_refill().await?;
         }
 
-        result
+        let len = min(n, self.buff_len);
+        self.buff_cur = self.buff_start + len;
+        self.get_buff_data(0)
     }
 
-    fn fill_bottom(&mut self) -> FillRet {
-        if self.fin {
-            return FillRet::Final;
-        }
-
-        let mut filled = false;
-        let buff_start = self.buff_start;
-        let mut buff_len = self.buff_len;
-        let max_buff = self.max_buff;
-
-        while let Some((pkt, next_seq)) = self.peek_ord_data_with_seq() {
-            let seq = pkt.seq();
-            let payload = pkt.payload();
-            let payload_len = payload.len();
-            let payload_off = (next_seq - seq) as usize;
-
-            let space = max_buff - (buff_start + buff_len);
-            if space == 0 {
-                break;
-            }
-
-            let copy_len = std::cmp::min(payload_len - payload_off, space);
-            if copy_len == 0 {
-                break;
-            }
-
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    payload[payload_off..].as_ptr(),
-                    self.buff.as_mut_ptr().add(buff_start + buff_len),
-                    copy_len,
-                );
-            }
-            buff_len += copy_len;
-            self.next_seq += copy_len as u32;
-            filled = true;
-        }
-
-        if filled {
-            self.buff_len = buff_len;
-            FillRet::OK
-        } else {
-            FillRet::NoPkt
+    pub(crate) async fn read(&mut self, n: usize) -> Result<(&[u8], u32), ()> {
+        match self.read_err(n).await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(()),
         }
     }
 
-    fn fill_buff(&mut self) -> FillRet {
-        // case 1: 后面没有空间，前面也没有空间，填满状态。 [++++++++++++]如果满，直接返回。
-        // case 2: 后续有空间，无论前面是否有空，只填充后面的空间。 [******++++++-----]
-        // case 3: 后面没有空间，前面有空间，需要移动，并填充后面的空间。移动后就是case 2。
-
-        // case 1
-        if self.buff_len >= self.max_buff {
-            return FillRet::Final;
+    pub(crate) async fn read2eof(&mut self) -> Result<(&[u8], u32), ReadError> {
+        if self.buff_len == 0 {
+            self.buff_refill().await?;
         }
 
-        // 尽量避免移动，如果后面有空间，只填充后面即可
-        // case 2
-        if self.buff_start + self.buff_len < self.max_buff {
-            return self.fill_bottom();
-        }
+        self.buff_cur = self.buff_start + self.buff_len;
+        self.get_buff_data(0)
+    }
 
-        // case 3
-        if self.buff_start + self.buff_len >= self.max_buff && self.buff_start > 0 {
-            unsafe {
-                std::ptr::copy(
-                    self.buff.as_ptr().add(self.buff_start),
-                    self.buff.as_mut_ptr(),
-                    self.buff_len,
-                );
-            }
-            self.buff_next -= self.buff_start;
-            self.buff_start = 0;
-            return self.fill_bottom();
+    #[cfg(test)]
+    pub(crate) async fn next_byte(&mut self) -> Result<(u8, u32), ReadError> {
+        match self.readn_err(1).await {
+            Ok((bytes, seq)) => Ok((bytes[0], seq)),
+            Err(e) => Err(e),
         }
+    }
 
-        FillRet::Final // 不应该到达这里，相当于出错
+    pub(crate) fn get_read_size(&self) -> usize {
+        self.tot_read_size
     }
 }
 
 impl<T> Unpin for PktStrm<T> where T: Packet {}
-
-impl<T> Stream for PktStrm<T>
-where
-    T: Packet,
-{
-    type Item = u8;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        if self.buff_next >= self.buff_start + self.buff_len {
-            match self.fill_buff() {
-                FillRet::OK => {}
-                FillRet::Final => {
-                    return Poll::Ready(None);
-                }
-                FillRet::NoPkt => {
-                    return Poll::Pending;
-                }
-            }
-        }
-
-        let byte = self.buff[self.buff_next];
-        self.buff_next += 1;
-        Poll::Ready(Some(byte))
-    }
-}
 
 impl<T> fmt::Debug for PktStrm<T>
 where
@@ -770,9 +688,10 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PktStrm")
             .field("pkt_buff_len", &self.heap.len())
-            .field("read_buff_len", &self.buff_len)
+            .field("read_buff_len", &self.buff.len())
             .field("next_seq", &self.next_seq)
             .field("fin", &self.fin)
+            .field("buff move size:", &self.move_size)
             .finish()
     }
 }

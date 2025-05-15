@@ -11,9 +11,9 @@ pub(crate) struct Heap<T> {
 impl<T: Ord> Heap<T> {
     pub(crate) fn new(max_size: usize) -> Self {
         Heap {
-            data: {
+            data: unsafe {
                 let mut data = Vec::with_capacity(max_size);
-                data.extend((0..max_size).map(|_| MaybeUninit::uninit()));
+                data.set_len(max_size);
                 data
             },
             len: 0,

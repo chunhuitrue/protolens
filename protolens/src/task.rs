@@ -250,7 +250,7 @@ where
         }
 
         if let Some(parser) = &mut self.c2s_parser {
-            let waker = dummy_waker();
+            let waker = waker::<T>();
             let mut context = Context::from_waker(&waker);
             match Pin::as_mut(parser).poll(&mut context) {
                 Poll::Ready(Ok(())) => {
@@ -274,7 +274,7 @@ where
         }
 
         if let Some(parser) = &mut self.s2c_parser {
-            let waker = dummy_waker();
+            let waker = waker::<T>();
             let mut context = Context::from_waker(&waker);
             match Pin::as_mut(parser).poll(&mut context) {
                 Poll::Ready(Ok(())) => {
@@ -298,7 +298,7 @@ where
         }
 
         if let Some(parser) = &mut self.bdir_parser {
-            let waker = dummy_waker();
+            let waker = waker::<T>();
             let mut context = Context::from_waker(&waker);
             match Pin::as_mut(parser).poll(&mut context) {
                 Poll::Ready(Ok(())) => {
@@ -344,18 +344,19 @@ enum TaskState {
     Error,
 }
 
-fn dummy_raw_waker() -> RawWaker {
+fn raw_waker<T: Packet>() -> RawWaker {
     fn no_op(_: *const ()) {}
-    fn clone(_: *const ()) -> RawWaker {
-        dummy_raw_waker()
+
+    fn clone<T: Packet>(_: *const ()) -> RawWaker {
+        raw_waker::<T>()
     }
 
-    let vtable = &RawWakerVTable::new(clone, no_op, no_op, no_op);
+    let vtable = &RawWakerVTable::new(clone::<T>, no_op, no_op, no_op);
     RawWaker::new(std::ptr::null::<()>(), vtable)
 }
 
-fn dummy_waker() -> Waker {
-    unsafe { Waker::from_raw(dummy_raw_waker()) }
+fn waker<T: Packet>() -> Waker {
+    unsafe { Waker::from_raw(raw_waker::<T>()) }
 }
 
 pub struct UdpTask<T>

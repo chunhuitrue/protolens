@@ -169,7 +169,7 @@ mod tests {
         assert_eq!(*seq_values.borrow(), expected_seqs);
     }
 
-    // 多个包才够一次读取的情况
+    // 多个包才够一次读取的情况，跨越packet边界
     #[test]
     fn test_readn_across_packets() {
         // 第一个包，包含5个字节
@@ -221,9 +221,10 @@ mod tests {
         assert_eq!(seqs_result[0], seq1);
     }
 
+    // 多次readn，跨越buff边界
     #[test]
     fn test_readn_buff_move() {
-        // 如果整除，不可能遗留部分。无法触发move
+        // 如果整除，不可能遗留部分。无法跨越边界
         if MAX_READ_BUFF / MAX_READN == 0 {
             return;
         }
@@ -329,7 +330,7 @@ mod tests {
     #[test]
     fn test_readn_insufficient_data() {
         let seq1 = 1;
-        let size = MAX_READN - 1; // 比需要的少1个字节
+        let size = MAX_READN - 1;
         let mut payload = Vec::with_capacity(size);
         for i in 0..size {
             payload.push((i + 1) as u8);

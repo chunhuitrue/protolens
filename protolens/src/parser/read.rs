@@ -131,14 +131,9 @@ mod tests {
 
         protolens.run_task(&mut task, pkt1);
 
-        // The parser sets read_size to MAX_READ for each read, but the constructed packet is only 10 bytes long.
-        // Therefore, it cannot be read out.
-        // The behavior of read is: it attempts to read the given size, if this size exceeds the internal buffer,
-        // it returns the buffer's length, expecting to continue reading subsequent data in the next attempt.
-        // However, if there isn't enough data for the given size, and the size already exceeds the buffer size,
-        // read will encounter the fin flag when attempting to read.
-        // This is reasonable behavior.
-        assert_eq!(*vec.borrow(), Vec::<u8>::new());
+        let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        assert_eq!(*vec.borrow(), expected);
+        assert_eq!(*seq_value.borrow(), seq1);
     }
 
     #[test]
@@ -168,16 +163,18 @@ mod tests {
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
 
-        // The reason is the same as above
-        assert_eq!(*vec.borrow(), Vec::<u8>::new());
+        let expected: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        assert_eq!(*vec.borrow(), expected);
+        assert_eq!(seq_values.borrow().len(), 2);
+        assert_eq!(seq_values.borrow()[0], seq1);
+        assert_eq!(seq_values.borrow()[1], seq2);
     }
 
-    // 因为n超过buff的长度。应该第一次读取buff的长度，第二次读取剩余的长度
+    // n超过buff的长度。应该第一次读取buff的长度，第二次读取剩余的长度
     #[test]
     fn test_read_n() {
-        // 填充超过buff的长度
-        let payload_len = MAX_READ;
-        let payload = vec![b'a'; payload_len];
+        const _: () = assert!(MAX_PACKET_LEN > MAX_READ);
+        let payload = vec![b'a'; MAX_READ];
 
         let seq1 = 1;
         let pkt1 = build_pkt_payload(seq1, &payload);
@@ -188,7 +185,7 @@ mod tests {
         let seqs = Rc::new(RefCell::new(Vec::new()));
         let seqs_clone = Rc::clone(&seqs);
         let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
-            lines_clone.borrow_mut().push(line.len());
+            lines_clone.borrow_mut().extend_from_slice(line);
             seqs_clone.borrow_mut().push(seq);
         };
 
@@ -200,10 +197,9 @@ mod tests {
 
         protolens.run_task(&mut task, pkt1);
 
-        let lines_result = lines.borrow();
-
-        // parser中每次都传入max read。所以剩余数据小于max read 不应该读出来。只有1次读取
-        // parser中虽然可以传入大于buff的值，但不能传入没有的size。
-        assert_eq!(lines_result.len(), 1);
+        assert_eq!(*lines.borrow(), payload);
+        assert_eq!(seqs.borrow().len(), 2);
+        assert_eq!(seqs.borrow()[0], seq1);
+        assert_eq!(seqs.borrow()[1], seq1 + MAX_READ_BUFF as u32);
     }
 }

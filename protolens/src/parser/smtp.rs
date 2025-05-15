@@ -1524,7 +1524,7 @@ mod tests {
     }
 
     #[test]
-    fn test_smtp2_parser() {
+    fn test_smtp_parser() {
         let project_root = env::current_dir().unwrap();
         let file_path = project_root.join("tests/pcap/smtp.pcap");
         let mut cap = Capture::init(file_path).unwrap();
@@ -1678,6 +1678,7 @@ mod tests {
 
             protolens.run_task(&mut task, pkt);
         }
+        dbg!(task);
 
         assert_eq!(
             captured_user.borrow().as_slice(),

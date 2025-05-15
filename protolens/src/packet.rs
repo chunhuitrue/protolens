@@ -30,6 +30,8 @@ pub enum L7Proto {
     ReadDash,
     #[cfg(test)]
     ReadOctet,
+    #[cfg(test)]
+    ReadEof,
 
     Unknown,
 }

@@ -40,7 +40,15 @@ where
         let stm = unsafe { &mut *strm };
 
         while !stm.fin() {
+            #[cfg(not(feature = "bench"))]
+            let peek_line = stm.peekline_str().await?;
+            #[cfg(not(feature = "bench"))]
+            let peek_vec = peek_line.as_bytes().to_vec();
+
             let (line, seq) = stm.readline().await?;
+
+            #[cfg(not(feature = "bench"))]
+            assert_eq!(peek_vec, line, "peek_line和line内容应该 一致");
 
             if line.is_empty() {
                 break;
@@ -105,9 +113,11 @@ mod tests {
     use crate::test_utils::*;
     use nom::AsBytes;
 
+    const _: () = assert!(MAX_PACKET_LEN > MAX_READ_BUFF);
+
+    // 一个包含一行和不完整的一行
     #[test]
     fn test_readline_single_line() {
-        // 创建一个包含一行数据的包
         let seq1 = 1;
         let payload = [b'H', b'e', b'l', b'l', b'o', b'\r', b'\n', b'W', b'o', b'r'];
         let pkt1 = build_pkt_payload(seq1, &payload);
@@ -123,7 +133,6 @@ mod tests {
             dbg!(line, seq);
         };
 
-        // 添加用于验证原始TCP流数据的变量
         let raw_data = Rc::new(RefCell::new(Vec::new()));
         let raw_data_clone = Rc::clone(&raw_data);
         let raw_seqs = Rc::new(RefCell::new(Vec::new()));
@@ -154,6 +163,7 @@ mod tests {
         assert_eq!(*raw_seqs.borrow(), raw_seq_expected);
     }
 
+    // 有一行跨数据包边界
     #[test]
     fn test_readline_multiple_packets() {
         let seq1 = 1;
@@ -184,12 +194,9 @@ mod tests {
         let mut task = protolens.new_task(TransProto::Tcp);
         protolens.set_task_parser(&mut task, L7Proto::Readline);
 
-        dbg!("run1");
         protolens.run_task(&mut task, pkt1);
-        dbg!("run2");
         protolens.run_task(&mut task, pkt2);
 
-        // 验证收到的行是否正确
         let line_expected = vec![
             b"Hello\r\n".to_vec(),
             b"World\r\n".to_vec(),
@@ -200,142 +207,12 @@ mod tests {
         assert_eq!(*seqs.borrow(), seq_expected);
     }
 
+    // 第二行跨越buff边界，需要移动
     #[test]
-    fn test_readline_with_syn() {
-        // 创建SYN包
-        let seq1 = 1;
-        let pkt_syn = build_pkt_syn(seq1);
-
-        // 创建数据包
-        let seq2 = 2; // SYN占一个序列号
-        let payload1 = [b'H', b'e', b'l', b'l', b'o', b'\r', b'\n', b'W', b'o', b'r'];
-        let pkt1 = build_pkt_payload(seq2, &payload1);
-
-        let seq3 = 12;
-        let payload2 = [
-            b'l', b'd', b'\r', b'\n', b'B', b'y', b'e', b'\r', b'\n', b'x',
-        ];
-        let pkt2 = build_pkt_payload(seq3, &payload2);
-
-        let _ = pkt_syn.decode();
-        let _ = pkt1.decode();
-        let _ = pkt2.decode();
-
-        let lines = Rc::new(RefCell::new(Vec::new()));
-        let lines_clone = Rc::clone(&lines);
-        let seqs = Rc::new(RefCell::new(Vec::new()));
-        let seqs_clone = Rc::clone(&seqs);
-        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
-            lines_clone.borrow_mut().push(line.to_vec());
-            seqs_clone.borrow_mut().push(seq);
-        };
-
-        let mut protolens = Prolens::<CapPacket>::default();
-        protolens.set_cb_readline(callback);
-
-        let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(&mut task, L7Proto::Readline);
-
-        // 乱序发送包
-        protolens.run_task(&mut task, pkt_syn);
-        protolens.run_task(&mut task, pkt2);
-        protolens.run_task(&mut task, pkt1);
-
-        // 验证收到的行是否正确
-        let line_expected = vec![
-            b"Hello\r\n".to_vec(),
-            b"World\r\n".to_vec(),
-            b"Bye\r\n".to_vec(),
-        ];
-        let seq_expected = vec![2, 9, 16];
-        assert_eq!(*lines.borrow(), line_expected);
-        assert_eq!(*seqs.borrow(), seq_expected);
-    }
-
-    // 验证多个同类型的task执行。当parser被建立时，它从prolens中获取callback的copy，而不是拿走callback。
-    // 因为后续的同类型task还需要copy这些callback
-    #[test]
-    fn test_readline_multi_task() {
-        // 创建一个包含一行数据的包
-        let seq1 = 1;
-        let payload = [b'H', b'e', b'l', b'l', b'o', b'\r', b'\n', b'W', b'o', b'r'];
-        let pkt1 = build_pkt_payload(seq1, &payload);
-        let _ = pkt1.decode();
-
-        let lines = Rc::new(RefCell::new(Vec::new()));
-        let lines_clone = Rc::clone(&lines);
-        let seqs = Rc::new(RefCell::new(Vec::new()));
-        let seqs_clone = Rc::clone(&seqs);
-        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
-            lines_clone.borrow_mut().clear();
-            lines_clone.borrow_mut().push(line.to_vec());
-            seqs_clone.borrow_mut().clear();
-            seqs_clone.borrow_mut().push(seq);
-        };
-
-        let mut protolens = Prolens::<CapPacket>::default();
-        protolens.set_cb_readline(callback);
-
-        let mut task1 = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(&mut task1, L7Proto::Readline);
-        let mut task2 = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(&mut task2, L7Proto::Readline);
-
-        protolens.run_task(&mut task1, pkt1.clone());
-        // 验证收到的行是否正确
-        let line_expected = vec![b"Hello\r\n".to_vec()];
-        let seq_expected = vec![1];
-        assert_eq!(*lines.borrow(), line_expected);
-        assert_eq!(*seqs.borrow(), seq_expected);
-
-        protolens.run_task(&mut task2, pkt1);
-        // 验证收到的行是否正确
-        let line_expected = vec![b"Hello\r\n".to_vec()];
-        let seq_expected = vec![1];
-        assert_eq!(*lines.borrow(), line_expected);
-        assert_eq!(*seqs.borrow(), seq_expected);
-    }
-
-    // 超过MAX_READ_BUFF大小的一行，应该读取失败
-    #[test]
-    fn test_readline_exceeds_buffer() {
-        let seq1 = 1;
-        let mut payload = Vec::with_capacity(MAX_READ_BUFF);
-        for i in 0..MAX_READ_BUFF {
-            payload.push(b'A' + (i % 26) as u8); // 使用字母A-Z循环填充
-        }
-
-        let pkt1 = build_pkt_payload(seq1, &payload);
-        let _ = pkt1.decode();
-
-        let lines = Rc::new(RefCell::new(Vec::new()));
-        let lines_clone = Rc::clone(&lines);
-        let callback = move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
-            lines_clone.borrow_mut().push(line.to_vec());
-        };
-
-        let mut protolens = Prolens::<CapPacket>::default();
-        protolens.set_cb_readline(callback);
-
-        let mut task = protolens.new_task(TransProto::Tcp);
-        protolens.set_task_parser(&mut task, L7Proto::Readline);
-
-        protolens.run_task(&mut task, pkt1);
-
-        assert_eq!(
-            lines.borrow().len(),
-            0,
-            "不应该读取到任何行，因为缓冲区中没有\\r\\n且已达到MAX_READ_BUFF"
-        );
-    }
-
-    // fill_buff case 3。部分行在buff末尾，需要移动的情况
-    #[test]
-    fn test_readline_buff_move() {
+    fn test_readline_buff_overlap() {
         // 第一个包的内容：
         // - 498个字符 + \r\n (500字节)
         // - 12个字符 (剩余12字节，不带\r\n)
-        // 总共512字节，正好填满 MAX_READ_BUFF
         let mut payload1 = Vec::new();
         for i in 0..MAX_READ_BUFF - 12 - 2 {
             payload1.push(b'A' + (i % 26) as u8);
@@ -343,7 +220,6 @@ mod tests {
         payload1.extend_from_slice(b"\r\n"); // 第一行结束
         payload1.extend_from_slice(b"INCOMPLETE__"); // 第二行的前12个字符
 
-        // 第二个包的内容
         let payload2 = b"LINE\r\n".to_vec();
 
         let seq1 = 1;
@@ -388,9 +264,8 @@ mod tests {
         assert_eq!(seqs_result[1], seq1 + (MAX_READ_BUFF - 12) as u32);
     }
 
-    // fill_buff case 3。部分行在buff末尾，需要移动，同时覆盖区域有重叠的情况。
     #[test]
-    fn test_readline_buff_move_noverlap() {
+    fn test_readline_buff_noverlap2() {
         let line1_len = MAX_READ_BUFF / 3; // 包含\r\n
         let line2_start_len = MAX_READ_BUFF - line1_len;
         let line2_end_len = 10; // 包含\r\n
@@ -449,6 +324,119 @@ mod tests {
         assert_eq!(seqs_result[1], seq1 + line1_len as u32);
     }
 
+    // syn包
+    #[test]
+    fn test_readline_with_syn() {
+        let seq1 = 1;
+        let pkt_syn = build_pkt_syn(seq1);
+
+        let seq2 = 2; // SYN占一个序列号
+        let payload1 = [b'H', b'e', b'l', b'l', b'o', b'\r', b'\n', b'W', b'o', b'r'];
+        let pkt1 = build_pkt_payload(seq2, &payload1);
+
+        let seq3 = 12;
+        let payload2 = [
+            b'l', b'd', b'\r', b'\n', b'B', b'y', b'e', b'\r', b'\n', b'x',
+        ];
+        let pkt2 = build_pkt_payload(seq3, &payload2);
+
+        let _ = pkt_syn.decode();
+        let _ = pkt1.decode();
+        let _ = pkt2.decode();
+
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let lines_clone = Rc::clone(&lines);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            lines_clone.borrow_mut().push(line.to_vec());
+            seqs_clone.borrow_mut().push(seq);
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_readline(callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
+
+        // 乱序发送包
+        protolens.run_task(&mut task, pkt_syn);
+        protolens.run_task(&mut task, pkt2);
+        protolens.run_task(&mut task, pkt1);
+
+        let line_expected = vec![
+            b"Hello\r\n".to_vec(),
+            b"World\r\n".to_vec(),
+            b"Bye\r\n".to_vec(),
+        ];
+        let seq_expected = vec![2, 9, 16];
+        assert_eq!(*lines.borrow(), line_expected);
+        assert_eq!(*seqs.borrow(), seq_expected);
+    }
+
+    // 正好等于buff的一行
+    #[test]
+    fn test_readline_eq_buffer() {
+        let seq1 = 1;
+        let mut payload = vec![b'A'; MAX_READ_BUFF - 2];
+        payload.extend_from_slice(b"\r\n");
+
+        let pkt1 = build_pkt_payload(seq1, &payload);
+        let _ = pkt1.decode();
+
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let lines_clone = Rc::clone(&lines);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            lines_clone.borrow_mut().push(line.to_vec());
+            seqs_clone.borrow_mut().push(seq);
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_readline(callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
+
+        protolens.run_task(&mut task, pkt1);
+
+        assert_eq!(lines.borrow().len(), 1);
+        assert_eq!(lines.borrow()[0], payload);
+        assert_eq!(seqs.borrow()[0], seq1);
+    }
+
+    // 超过MAX_READ_BUFF大小的一行，应该读取失败
+    #[test]
+    fn test_readline_exceeds_buffer() {
+        let seq1 = 1;
+        let mut payload = vec![b'A'; MAX_READ_BUFF];
+        payload.extend_from_slice(b"\r\n");
+
+        let pkt1 = build_pkt_payload(seq1, &payload);
+        let _ = pkt1.decode();
+
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let lines_clone = Rc::clone(&lines);
+        let callback = move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+            lines_clone.borrow_mut().push(line.to_vec());
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_readline(callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
+
+        protolens.run_task(&mut task, pkt1);
+
+        assert_eq!(
+            lines.borrow().len(),
+            0,
+            "不应该读取到任何行，因为缓冲区中没有\\r\\n且已达到MAX_READ_BUFF"
+        );
+    }
+
     // 前面的数据把read_buff填满（不包含\r\n)，后面的包中包含正常的行.此时不应该读出任何数据
     #[test]
     fn test_readline_full_buffer_without_newline() {
@@ -491,7 +479,105 @@ mod tests {
         );
     }
 
-    // 最后一个包只包含fin的情况
+    // 支持只以\n结尾
+    #[test]
+    fn test_readline_only_lf() {
+        let seq1 = 1;
+        let payload1 = b"First line\nSecond line\n".to_vec();
+        let pkt1 = build_pkt_payload(seq1, &payload1);
+        let _ = pkt1.decode();
+
+        let seq2 = seq1 + payload1.len() as u32;
+        let payload2 = b"Third line\n".to_vec();
+        let pkt2 = build_pkt_payload(seq2, &payload2);
+        let _ = pkt2.decode();
+
+        let seq3 = seq2 + payload2.len() as u32;
+        let pkt3 = build_pkt_fin(seq3);
+        let _ = pkt3.decode();
+
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let lines_clone = Rc::clone(&lines);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            lines_clone.borrow_mut().push(line.to_vec());
+            seqs_clone.borrow_mut().push(seq);
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_readline(callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
+
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
+        protolens.run_task(&mut task, pkt3);
+
+        let lines_result = lines.borrow();
+        let seqs_result = seqs.borrow();
+
+        assert_eq!(lines_result.len(), 3);
+
+        assert_eq!(&lines_result[0], b"First line\n");
+        assert_eq!(&lines_result[1], b"Second line\n");
+        assert_eq!(&lines_result[2], b"Third line\n");
+
+        assert_eq!(seqs_result[0], seq1);
+        assert_eq!(seqs_result[1], seq1 + b"First line\n".len() as u32);
+        assert_eq!(seqs_result[2], seq2);
+    }
+
+    // 不完整的一行不被读取
+    #[test]
+    fn test_readline_no_crlf() {
+        let seq1 = 1;
+        let payload1 = b"First line\nSecond line\n".to_vec();
+        let pkt1 = build_pkt_payload(seq1, &payload1);
+        let _ = pkt1.decode();
+
+        let seq2 = seq1 + payload1.len() as u32;
+        let payload2 = b"Third line".to_vec();
+        let pkt2 = build_pkt_payload(seq2, &payload2);
+        let _ = pkt2.decode();
+
+        let seq3 = seq2 + payload2.len() as u32;
+        let pkt3 = build_pkt_fin(seq3);
+        let _ = pkt3.decode();
+
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let lines_clone = Rc::clone(&lines);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            lines_clone.borrow_mut().push(line.to_vec());
+            seqs_clone.borrow_mut().push(seq);
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_readline(callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::Readline);
+
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
+        protolens.run_task(&mut task, pkt3);
+
+        let lines_result = lines.borrow();
+        let seqs_result = seqs.borrow();
+
+        assert_eq!(lines_result.len(), 2);
+
+        assert_eq!(&lines_result[0], b"First line\n");
+        assert_eq!(&lines_result[1], b"Second line\n");
+
+        assert_eq!(seqs_result[0], seq1);
+        assert_eq!(seqs_result[1], seq1 + b"First line\n".len() as u32);
+    }
+
+    // 最后一个包只包含fin
     #[test]
     fn test_readline_with_fin() {
         let seq1 = 1;
@@ -541,6 +627,7 @@ mod tests {
         assert_eq!(seqs_result[2], seq2);
     }
 
+    // 最后一个包带数据和fin
     #[test]
     fn test_readline_with_data_fin() {
         let seq1 = 1;
@@ -585,6 +672,7 @@ mod tests {
         assert_eq!(seqs_result[2], seq2);
     }
 
+    // fin包后又有其他包
     #[test]
     fn test_readline_with_middle_fin() {
         let seq1 = 1;
@@ -628,18 +716,17 @@ mod tests {
 
         assert_eq!(&lines_result[0], b"First line\r\n");
         assert_eq!(&lines_result[1], b"Last valid line\r\n");
-
-        assert_eq!(seqs_result[0], seq1);
-        assert_eq!(seqs_result[1], seq2);
-
         assert!(
             !lines_result
                 .iter()
                 .any(|line| line == b"Should not be read\r\n")
         );
+
+        assert_eq!(seqs_result[0], seq1);
+        assert_eq!(seqs_result[1], seq2);
     }
 
-    // 有空行的情况
+    // 空行
     #[test]
     fn test_readline_with_empty_line() {
         let seq1 = 1;
@@ -757,4 +844,51 @@ mod tests {
         assert_eq!(seqs_result[0], seq1);
         assert_eq!(seqs_result[1], seq1 + first_line_len as u32);
     }
+
+    // 验证多个同类型的task执行。当parser被建立时，它从prolens中获取callback的copy，而不是拿走callback。
+    // 因为后续的同类型task还需要copy这些callback
+    #[test]
+    fn test_readline_multi_task() {
+        let seq1 = 1;
+        let payload = [b'H', b'e', b'l', b'l', b'o', b'\r', b'\n', b'W', b'o', b'r'];
+        let pkt1 = build_pkt_payload(seq1, &payload);
+        let _ = pkt1.decode();
+
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let lines_clone = Rc::clone(&lines);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            lines_clone.borrow_mut().clear();
+            lines_clone.borrow_mut().push(line.to_vec());
+            seqs_clone.borrow_mut().clear();
+            seqs_clone.borrow_mut().push(seq);
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_readline(callback);
+
+        let mut task1 = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task1, L7Proto::Readline);
+        let mut task2 = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task2, L7Proto::Readline);
+
+        protolens.run_task(&mut task1, pkt1.clone());
+
+        let line_expected = vec![b"Hello\r\n".to_vec()];
+        let seq_expected = vec![1];
+        assert_eq!(*lines.borrow(), line_expected);
+        assert_eq!(*seqs.borrow(), seq_expected);
+
+        protolens.run_task(&mut task2, pkt1);
+
+        let line_expected = vec![b"Hello\r\n".to_vec()];
+        let seq_expected = vec![1];
+        assert_eq!(*lines.borrow(), line_expected);
+        assert_eq!(*seqs.borrow(), seq_expected);
+    }
+
+    // 需要移动的情况。
+    // 第一个包填满buff[aaaaa--bdr]
+    // 第二个包包含"y==="。需要首先移动buff才能fill到buff中
 }

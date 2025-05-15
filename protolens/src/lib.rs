@@ -14,6 +14,8 @@ mod test_utils;
 #[cfg(test)]
 use crate::byte::*;
 #[cfg(test)]
+use crate::eof::*;
+#[cfg(test)]
 use crate::octet::*;
 #[cfg(test)]
 use crate::rawpacket::*;
@@ -127,6 +129,8 @@ where
     cb_readn: Option<CbReadn>,
     #[cfg(test)]
     cb_readoctet: Option<CbReadOctet>,
+    #[cfg(test)]
+    cb_readeof: Option<CbReadEof>,
 }
 
 impl<T> Prolens<T>
@@ -155,6 +159,8 @@ where
             cb_readn: None,
             #[cfg(test)]
             cb_readoctet: None,
+            #[cfg(test)]
+            cb_readeof: None,
             cb_smtp_user: None,
             cb_smtp_pass: None,
             cb_smtp_mailfrom: None,
@@ -231,6 +237,8 @@ where
                 .insert(L7Proto::Readn, Box::new(ReadnFactory::<T>::new()));
             self.parsers
                 .insert(L7Proto::ReadOctet, Box::new(ReadOctetFactory::<T>::new()));
+            self.parsers
+                .insert(L7Proto::ReadEof, Box::new(ReadEofFactory::<T>::new()));
         }
         #[cfg(any(test, feature = "bench"))]
         self.parsers
@@ -348,6 +356,14 @@ where
         F: ReadOctetCbFn + 'static,
     {
         self.cb_readoctet = Some(Rc::new(RefCell::new(callback)));
+    }
+
+    #[cfg(test)]
+    pub fn set_cb_readeof<F>(&mut self, callback: F)
+    where
+        F: ReadEofCbFn + 'static,
+    {
+        self.cb_readeof = Some(Rc::new(RefCell::new(callback)));
     }
 
     pub fn set_cb_smtp_user<F>(&mut self, callback: F)
@@ -819,6 +835,9 @@ pub mod bench {
     use std::env;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    const PKT_NUM: usize = 100;
+    const LINE_LEN: usize = 10;
+
     pub fn new_task(c: &mut Criterion) {
         let protolens = Prolens::<Box<CapPacket>>::default();
 
@@ -868,6 +887,10 @@ pub mod bench {
         readline_new_task(c, 500, "readline500_new_task");
     }
 
+    pub fn readline500_new_task_flame(c: &mut Criterion) {
+        readline_new_task_flame(c, 500, "readline500_new_task_flame");
+    }
+
     pub fn readline1000(c: &mut Criterion) {
         readline(c, 1000, "readline1000");
     }
@@ -875,9 +898,6 @@ pub mod bench {
     pub fn readline1000_new_task(c: &mut Criterion) {
         readline_new_task(c, 1000, "readline1000_new_task");
     }
-
-    const PKT_NUM: usize = 100;
-    const LINE_LEN: usize = 10;
 
     fn readline(c: &mut Criterion, payload_len: usize, name: &str) {
         let packets = readline_packets(payload_len);
@@ -924,6 +944,35 @@ pub mod bench {
 
                     for pkt in packets {
                         black_box(protolens.run_task(&mut task, pkt));
+                    }
+                },
+            )
+        });
+        group.finish();
+    }
+
+    fn readline_new_task_flame(c: &mut Criterion, payload_len: usize, name: &str) {
+        let packets = readline_packets(payload_len);
+
+        let num = 10000;
+        let mut group = c.benchmark_group("readline");
+        group.throughput(Throughput::Bytes((payload_len * PKT_NUM * num) as u64));
+        group.bench_function(name, |b| {
+            b.iter_with_setup(
+                || {
+                    let packets_clone = packets.clone();
+                    let protolens = black_box(Prolens::<Box<CapPacket>>::default());
+
+                    (protolens, packets_clone)
+                },
+                |(mut protolens, packets)| {
+                    for _ in 0..num {
+                        let mut task = black_box(protolens.new_task(TransProto::Tcp));
+                        protolens.set_task_parser(&mut task, L7Proto::Readline);
+
+                        for pkt in &packets {
+                            black_box(protolens.run_task(&mut task, pkt.clone()));
+                        }
                     }
                 },
             )
@@ -983,12 +1032,10 @@ pub mod bench {
         bench_proto(c, "smtp", "smtp", TransProto::Tcp, L7Proto::Smtp);
     }
 
-    // smtp.pcap比http_mime.pcap更有代表性
     pub fn smtp_new_task(c: &mut Criterion) {
         bench_proto_new_task(c, "smtp_new_task", "smtp", TransProto::Tcp, L7Proto::Smtp);
     }
 
-    // smtp.pcap比http_mime.pcap更有代表性
     pub fn smtp_new_task_flame(c: &mut Criterion) {
         bench_proto_task_flame(
             c,
@@ -1007,12 +1054,32 @@ pub mod bench {
         bench_proto_new_task(c, "pop3_new_task", "pop3", TransProto::Tcp, L7Proto::Pop3);
     }
 
+    pub fn pop3_new_task_flame(c: &mut Criterion) {
+        bench_proto_task_flame(
+            c,
+            "pop3_new_task_flame",
+            "pop3",
+            TransProto::Tcp,
+            L7Proto::Pop3,
+        );
+    }
+
     pub fn imap(c: &mut Criterion) {
         bench_proto(c, "imap", "imap", TransProto::Tcp, L7Proto::Imap);
     }
 
     pub fn imap_new_task(c: &mut Criterion) {
         bench_proto_new_task(c, "imap_new_task", "imap", TransProto::Tcp, L7Proto::Imap);
+    }
+
+    pub fn imap_new_task_flame(c: &mut Criterion) {
+        bench_proto_task_flame(
+            c,
+            "imap_new_task_flame",
+            "imap",
+            TransProto::Tcp,
+            L7Proto::Imap,
+        );
     }
 
     pub fn sip(c: &mut Criterion) {

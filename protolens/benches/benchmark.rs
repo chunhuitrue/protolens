@@ -23,11 +23,17 @@ fn benches(c: &mut Criterion) {
 
 criterion_group!(normal_benches, benches);
 criterion_group!(flame_task, new_task_flame);
+criterion_group!(flame_readline500_new_task, readline500_new_task_flame);
 criterion_group!(flame_http_new_task, http_new_task_flame);
 criterion_group!(flame_smtp_new_task, smtp_new_task_flame);
+criterion_group!(flame_pop3_new_task, pop3_new_task_flame);
+criterion_group!(flame_imap_new_task, imap_new_task_flame);
 criterion_main!(
     normal_benches,
     flame_task,
+    flame_readline500_new_task,
     flame_http_new_task,
-    flame_smtp_new_task
+    flame_smtp_new_task,
+    flame_pop3_new_task,
+    flame_imap_new_task,
 );

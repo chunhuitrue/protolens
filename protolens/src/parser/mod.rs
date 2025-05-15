@@ -10,6 +10,8 @@ pub mod smtp;
 #[cfg(test)]
 pub mod byte;
 #[cfg(test)]
+pub mod eof;
+#[cfg(test)]
 pub mod octet;
 #[cfg(test)]
 pub mod rawpacket;
