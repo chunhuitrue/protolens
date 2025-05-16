@@ -7,6 +7,7 @@ fn benches(c: &mut Criterion) {
     readline100_new_task(c);
     readline500(c);
     readline500_new_task(c);
+    readline500_new_task_switch(c);
     readline1000(c);
     readline1000_new_task(c);
     http(c);

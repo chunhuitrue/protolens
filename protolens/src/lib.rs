@@ -887,6 +887,10 @@ pub mod bench {
         readline_new_task(c, 500, "readline500_new_task");
     }
 
+    pub fn readline500_new_task_switch(c: &mut Criterion) {
+        readline_new_task_switch(c, 500, "readline500_new_task_switch");
+    }
+
     pub fn readline500_new_task_flame(c: &mut Criterion) {
         readline_new_task_flame(c, 500, "readline500_new_task_flame");
     }
@@ -944,6 +948,45 @@ pub mod bench {
 
                     for pkt in packets {
                         black_box(protolens.run_task(&mut task, pkt));
+                    }
+                },
+            )
+        });
+        group.finish();
+    }
+
+    fn readline_new_task_switch(c: &mut Criterion, payload_len: usize, name: &str) {
+        let packets = readline_packets(payload_len);
+
+        let mut group = c.benchmark_group("readline");
+        group.throughput(Throughput::Bytes((payload_len * PKT_NUM * 3) as u64));
+        group.bench_function(name, |b| {
+            b.iter_with_setup(
+                || {
+                    let packets_clone1 = packets.clone();
+                    let packets_clone2 = packets.clone();
+                    let packets_clone3 = packets.clone();
+                    let protolens = black_box(Prolens::<Box<CapPacket>>::default());
+
+                    (protolens, packets_clone1, packets_clone2, packets_clone3)
+                },
+                |(mut protolens, packets1, packets2, packets3)| {
+                    let mut task1 = black_box(protolens.new_task(TransProto::Tcp));
+                    protolens.set_task_parser(&mut task1, L7Proto::Readline);
+                    let mut task2 = black_box(protolens.new_task(TransProto::Tcp));
+                    protolens.set_task_parser(&mut task2, L7Proto::Readline);
+                    let mut task3 = black_box(protolens.new_task(TransProto::Tcp));
+                    protolens.set_task_parser(&mut task3, L7Proto::Readline);
+
+                    for (pkt1, pkt2, pkt3) in packets1
+                        .into_iter()
+                        .zip(packets2.into_iter())
+                        .zip(packets3.into_iter())
+                        .map(|((a, b), c)| (a, b, c))
+                    {
+                        black_box(protolens.run_task(&mut task1, pkt1));
+                        black_box(protolens.run_task(&mut task2, pkt2));
+                        black_box(protolens.run_task(&mut task3, pkt3));
                     }
                 },
             )
