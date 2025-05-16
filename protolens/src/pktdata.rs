@@ -27,12 +27,11 @@ where
 
         let offset = self.read_offset;
         let remaining = &payload[self.read_offset..];
-        for i in 0..remaining.len() - 1 {
-            if remaining[i] == b'\r' && remaining[i + 1] == b'\n' {
-                let line = &remaining[..i + 2];
-                self.read_offset += i + 2;
-                return Ok((line, offset));
-            }
+
+        if let Some((i, _)) = remaining.iter().enumerate().find(|&(_, &b)| b == b'\n') {
+            let line = &remaining[..i + 1];
+            self.read_offset += i + 1;
+            return Ok((line, offset));
         }
         Err(())
     }

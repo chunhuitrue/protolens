@@ -836,7 +836,7 @@ pub mod bench {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const PKT_NUM: usize = 100;
-    const LINE_LEN: usize = 10;
+    const LINE_LEN: usize = 25;
 
     pub fn new_task(c: &mut Criterion) {
         let protolens = Prolens::<Box<CapPacket>>::default();
@@ -981,6 +981,7 @@ pub mod bench {
     }
 
     fn readline_packets(payload_len: usize) -> Vec<Box<CapPacket>> {
+        let _: () = assert!(payload_len % LINE_LEN == 0);
         let lines_per_pkt = payload_len / LINE_LEN;
 
         let mut payload = Vec::with_capacity(payload_len);
