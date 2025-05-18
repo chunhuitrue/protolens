@@ -22,6 +22,7 @@ use crate::preamble;
 use imap_proto::{
     AttributeValue2, BodyStructParser2, ContentEncoding, follow_rsp_fetch, rsp_fetch,
 };
+use memchr::memmem::Finder;
 use nom::{
     IResult,
     bytes::complete::{tag, take_while1},
@@ -172,6 +173,8 @@ where
         cb: &Callbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
+        let bdry_finder = Finder::new(bdry);
+
         preamble(stm, bdry).await?;
         loop {
             let (boundary, te) = header(stm, cb.header.as_ref(), cb_ctx, cb.dir).await?;
@@ -186,6 +189,7 @@ where
                 let params = MimeBodyParams {
                     te,
                     bdry,
+                    bdry_finder: Some(&bdry_finder),
                     cb_body_start: cb.body_start.as_ref(),
                     cb_body: cb.body.as_ref(),
                     cb_body_stop: cb.body_stop.as_ref(),

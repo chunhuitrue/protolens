@@ -1,4 +1,5 @@
 use crate::packet::*;
+use memchr::memchr;
 
 pub(crate) struct PktData<T>
 where
@@ -28,9 +29,9 @@ where
         let offset = self.read_offset;
         let remaining = &payload[self.read_offset..];
 
-        if let Some((i, _)) = remaining.iter().enumerate().find(|&(_, &b)| b == b'\n') {
-            let line = &remaining[..i + 1];
-            self.read_offset += i + 1;
+        if let Some(pos) = memchr(b'\n', remaining) {
+            let line = &remaining[..pos + 1];
+            self.read_offset += pos + 1;
             return Ok((line, offset));
         }
         Err(())

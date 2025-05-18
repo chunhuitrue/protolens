@@ -2,6 +2,8 @@ use crate::Heap;
 use crate::packet::*;
 use futures::Future;
 use futures::future::poll_fn;
+use memchr::memchr;
+use memchr::memmem::Finder;
 use std::cell::RefCell;
 use std::cmp::min;
 use std::ffi::c_void;
@@ -21,7 +23,7 @@ pub(crate) enum ReadError {
 #[derive(PartialEq, Debug)]
 pub(crate) enum ReadRet {
     Data,     // 正常读到了一部分数据
-    DashBdry, // 读到了 "\r\n--"+boundary，同时也携带数据
+    DashBdry, // 读到了 "\r\n--"+bdry或--bdry ，同时也携带数据
 }
 
 pub trait StmCbFn: FnMut(&[u8], u32, *const c_void) {}
@@ -281,7 +283,7 @@ where
         })
     }
 
-    async fn buff_fill(&mut self) -> Result<(), ReadError> {
+    async fn buff_fill_end(&mut self) -> Result<(), ReadError> {
         poll_fn(|_ctx| {
             if self.fin {
                 return Poll::Ready(Err(ReadError::Eof));
@@ -330,7 +332,7 @@ where
         .await
     }
 
-    fn buff_move(&mut self) {
+    fn buff_move_start(&mut self) {
         if self.buff_start == 0 {
             return;
         }
@@ -347,9 +349,9 @@ where
         self.buff_start = 0;
     }
 
-    async fn buff_refill(&mut self) -> Result<(), ReadError> {
-        self.buff_move();
-        self.buff_fill().await
+    async fn buff_fill(&mut self) -> Result<(), ReadError> {
+        self.buff_move_start();
+        self.buff_fill_end().await
     }
 
     // 返回试读过的数据, start到next - 1
@@ -395,12 +397,11 @@ where
         }
 
         let buff = &self.buff[self.buff_cur..(self.buff_start + self.buff_len)];
-        for &byte in buff.iter() {
-            self.buff_cur += 1;
-            if byte == b'\n' {
-                return true;
-            }
+        if let Some(pos) = memchr(b'\n', buff) {
+            self.buff_cur += pos + 1;
+            return true;
         }
+        self.buff_cur += buff.len();
         false
     }
 
@@ -409,7 +410,7 @@ where
             if self.find_line() {
                 return self.get_buff_data(ignore);
             }
-            self.buff_refill().await?;
+            self.buff_fill().await?;
         }
     }
 
@@ -468,7 +469,7 @@ where
                 let data = self.peek_buff_data(0)?;
                 return Ok(unsafe { from_utf8_unchecked(data) });
             }
-            self.buff_refill().await?;
+            self.buff_fill().await?;
         }
     }
 
@@ -479,115 +480,142 @@ where
         }
     }
 
-    // 有或者没有close bdry
-    // 有则读到\r\n--bdry
-    // 没有则读到--bdry
-    // 但不包括bdry结束的\r\n
-    pub(crate) async fn read_mime_octet_err(
+    fn tail_match(&mut self, bdry: &str) -> usize {
+        // 0: 正常读取
+        // 1: 读到\r
+        // 2: 读到\n
+        // 3: 读到-
+        // 4: 读到第二个-
+        let mut state = 0;
+        let bdry_bytes = bdry.as_bytes();
+        let mut bdry_index = 0;
+        let mut match_len = 0;
+
+        let nedle_len = bdry.len() + 3;
+        let start = if self.buff_len >= nedle_len {
+            self.buff_start + self.buff_len - nedle_len
+        } else {
+            self.buff_start
+        };
+        let buff = &self.buff[start..(self.buff_start + self.buff_len)];
+        for &byte in buff.iter() {
+            match state {
+                0 => {
+                    // 正常状态
+                    if byte == b'\r' {
+                        state = 1;
+                        match_len = 1;
+                    } else if byte == b'-' {
+                        state = 3;
+                        match_len = 1;
+                    }
+                }
+                1 => {
+                    // 已读到\r
+                    if byte == b'\n' {
+                        state = 2;
+                        match_len += 1;
+                    } else if byte == b'\r' {
+                        state = 1;
+                        match_len = 1;
+                    } else if byte == b'-' {
+                        state = 3;
+                        match_len = 1;
+                    } else {
+                        state = 0;
+                        match_len = 0;
+                    }
+                }
+                2 => {
+                    // 已读到\r\n
+                    if byte == b'-' {
+                        state = 3;
+                        match_len += 1;
+                    } else if byte == b'\r' {
+                        state = 1;
+                        match_len = 1;
+                    } else {
+                        state = 0;
+                        match_len = 0;
+                    }
+                }
+                3 => {
+                    // 已读到\r\n- 或者 -
+                    if byte == b'-' {
+                        state = 4;
+                        bdry_index = 0;
+                        match_len += 1;
+                    } else if byte == b'\r' {
+                        state = 1;
+                        match_len = 1;
+                    } else {
+                        state = 0;
+                        match_len = 0;
+                    }
+                }
+                4 => {
+                    // 已读到\r\n--或--，开始匹配boundary
+                    if bdry_index < bdry_bytes.len() && byte == bdry_bytes[bdry_index] {
+                        bdry_index += 1;
+                        match_len += 1;
+                    } else if byte == b'\r' {
+                        state = 1;
+                        match_len = 1;
+                    } else if byte == b'-' {
+                        state = 3;
+                        match_len = 1;
+                    } else {
+                        state = 0;
+                        match_len = 0;
+                    }
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+        match_len
+    }
+
+    // 有或者没有dash bdry
+    // 读到\r\n--bdry
+    // 或者读到--bdry
+    // 但不包括bdry后面的\r\n
+    pub(crate) async fn read_mime_octet_err2(
         &mut self,
+        finder: &Finder<'_>,
         bdry: &str,
     ) -> Result<(ReadRet, &[u8], u32), ReadError> {
         loop {
             if self.buff_len == 0 {
-                self.buff_refill().await?;
+                self.buff_fill().await?;
             }
-
-            // 0: 正常读取
-            // 1: 读到\r
-            // 2: 读到\n
-            // 3: 读到-
-            // 4: 读到第二个-
-            let mut state = 0;
-            let bdry_bytes = bdry.as_bytes();
-            let mut bdry_index = 0;
-            let mut match_len = 0;
-            let mut count = 0;
 
             let buff = &self.buff[self.buff_cur..(self.buff_start + self.buff_len)];
-            for (pos, &byte) in buff.iter().enumerate() {
-                count = pos;
-                match state {
-                    0 => {
-                        // 正常状态
-                        if byte == b'\r' {
-                            state = 1;
-                            match_len = 1;
-                        } else if byte == b'-' {
-                            state = 3;
-                            match_len = 1;
-                        }
-                    }
-                    1 => {
-                        // 已读到\r
-                        if byte == b'\n' {
-                            state = 2;
-                            match_len += 1;
-                        } else if byte == b'\r' {
-                            state = 1;
-                            match_len = 1;
-                        } else if byte == b'-' {
-                            state = 3;
-                            match_len = 1;
-                        } else {
-                            state = 0;
-                            match_len = 0;
-                        }
-                    }
-                    2 => {
-                        // 已读到\r\n
-                        if byte == b'-' {
-                            state = 3;
-                            match_len += 1;
-                        } else if byte == b'\r' {
-                            state = 1;
-                            match_len = 1;
-                        } else {
-                            state = 0;
-                            match_len = 0;
-                        }
-                    }
-                    3 => {
-                        // 已读到\r\n- 或者 -
-                        if byte == b'-' {
-                            state = 4;
-                            bdry_index = 0;
-                            match_len += 1;
-                        } else if byte == b'\r' {
-                            state = 1;
-                            match_len = 1;
-                        } else {
-                            state = 0;
-                            match_len = 0;
-                        }
-                    }
-                    4 => {
-                        // 已读到\r\n--或--，开始匹配boundary
-                        if bdry_index < bdry_bytes.len() && byte == bdry_bytes[bdry_index] {
-                            bdry_index += 1;
-                            match_len += 1;
-                            if bdry_index == bdry_bytes.len() {
-                                // case 1: buff中有完整的bdry
-                                self.buff_cur += count + 1;
-                                let (data, seq) = self.get_buff_data(match_len)?;
-                                return Ok((ReadRet::DashBdry, data, seq));
-                            }
-                        } else if byte == b'\r' {
-                            state = 1;
-                            match_len = 1;
-                        } else if byte == b'-' {
-                            state = 3;
-                            match_len = 1;
-                        } else {
-                            state = 0;
-                            match_len = 0;
-                        }
-                    }
-                    _ => {
-                        return Err(ReadError::NoData);
-                    }
+
+            // case 1: buff中有完整的dash bdry
+            let mut search_start = 0;
+            while let Some(pos) = finder.find(&buff[search_start..]) {
+                let abs_pos = search_start + pos;
+                if abs_pos >= 4 && &buff[abs_pos - 4..abs_pos] == b"\r\n--" {
+                    self.buff_cur += abs_pos + bdry.len();
+                    let (data, seq) = self.get_buff_data(bdry.len() + 4)?;
+                    return Ok((ReadRet::DashBdry, data, seq));
+                }
+                if abs_pos >= 2 && &buff[abs_pos - 2..abs_pos] == b"--" {
+                    self.buff_cur += abs_pos + bdry.len();
+                    let (data, seq) = self.get_buff_data(bdry.len() + 2)?;
+                    return Ok((ReadRet::DashBdry, data, seq));
+                }
+
+                search_start = abs_pos + 1;
+                if search_start > buff.len() - bdry.len() {
+                    break;
                 }
             }
-            self.buff_cur += count + 1;
+
+            let match_len = self.tail_match(bdry);
+            self.buff_cur = self.buff_start + self.buff_len - match_len;
 
             // case 2: buff中全是数据
             if match_len == 0 {
@@ -597,22 +625,22 @@ where
 
             // case 3: buff中包含部分数据，部分bdry
             // [++++++\r\n--boun]dary 把match到的部分bdry留在buff中，下次继续match
-            self.buff_cur -= match_len;
             if self.buff_cur - self.buff_start > 0 {
                 let (data, seq) = self.get_buff_data(0)?;
                 return Ok((ReadRet::Data, data, seq));
             }
 
             // case 4: [\r\n--boun]只有部分bdry。说明是上次取走数据后留下的。
-            self.buff_refill().await?;
+            self.buff_fill().await?;
         }
     }
 
-    pub(crate) async fn read_mime_octet(
+    pub(crate) async fn read_mime_octet2(
         &mut self,
+        finder: &Finder<'_>,
         bdry: &str,
     ) -> Result<(ReadRet, &[u8], u32), ()> {
-        match self.read_mime_octet_err(bdry).await {
+        match self.read_mime_octet_err2(finder, bdry).await {
             Ok(result) => Ok(result),
             Err(_) => Err(()),
         }
@@ -629,7 +657,7 @@ where
                 self.buff_cur = self.buff_start + n;
                 return self.get_buff_data(0);
             }
-            self.buff_refill().await?;
+            self.buff_fill().await?;
         }
     }
 
@@ -642,7 +670,7 @@ where
 
     pub(crate) async fn read_err(&mut self, n: usize) -> Result<(&[u8], u32), ReadError> {
         if self.buff_len == 0 {
-            self.buff_refill().await?;
+            self.buff_fill().await?;
         }
 
         let len = min(n, self.buff_len);
@@ -659,7 +687,7 @@ where
 
     pub(crate) async fn read2eof(&mut self) -> Result<(&[u8], u32), ReadError> {
         if self.buff_len == 0 {
-            self.buff_refill().await?;
+            self.buff_fill().await?;
         }
 
         self.buff_cur = self.buff_start + self.buff_len;

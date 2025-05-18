@@ -28,6 +28,7 @@ use crate::PktStrm;
 use crate::Prolens;
 use crate::ReadRet;
 use futures::Future;
+use memchr::memmem::Finder;
 use nom::{
     IResult,
     branch::alt,
@@ -285,6 +286,8 @@ pub(crate) async fn multi_body<T>(
 where
     T: Packet,
 {
+    let bdry_finder = Finder::new(bdry);
+
     preamble(stm, bdry).await?;
     loop {
         let (boundary, te) = header(stm, cb.header.as_ref(), cb_ctx, cb.dir).await?;
@@ -296,6 +299,7 @@ where
             let params = MimeBodyParams {
                 te,
                 bdry,
+                bdry_finder: Some(&bdry_finder),
                 cb_body_start: cb.body_start.as_ref(),
                 cb_body: cb.body.as_ref(),
                 cb_body_stop: cb.body_stop.as_ref(),
@@ -322,9 +326,11 @@ pub(crate) async fn preamble<T>(stm: &mut PktStrm<T>, bdry: &str) -> Result<(), 
 where
     T: Packet,
 {
+    let bdry_finder = Finder::new(bdry);
     let params = MimeBodyParams {
         te: None,
         bdry,
+        bdry_finder: Some(&bdry_finder),
         cb_body_start: None,
         cb_body: None,
         cb_body_stop: None,
@@ -340,6 +346,7 @@ where
 pub(crate) struct MimeBodyParams<'a> {
     te: Option<TransferEncoding>,
     bdry: &'a str,
+    bdry_finder: Option<&'a Finder<'a>>,
     cb_body_start: Option<&'a CbBodyEvt>,
     cb_body: Option<&'a CbBody>,
     cb_body_stop: Option<&'a CbBodyEvt>,
@@ -351,11 +358,17 @@ pub(crate) async fn mime_body<T>(stm: &mut PktStrm<T>, params: MimeBodyParams<'_
 where
     T: Packet,
 {
+    if params.bdry_finder.is_none() {
+        return Err(());
+    }
+
     if let Some(cb) = params.cb_body_start {
         cb.borrow_mut()(params.cb_ctx, params.dir);
     }
     loop {
-        let (ret, content, seq) = stm.read_mime_octet(params.bdry).await?;
+        let (ret, content, seq) = stm
+            .read_mime_octet2(params.bdry_finder.unwrap(), params.bdry)
+            .await?;
 
         if let Some(cb) = params.cb_body {
             cb.borrow_mut()(content, seq, params.cb_ctx, params.dir, params.te.clone());

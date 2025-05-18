@@ -6,6 +6,7 @@ use crate::PktStrm;
 use crate::Prolens;
 use crate::ReadRet;
 use crate::packet::*;
+use memchr::memmem::Finder;
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::marker::PhantomData;
@@ -42,9 +43,10 @@ where
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
         let stm = unsafe { &mut *strm };
+        let finder = Finder::new(BDRY);
 
         loop {
-            let (ret, bytes, seq) = stm.read_mime_octet(BDRY).await?;
+            let (ret, bytes, seq) = stm.read_mime_octet2(&finder, BDRY).await?;
             if !bytes.is_empty() {
                 if let Some(ref cb) = cb_read {
                     cb.borrow_mut()(bytes, seq, cb_ctx);
@@ -113,6 +115,7 @@ mod tests {
     use crate::test_utils::*;
 
     // 以\r\n--bdry结尾
+    // 并且bdry之后的内容不应该被读取
     #[test]
     fn test_octet_content() {
         let seq1 = 1;
@@ -120,16 +123,16 @@ mod tests {
         let mut payload = content.clone();
         payload.extend_from_slice(b"\r\n--");
         payload.extend_from_slice(BDRY.as_bytes());
+        payload.extend_from_slice(b"do not read");
         let pkt = build_pkt_payload(seq1, &payload);
         let _ = pkt.decode();
 
-        let lines = Rc::new(RefCell::new(Vec::new()));
-        let lines_clone = Rc::clone(&lines);
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
         let seqs = Rc::new(RefCell::new(Vec::new()));
         let seqs_clone = Rc::clone(&seqs);
-        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
-            dbg!("in callback", std::str::from_utf8(line).unwrap_or("err"));
-            lines_clone.borrow_mut().push(line.to_vec());
+        let callback = move |bytes: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            data_clone.borrow_mut().extend_from_slice(bytes);
             seqs_clone.borrow_mut().push(seq);
         };
 
@@ -141,11 +144,11 @@ mod tests {
 
         protolens.run_task(&mut task, pkt);
 
-        let lines_result = lines.borrow();
+        let data_result = data.borrow();
         let seqs_result = seqs.borrow();
 
-        assert_eq!(lines_result.len(), 1);
-        assert_eq!(&lines_result[0], &content); // 不包含dash bdry
+        assert_eq!(data_result.len(), content.len());
+        assert_eq!(&data_result[..], &content);
         assert_eq!(seqs_result[0], seq1);
     }
 
@@ -160,13 +163,12 @@ mod tests {
         let pkt = build_pkt_payload(seq1, &payload);
         let _ = pkt.decode();
 
-        let lines = Rc::new(RefCell::new(Vec::new()));
-        let lines_clone = Rc::clone(&lines);
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
         let seqs = Rc::new(RefCell::new(Vec::new()));
         let seqs_clone = Rc::clone(&seqs);
-        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
-            dbg!("in callback", std::str::from_utf8(line).unwrap_or("err"));
-            lines_clone.borrow_mut().push(line.to_vec());
+        let callback = move |bytes: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            data_clone.borrow_mut().push(bytes.to_vec());
             seqs_clone.borrow_mut().push(seq);
         };
 
@@ -178,17 +180,17 @@ mod tests {
 
         protolens.run_task(&mut task, pkt);
 
-        let lines_result = lines.borrow();
+        let data_result = data.borrow();
         let seqs_result = seqs.borrow();
 
-        assert_eq!(lines_result.len(), 1);
-        assert_eq!(&lines_result[0], &content);
+        assert_eq!(data_result.len(), 1);
+        assert_eq!(&data_result[0], &content);
         assert_eq!(seqs_result[0], seq1);
     }
 
     // 有内容，而且内容中包含-- \r\n
     #[test]
-    fn test_octet_misc_content() {
+    fn test_octet_misc_content_crlf() {
         let seq1 = 1;
         let content = b"content\r\n --1234\r\n \r\n--abc\r\n".to_vec();
         let mut payload = content.clone();
@@ -234,13 +236,13 @@ mod tests {
         let pkt = build_pkt_payload(seq1, &payload);
         let _ = pkt.decode();
 
-        let lines = Rc::new(RefCell::new(Vec::new()));
-        let lines_clone = Rc::clone(&lines);
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
         let seqs = Rc::new(RefCell::new(Vec::new()));
         let seqs_clone = Rc::clone(&seqs);
-        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
-            dbg!("in callback", std::str::from_utf8(line).unwrap_or("err"));
-            lines_clone.borrow_mut().push(line.to_vec());
+        let callback = move |bytes: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            dbg!("in callback", std::str::from_utf8(bytes).unwrap_or(""));
+            data_clone.borrow_mut().push(bytes.to_vec());
             seqs_clone.borrow_mut().push(seq);
         };
 
@@ -252,7 +254,7 @@ mod tests {
 
         protolens.run_task(&mut task, pkt);
 
-        let lines_result = lines.borrow();
+        let lines_result = data.borrow();
         let seqs_result = seqs.borrow();
 
         assert_eq!(lines_result.len(), 1);
@@ -282,7 +284,6 @@ mod tests {
         let callback = move |data: &[u8], seq: u32, _cb_ctx: *mut c_void| {
             content_clone.borrow_mut().extend_from_slice(data);
             seqs_clone.borrow_mut().push(seq);
-            dbg!(seq);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -299,6 +300,136 @@ mod tests {
 
         assert_eq!(content_result.len(), (payload1.len() + 10));
         assert_eq!(&content_result[..], b"ABCDEFGHIJKLMNOPQRST1234567890");
+        assert_eq!(seqs_result[0], seq1);
+    }
+
+    // 两个包。一个包包含一部分（但不超过read buff）第二个包包含bdry
+    // 后一个带数据带fin
+    #[test]
+    fn test_octet_2pkts_fin() {
+        let seq1 = 1;
+        let payload1 = b"ABCDEFGHIJKLMNOPQRST".to_vec();
+        let pkt1 = build_pkt_payload(seq1, &payload1);
+        let _ = pkt1.decode();
+
+        let seq2 = seq1 + payload1.len() as u32;
+        let mut payload2 = b"1234567890".to_vec();
+        payload2.extend_from_slice(b"\r\n--");
+        payload2.extend_from_slice(BDRY.as_bytes());
+        let pkt2 = build_pkt_payload_fin(seq2, &payload2);
+        let _ = pkt2.decode();
+
+        let content = Rc::new(RefCell::new(Vec::new()));
+        let content_clone = Rc::clone(&content);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |data: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            content_clone.borrow_mut().extend_from_slice(data);
+            seqs_clone.borrow_mut().push(seq);
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_readoctet(callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::ReadOctet);
+
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
+
+        let content_result = content.borrow();
+        let seqs_result = seqs.borrow();
+
+        assert_eq!(content_result.len(), (payload1.len() + 10));
+        assert_eq!(&content_result[..], b"ABCDEFGHIJKLMNOPQRST1234567890");
+        assert_eq!(seqs_result[0], seq1);
+    }
+
+    // 两个包带数据。一个包包含一部分（但不超过read buff）第二个包包含bdry
+    // 第三哥包只带fin
+    #[test]
+    fn test_octet_3pkts_fin() {
+        let seq1 = 1;
+        let payload1 = b"ABCDEFGHIJKLMNOPQRST".to_vec();
+        let pkt1 = build_pkt_payload(seq1, &payload1);
+        let _ = pkt1.decode();
+
+        let seq2 = seq1 + payload1.len() as u32;
+        let mut payload2 = b"1234567890".to_vec();
+        payload2.extend_from_slice(b"\r\n--");
+        payload2.extend_from_slice(BDRY.as_bytes());
+        let pkt2 = build_pkt_payload_fin(seq2, &payload2);
+        let _ = pkt2.decode();
+
+        let seq3 = seq2 + payload2.len() as u32;
+        let pkt3 = build_pkt_fin(seq3);
+        let _ = pkt3.decode();
+
+        let content = Rc::new(RefCell::new(Vec::new()));
+        let content_clone = Rc::clone(&content);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |data: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            content_clone.borrow_mut().extend_from_slice(data);
+            seqs_clone.borrow_mut().push(seq);
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_readoctet(callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::ReadOctet);
+
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
+        protolens.run_task(&mut task, pkt3);
+
+        let content_result = content.borrow();
+        let seqs_result = seqs.borrow();
+
+        assert_eq!(content_result.len(), (payload1.len() + 10));
+        assert_eq!(&content_result[..], b"ABCDEFGHIJKLMNOPQRST1234567890");
+        assert_eq!(seqs_result[0], seq1);
+    }
+
+    // 两个包。一个包包含一部分（但不超过read buff）比bdry短,第二个包包含bdry
+    #[test]
+    fn test_octet_2pkts_short() {
+        let seq1 = 1;
+        let payload1 = b"ABCD".to_vec();
+        let pkt1 = build_pkt_payload(seq1, &payload1);
+        let _ = pkt1.decode();
+
+        let seq2 = seq1 + payload1.len() as u32;
+        let mut payload2 = b"1234567890".to_vec();
+        payload2.extend_from_slice(b"\r\n--");
+        payload2.extend_from_slice(BDRY.as_bytes());
+        let pkt2 = build_pkt_payload(seq2, &payload2);
+        let _ = pkt2.decode();
+
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |bytes: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            data_clone.borrow_mut().extend_from_slice(bytes);
+            seqs_clone.borrow_mut().push(seq);
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_readoctet(callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::ReadOctet);
+
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
+
+        let data_result = data.borrow();
+        let seqs_result = seqs.borrow();
+
+        assert_eq!(data_result.len(), (payload1.len() + 10));
+        assert_eq!(&data_result[..], b"ABCD1234567890");
         assert_eq!(seqs_result[0], seq1);
     }
 
@@ -348,7 +479,7 @@ mod tests {
         assert_eq!(seqs_result[0], seq1);
     }
 
-    // bdry 跨越buff的边界
+    // close bdry 跨越buff的边界
     #[test]
     fn test_octet_bdry_ovelay_buff() {
         let seq1 = 1;
@@ -359,12 +490,12 @@ mod tests {
         let pkt = build_pkt_payload(seq1, &payload);
         let _ = pkt.decode();
 
-        let lines = Rc::new(RefCell::new(Vec::new()));
-        let lines_clone = Rc::clone(&lines);
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
         let seqs = Rc::new(RefCell::new(Vec::new()));
         let seqs_clone = Rc::clone(&seqs);
-        let callback = move |line: &[u8], seq: u32, _cb_ctx: *mut c_void| {
-            lines_clone.borrow_mut().push(line.to_vec());
+        let callback = move |bytes: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            data_clone.borrow_mut().push(bytes.to_vec());
             seqs_clone.borrow_mut().push(seq);
         };
 
@@ -376,11 +507,47 @@ mod tests {
 
         protolens.run_task(&mut task, pkt);
 
-        let lines_result = lines.borrow();
+        let data_result = data.borrow();
         let seqs_result = seqs.borrow();
 
-        assert_eq!(lines_result.len(), 1);
-        assert_eq!(&lines_result[0], &content);
+        assert_eq!(data_result.len(), 1);
+        assert_eq!(&data_result[0], &content);
+        assert_eq!(seqs_result[0], seq1);
+    }
+
+    // dash bdry 跨越buff的边界
+    #[test]
+    fn test_octet_dash_bdry_ovelay_buff() {
+        let seq1 = 1;
+        let content = vec![b'a'; MAX_READ_BUFF - 8];
+        let mut payload = content.clone();
+        payload.extend_from_slice(b"--");
+        payload.extend_from_slice(BDRY.as_bytes());
+        let pkt = build_pkt_payload(seq1, &payload);
+        let _ = pkt.decode();
+
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |bytes: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            data_clone.borrow_mut().push(bytes.to_vec());
+            seqs_clone.borrow_mut().push(seq);
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_readoctet(callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::ReadOctet);
+
+        protolens.run_task(&mut task, pkt);
+
+        let data_result = data.borrow();
+        let seqs_result = seqs.borrow();
+
+        assert_eq!(data_result.len(), 1);
+        assert_eq!(&data_result[0], &content);
         assert_eq!(seqs_result[0], seq1);
     }
 
@@ -394,24 +561,21 @@ mod tests {
         let mut payload1 = b"1234567890".to_vec();
         payload1.extend_from_slice(b"\r\n--");
         payload1.extend_from_slice(&bdry_bytes[..mid_point]);
-        dbg!(String::from_utf8_lossy(&payload1));
         let pkt1 = build_pkt_payload(seq1, &payload1);
         let _ = pkt1.decode();
 
         let seq2 = seq1 + payload1.len() as u32;
         let payload2 = bdry_bytes[mid_point..].to_vec();
-        dbg!(String::from_utf8_lossy(&payload2));
         let pkt2 = build_pkt_payload(seq2, &payload2);
         let _ = pkt2.decode();
 
-        let content = Rc::new(RefCell::new(Vec::new()));
-        let content_clone = Rc::clone(&content);
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
         let seqs = Rc::new(RefCell::new(Vec::new()));
         let seqs_clone = Rc::clone(&seqs);
-        let callback = move |data: &[u8], seq: u32, _cb_ctx: *mut c_void| {
-            content_clone.borrow_mut().extend_from_slice(data);
+        let callback = move |bytes: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            data_clone.borrow_mut().extend_from_slice(bytes);
             seqs_clone.borrow_mut().push(seq);
-            dbg!(seq);
         };
 
         let mut protolens = Prolens::<CapPacket>::default();
@@ -423,11 +587,53 @@ mod tests {
         protolens.run_task(&mut task, pkt1);
         protolens.run_task(&mut task, pkt2);
 
-        let content_result = content.borrow();
+        let data_result = data.borrow();
         let seqs_result = seqs.borrow();
 
         let expected_data = b"1234567890".to_vec();
-        assert_eq!(&content_result[..], &expected_data[..]);
+        assert_eq!(&data_result[..], &expected_data[..]);
+        assert_eq!(seqs_result[0], seq1);
+    }
+
+    // bdry 跨越包的边界。只有一个字节
+    #[test]
+    fn test_octet_split_bdry_1_byte() {
+        let bdry_bytes = BDRY.as_bytes();
+
+        let seq1 = 1;
+        let payload1 = b"1234567890\r".to_vec();
+        let pkt1 = build_pkt_payload(seq1, &payload1);
+        let _ = pkt1.decode();
+
+        let seq2 = seq1 + payload1.len() as u32;
+        let mut payload2 = b"\n--".to_vec();
+        payload2.extend_from_slice(bdry_bytes);
+        let pkt2 = build_pkt_payload(seq2, &payload2);
+        let _ = pkt2.decode();
+
+        let data = Rc::new(RefCell::new(Vec::new()));
+        let data_clone = Rc::clone(&data);
+        let seqs = Rc::new(RefCell::new(Vec::new()));
+        let seqs_clone = Rc::clone(&seqs);
+        let callback = move |bytes: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+            data_clone.borrow_mut().extend_from_slice(bytes);
+            seqs_clone.borrow_mut().push(seq);
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_readoctet(callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::ReadOctet);
+
+        protolens.run_task(&mut task, pkt1);
+        protolens.run_task(&mut task, pkt2);
+
+        let data_result = data.borrow();
+        let seqs_result = seqs.borrow();
+
+        let expected_data = b"1234567890".to_vec();
+        assert_eq!(&data_result[..], &expected_data[..]);
         assert_eq!(seqs_result[0], seq1);
     }
 }

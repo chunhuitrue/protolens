@@ -16,6 +16,7 @@ use crate::content_length;
 use crate::content_type;
 use crate::content_type_ext;
 use crate::packet::*;
+use memchr::memmem::Finder;
 use nom::{
     IResult,
     branch::alt,
@@ -86,6 +87,7 @@ where
             } else if header_ret.content_len.is_some() {
                 let params = HttpBodyParams {
                     bdry: "",
+                    bdry_finder: None,
                     cb_body_start: cb_http.body_start.as_ref(),
                     cb_body: cb_http.body.as_ref(),
                     cb_body_stop: cb_http.body_stop.as_ref(),
@@ -175,6 +177,8 @@ where
         cb_http: &HttpCallbacks,
         cb_ctx: *mut c_void,
     ) -> Result<(), ()> {
+        let bdry_finder = Finder::new(bdry);
+
         let _ = stm.readline_str().await?;
         loop {
             let header_ret =
@@ -186,6 +190,7 @@ where
             } else {
                 let params = HttpBodyParams {
                     bdry,
+                    bdry_finder: Some(&bdry_finder),
                     cb_body_start: cb_http.body_start.as_ref(),
                     cb_body: cb_http.body.as_ref(),
                     cb_body_stop: cb_http.body_stop.as_ref(),
@@ -216,11 +221,17 @@ where
         ce: &Option<Vec<Encoding>>,
         te: &Option<Vec<Encoding>>,
     ) -> Result<(), ()> {
+        if params.bdry_finder.is_none() {
+            return Err(());
+        }
+
         if let Some(cb) = params.cb_body_start {
             cb.borrow_mut()(params.cb_ctx, params.dir);
         }
         loop {
-            let (ret, content, seq) = stm.read_mime_octet(params.bdry).await?;
+            let (ret, content, seq) = stm
+                .read_mime_octet2(params.bdry_finder.unwrap(), params.bdry)
+                .await?;
 
             if let Some(cb) = params.cb_body {
                 cb.borrow_mut()(content, seq, params.cb_ctx, params.dir, ce, te);
@@ -280,6 +291,7 @@ where
 
             let params = HttpBodyParams {
                 bdry: "",
+                bdry_finder: None,
                 cb_body_start: None,
                 cb_body: cb_http.body.as_ref(),
                 cb_body_stop: None,
@@ -437,6 +449,7 @@ impl HeaderRet {
 
 struct HttpBodyParams<'a> {
     bdry: &'a str,
+    bdry_finder: Option<&'a Finder<'a>>,
     cb_body_start: Option<&'a CbBodyEvt>,
     cb_body: Option<&'a CbHttpBody>,
     cb_body_stop: Option<&'a CbBodyEvt>,
