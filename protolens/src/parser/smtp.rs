@@ -378,6 +378,7 @@ fn starts_with_helo(input: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MAX_PKT_BUFF;
     use crate::SMTP_PORT;
     use crate::TransferEncoding;
     use crate::test_utils::*;
@@ -1679,6 +1680,280 @@ mod tests {
             protolens.run_task(&mut task, pkt);
         }
         dbg!(task);
+
+        assert_eq!(
+            captured_user.borrow().as_slice(),
+            b"dXNlcjEyMzQ1QGV4YW1wbGUxMjMuY29t"
+        );
+        assert_eq!(*captured_user_seq.borrow(), 1341098188);
+        assert_eq!(captured_pass.borrow().as_slice(), b"MTIzNDU2Nzg=");
+        assert_eq!(*captured_pass_seq.borrow(), 1341098222);
+        assert_eq!(
+            std::str::from_utf8(&captured_mailfrom.borrow()).unwrap(),
+            "user12345@example123.com"
+        );
+
+        let rcpt_guard = captured_rcpt.borrow();
+        assert_eq!(rcpt_guard.len(), 1);
+        assert_eq!(
+            std::str::from_utf8(&rcpt_guard[0]).unwrap(),
+            "user12345@example123.com"
+        );
+
+        let expected_headers = [
+            "Date: Mon, 27 Jun 2022 17:01:55 +0800\r\n",
+            "From: \"user12345@example123.com\" <user12345@example123.com>\r\n",
+            "To: =?GB2312?B?wO60urvU?= <user12345@example123.com>\r\n",
+            "Subject: biaoti\r\n",
+            "X-Priority: 3\r\n",
+            "X-Has-Attach: no\r\n",
+            "X-Mailer: Foxmail 7.2.19.158[cn]\r\n",
+            "Mime-Version: 1.0\r\n",
+            "Message-ID: <202206271701548584972@example123.com>\r\n",
+            "Content-Type: multipart/alternative;\r\n",
+            "\tboundary=\"----=_001_NextPart572182624333_=----\"\r\n",
+            "\r\n",
+            "Content-Type: text/plain;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: base64\r\n",
+            "\r\n",
+            "Content-Type: text/html;\r\n",
+            "\tcharset=\"GB2312\"\r\n",
+            "Content-Transfer-Encoding: quoted-printable\r\n",
+            "\r\n",
+        ];
+
+        let headers_guard = captured_headers.borrow();
+        assert_eq!(headers_guard.len(), expected_headers.len());
+        for (idx, expected) in expected_headers.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&headers_guard[idx]).unwrap(), *expected);
+        }
+
+        let bodies_guard = captured_bodies.borrow();
+        assert_eq!(bodies_guard.len(), 2);
+
+        let body0 = &bodies_guard[0];
+        let body0_str = std::str::from_utf8(body0).unwrap();
+        assert!(body0_str.contains(
+            "aGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRk\r\n"
+        ));
+        assert!(body0_str.contains(
+            "ZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRkaGVsbG8gZGRkZGRkZGRkZGRkZGRkZGRk\r\n"
+        ));
+        assert!(body0_str.contains("DQo=\r\n"));
+
+        let body1 = &bodies_guard[1];
+        let body1_str = std::str::from_utf8(body1).unwrap();
+        assert!(body1_str.contains(
+            "<html><head><meta http-equiv=3D\"content-type\" content=3D\"text/html; charse=\r\n"
+        ));
+        assert!(body1_str.contains(
+            "nd-color: transparent;\">hello dddddddddddddddddd</span><span style=3D\"line=\r\n"
+        ));
+        assert!(body1_str.contains("y></html>")); // 最后的\r\n不属于body
+
+        let expected_srv = [
+            "220 smtp.qq.com Esmtp QQ QMail Server",
+            "250-smtp.qq.com",
+            "250-PIPELINING",
+            "250-SIZE 73400320",
+            "250-STARTTLS",
+            "250-AUTH LOGIN PLAIN",
+            "250-AUTH=LOGIN",
+            "250-MAILCOMPRESS",
+            "250 8BITMIME",
+            "334 VXNlcm5hbWU6",
+            "334 UGFzc3dvcmQ6",
+            "235 Authentication successful",
+            "250 Ok",
+            "250 Ok",
+            "354 End data with <CR><LF>.<CR><LF>",
+            "250 Ok: queued as ",
+            "221 Bye",
+        ];
+
+        let srv_guard = captured_srv.borrow();
+        assert_eq!(srv_guard.len(), expected_srv.len());
+        for (idx, expected) in expected_srv.iter().enumerate() {
+            assert_eq!(std::str::from_utf8(&srv_guard[idx]).unwrap(), *expected);
+        }
+
+        let tes = captured_tes.borrow();
+        assert_eq!(tes.len(), 2);
+        assert_eq!(tes[0], Some(TransferEncoding::Base64));
+        assert_eq!(tes[1], Some(TransferEncoding::QuotedPrintable));
+    }
+
+    // 数据包倒序run。验证bench中的倒序是否是走了错误路径才提高性能的？
+    // 但parser会根据前几个包确认方向，所以需要保留在前
+    #[test]
+    fn test_smtp_parser_rev() {
+        let project_root = env::current_dir().unwrap();
+        let file_path = project_root.join("tests/pcap/smtp.pcap");
+        let mut cap = Capture::init(file_path).unwrap();
+
+        let captured_user = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_user_seq = Rc::new(RefCell::new(0u32));
+        let captured_pass = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_pass_seq = Rc::new(RefCell::new(0u32));
+        let captured_mailfrom = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_rcpt = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_headers = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let captured_bodies = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let current_body = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let captured_srv = Rc::new(RefCell::new(Vec::<Vec<u8>>::new()));
+        let current_te = Rc::new(RefCell::new(None));
+        let captured_tes = Rc::new(RefCell::new(Vec::new()));
+
+        let user_callback = {
+            let user_clone = captured_user.clone();
+            let seq_clone = captured_user_seq.clone();
+            move |user: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut user_guard = user_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *user_guard = user.to_vec();
+                *seq_guard = seq;
+                dbg!("in callback", std::str::from_utf8(user).unwrap(), seq);
+            }
+        };
+
+        let pass_callback = {
+            let pass_clone = captured_pass.clone();
+            let seq_clone = captured_pass_seq.clone();
+            move |pass: &[u8], seq: u32, _cb_ctx: *mut c_void| {
+                let mut pass_guard = pass_clone.borrow_mut();
+                let mut seq_guard = seq_clone.borrow_mut();
+                *pass_guard = pass.to_vec();
+                *seq_guard = seq;
+                dbg!("pass callback", std::str::from_utf8(pass).unwrap(), seq);
+            }
+        };
+
+        let mailfrom_callback = {
+            let mailfrom_clone = captured_mailfrom.clone();
+            move |mailfrom: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut mailfrom_guard = mailfrom_clone.borrow_mut();
+                *mailfrom_guard = mailfrom.to_vec();
+            }
+        };
+
+        let rcpt_callback = {
+            let rcpt_clone = captured_rcpt.clone();
+            move |rcpt: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut rcpt_guard = rcpt_clone.borrow_mut();
+                rcpt_guard.push(rcpt.to_vec());
+            }
+        };
+
+        let header_callback = {
+            let headers_clone = captured_headers.clone();
+            move |header: &[u8], _seq: u32, _cb_ctx: *mut c_void, _dir: Direction| {
+                if header == b"\r\n" {
+                    dbg!("header cb. header end", header);
+                }
+                let mut headers_guard = headers_clone.borrow_mut();
+                headers_guard.push(header.to_vec());
+            }
+        };
+
+        let body_start_callback = {
+            let current_body_clone = current_body.clone();
+            let current_te = current_te.clone();
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
+                let mut body_guard = current_body_clone.borrow_mut();
+                *body_guard = Vec::new();
+                *current_te.borrow_mut() = None;
+            }
+        };
+
+        let body_callback = {
+            let current_body_clone = current_body.clone();
+            let current_te = current_te.clone();
+            let captured_tes = captured_tes.clone();
+            move |body: &[u8],
+                  _seq: u32,
+                  _cb_ctx: *mut c_void,
+                  _dir: Direction,
+                  te: Option<TransferEncoding>| {
+                let mut body_guard = current_body_clone.borrow_mut();
+                body_guard.extend_from_slice(body);
+
+                let mut current_te = current_te.borrow_mut();
+                if current_te.is_none() {
+                    *current_te = te.clone();
+                    captured_tes.borrow_mut().push(te);
+                } else {
+                    assert_eq!(*current_te, te, "TransferEncoding changed within same body");
+                }
+            }
+        };
+
+        let body_stop_callback = {
+            let current_body_clone = current_body.clone();
+            let bodies_clone = captured_bodies.clone();
+            move |_cb_ctx: *mut c_void, _dir: Direction| {
+                let body_guard = current_body_clone.borrow();
+                let mut bodies_guard = bodies_clone.borrow_mut();
+                bodies_guard.push(body_guard.clone());
+                println!(
+                    "Body stop callback triggered, body size: {} bytes",
+                    body_guard.len()
+                );
+            }
+        };
+
+        let srv_callback = {
+            let srv_clone = captured_srv.clone();
+            move |line: &[u8], _seq: u32, _cb_ctx: *mut c_void| {
+                let mut srv_guard = srv_clone.borrow_mut();
+                srv_guard.push(line.to_vec());
+            }
+        };
+
+        let mut protolens = Prolens::<CapPacket>::default();
+        protolens.set_cb_smtp_user(user_callback);
+        protolens.set_cb_smtp_pass(pass_callback);
+        protolens.set_cb_smtp_mailfrom(mailfrom_callback);
+        protolens.set_cb_smtp_rcpt(rcpt_callback);
+        protolens.set_cb_smtp_header(header_callback);
+        protolens.set_cb_smtp_body_start(body_start_callback);
+        protolens.set_cb_smtp_body(body_callback);
+        protolens.set_cb_smtp_body_stop(body_stop_callback);
+        protolens.set_cb_smtp_srv(srv_callback);
+
+        let mut task = protolens.new_task(TransProto::Tcp);
+        protolens.set_task_parser(&mut task, L7Proto::Smtp);
+
+        let mut packets = Vec::new();
+        loop {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let pkt = cap.next_packet(now);
+            if pkt.is_none() {
+                break;
+            }
+            let pkt = pkt.unwrap();
+            if pkt.decode().is_err() {
+                continue;
+            }
+
+            packets.push(pkt);
+        }
+        let _: () = assert!(MAX_PKT_BUFF >= packets.len());
+
+        let mut packets_rev = Vec::new();
+
+        if packets.len() >= 2 {
+            packets_rev.push(packets[0].clone());
+            packets_rev.push(packets[1].clone());
+        }
+        packets_rev.extend(packets[2..].iter().rev().cloned());
+
+        for pkt in packets_rev {
+            protolens.run_task(&mut task, pkt);
+        }
 
         assert_eq!(
             captured_user.borrow().as_slice(),

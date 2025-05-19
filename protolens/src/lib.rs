@@ -879,6 +879,10 @@ pub mod bench {
         readline_new_task(c, 100, "readline100_new_task");
     }
 
+    pub fn readline100_rev(c: &mut Criterion) {
+        readline_rev(c, 100, "readline100_rev");
+    }
+
     pub fn readline500(c: &mut Criterion) {
         readline(c, 500, "readline500");
     }
@@ -895,12 +899,20 @@ pub mod bench {
         readline_new_task_flame(c, 500, "readline500_new_task_flame");
     }
 
+    pub fn readline500_rev(c: &mut Criterion) {
+        readline_rev(c, 500, "readline500_rev");
+    }
+
     pub fn readline1000(c: &mut Criterion) {
         readline(c, 1000, "readline1000");
     }
 
     pub fn readline1000_new_task(c: &mut Criterion) {
         readline_new_task(c, 1000, "readline1000_new_task");
+    }
+
+    pub fn readline1000_rev(c: &mut Criterion) {
+        readline_rev(c, 1000, "readline1000_rev");
     }
 
     fn readline(c: &mut Criterion, payload_len: usize, name: &str) {
@@ -1045,6 +1057,43 @@ pub mod bench {
         packets
     }
 
+    // 为了让数据包批处理，反序run，这样就会全都push到pktsrm中，最后一个包到来的时候会一起进入parser
+    fn readline_rev(c: &mut Criterion, payload_len: usize, name: &str) {
+        #[allow(clippy::assertions_on_constants)]
+        let _: () = assert!(MAX_PKT_BUFF >= PKT_NUM);
+
+        let packets = readline_packets(payload_len);
+
+        let mut group = c.benchmark_group("readline");
+        group.throughput(Throughput::Bytes((payload_len * PKT_NUM) as u64));
+        group.bench_function(name, |b| {
+            b.iter_with_setup(
+                || {
+                    let mut packets_clone = Vec::new();
+                    if packets.len() >= 4 {
+                        packets_clone.push(packets[0].clone());
+                        packets_clone.push(packets[1].clone());
+                        packets_clone.push(packets[2].clone());
+                        packets_clone.push(packets[3].clone());
+                    }
+                    packets_clone.extend(packets[4..].iter().rev().cloned());
+
+                    let protolens = black_box(Prolens::<Box<CapPacket>>::default());
+                    let mut task = black_box(protolens.new_task(TransProto::Tcp));
+                    protolens.set_task_parser(&mut task, L7Proto::Readline);
+
+                    (protolens, task, packets_clone)
+                },
+                |(mut protolens, mut task, packets)| {
+                    for pkt in packets {
+                        black_box(protolens.run_task(&mut task, pkt));
+                    }
+                },
+            )
+        });
+        group.finish();
+    }
+
     // 预先分配task，只测解码过程
     pub fn http(c: &mut Criterion) {
         bench_proto(c, "http", "http_mime", TransProto::Tcp, L7Proto::Http);
@@ -1088,6 +1137,10 @@ pub mod bench {
             TransProto::Tcp,
             L7Proto::Smtp,
         );
+    }
+
+    pub fn smtp_rev(c: &mut Criterion) {
+        bench_proto_rev(c, "smtp_rev", "smtp", TransProto::Tcp, L7Proto::Smtp);
     }
 
     pub fn pop3(c: &mut Criterion) {
@@ -1250,5 +1303,46 @@ pub mod bench {
         }
 
         (packets, total_bytes.try_into().unwrap())
+    }
+
+    fn bench_proto_rev(
+        c: &mut Criterion,
+        name: &str,
+        pcap_name: &str,
+        l4: TransProto,
+        l7: L7Proto,
+    ) {
+        let (packets, total_bytes) = read_pcap_packets(pcap_name);
+        #[allow(clippy::assertions_on_constants)]
+        let _: () = assert!(MAX_PKT_BUFF >= packets.len());
+
+        let mut group = c.benchmark_group(name);
+        group.throughput(Throughput::Bytes(total_bytes as u64));
+        group.bench_function(name, |b| {
+            b.iter_with_setup(
+                || {
+                    let mut packets_clone = Vec::new();
+                    if packets.len() >= 4 {
+                        packets_clone.push(packets[0].clone());
+                        packets_clone.push(packets[1].clone());
+                        packets_clone.push(packets[2].clone());
+                        packets_clone.push(packets[3].clone());
+                    }
+                    packets_clone.extend(packets[4..].iter().rev().cloned());
+
+                    let protolens = black_box(Prolens::<Box<CapPacket>>::default());
+                    let mut task = black_box(protolens.new_task(l4));
+                    protolens.set_task_parser(&mut task, l7);
+
+                    (protolens, task, packets_clone)
+                },
+                |(mut protolens, mut task, packets)| {
+                    for pkt in packets {
+                        black_box(protolens.run_task(&mut task, pkt));
+                    }
+                },
+            )
+        });
+        group.finish();
     }
 }
