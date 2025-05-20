@@ -32,9 +32,9 @@ Protolens 是一个使用 Rust 编写的高性能网络协议解码与还原库�
 
 ## 性能
 * 环境
-rust 1.86.0
-Mac mini m4 Sequoia 15.1.1
-linux: Intel(R) Xeon(R) CPU E5-2650 v3 @ 2.30GHz. 40核  Ubuntu 24.04.2 LTS   6.8.0-59-generic  
+  * rust 1.87.0
+  * Mac mini m4 Sequoia 15.1.1
+  * linux: Intel(R) Xeon(R) CPU E5-2650 v3 @ 2.30GHz. 40核  Ubuntu 24.04.2 LTS   6.8.0-59-generic  
 
 * 说明
 其中new_task 为单纯新建解码器，不包含解码过程。因为解码过程是按行读取，所以用readline系列单独测试读取一行的性能，这种方式最能代表http smtp类协议的解码性能。每行25个字节，一共100个包。readline100代表每个包100个字节，readline500代表每个包500个字节。readline100_new_task代表新建解码器+解码过程。http，smtp等为实际的pcap数据包。但smtp和pop3最具代表性，因为这两个测试用例的pcap中完全是逐行构造的。其余的有按size读取，所以更快。统计的时候以字节为单位，没有计算数据包头部仅计算数据包的载荷。

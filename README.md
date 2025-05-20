@@ -32,9 +32,9 @@ Protolens is a high-performance network protocol analysis and reconstruction lib
           
 ## Performance
 * Environment
-rust 1.86.0
-Mac mini m4 Sequoia 15.1.1
-linux: Intel(R) Xeon(R) CPU E5-2650 v3 @ 2.30GHz. 40 cores  Ubuntu 24.04.2 LTS   6.8.0-59-generic  
+  * rust 1.87.0
+  * Mac mini m4 Sequoia 15.1.1
+  * linux: Intel(R) Xeon(R) CPU E5-2650 v3 @ 2.30GHz. 40 cores  Ubuntu 24.04.2 LTS   6.8.0-59-generic  
 
 * Description
 The new_task represents creating a new decoder without including the decoding process. Since the decoding process is done by reading line by line, the readline series is used to separately test the performance of reading one line, which best represents the decoding performance of protocols like http and smtp. Each line has 25 bytes, with a total of 100 packets. readline100 represents 100 bytes per packet, readline500 represents 500 bytes per packet. readline100_new_task represents creating a new decoder plus the decoding process. http, smtp, etc. are actual pcap packet data. However, smtp and pop3 are most representative because the pcap in these test cases is completely constructed line by line. The others have size-based reading, so they are faster. When calculating statistics, bytes are used as the unit, and only the packet payload is counted without including the packet header.
@@ -120,6 +120,37 @@ According to the instructions in [`c_example/README`](c_example/README):
     DYLD_LIBRARY_PATH=../target/debug/ ./smtp
     ```
     *(If you compiled the release version, replace `debug` with `release`)*
+          
+## Usage
+
+protolens is used for packet processing, TCP stream reassembly, protocol parsing, and protocol reconstruction scenarios. As a library, it is typically used in network security monitoring, network traffic analysis, and network traffic reconstruction engines.
+
+Traffic engines usually have multiple threads, with each thread having its own flow table. Each flow node is a five-tuple. protolens is based on this architecture and cannot be used across threads.
+
+Each thread should initialize a protolens instance. When creating a new node for a connection in your flow table, you should create a new task for this connection.
+
+To get results, you need to set callback functions for each field of each protocol you're interested in. For example, after setting protolens.set_cb_smtp_user(user_callback), the SMTP user field will be called back through user_callback.
+
+Afterward, whenever a packet arrives for this connection, it must be added to this task through the run method.
+
+However, protolens's task has no protocol recognition capability internally. Although packets are passed into the task, the task hasn't started decoding internally. It will cache a certain number of packets, default is 128. So you should tell the task what protocol this connection is through set_task_parser before exceeding the cached packets. After that, the task will start decoding and return the reconstructed content to you through callback functions.
+
+protolens will also be compiled as a C-callable shared object. The usage process is similar to Rust.
+
+Please refer to the rust_example directory and c_example directory for specific usage. For more detailed callback function usage, you can refer to the test cases in smtp.rs.
+
+You can get protocol fields through callback functions, such as SMTP user, email content, HTTP header fields, request line, body, etc. When you get these data in the callback function, they are references to internal data. So, you can process them immediately at this time. But if you need to continue using them later, you need to make a copy and store it in your specified location. You cannot keep the references externally. Rust programs will prevent you from doing this, but in C programs as pointers, if you only keep the pointer for subsequent processes, it will point to the wrong place.
+
+If you want to get the original TCP stream, there are corresponding callback functions. At this time, you get segments of raw bytes. But it's a continuous stream after reassembly. It also has corresponding sequence numbers.
+
+Suppose you need to audit protocol fields, such as checking if the HTTP URL meets requirements. You can register corresponding callback functions. In the function, make judgments or save them on the flow node for subsequent module judgment. This is the most direct way to use it.
+
+The above can only see independent protocol fields like URL, host, etc. Suppose you have this requirement: locate the URL position in the original TCP stream because you also want to find what's before and after the URL. You need to do this:
+
+Through the original TCP stream callback function, you can get the original TCP stream and sequence number. Copy it to a buffer you maintain. Through the URL callback function, get the URL and corresponding sequence. At this time, you can determine the URL's position in the buffer based on the sequence. This way, you can process things like what content is after and before the URL in a continuous buffer space.
+
+Moreover, you can select data in the buffer based on the sequence. For example, if you only need to process the data after the URL, you can delete the data before it based on the URL's sequence. This way, you can process the data after the URL in a continuous buffer space.
+        
 
 ## License
 
