@@ -29,7 +29,38 @@ Protolens is a high-performance network protocol analysis and reconstruction lib
 - **`c_example`**: [`c_example`](c_example) directory. A C language example project using the `protolens` C dynamic library.
     - Includes examples like `simple.c`, `simple_thread.c`, `smtp.c`.
     - Demonstrates how to integrate `protolens` into C projects.
+          
+## Performance
+* Environment
+rust 1.86.0
+Mac mini m4 Sequoia 15.1.1
+linux: Intel(R) Xeon(R) CPU E5-2650 v3 @ 2.30GHz. 40 cores  Ubuntu 24.04.2 LTS   6.8.0-59-generic  
 
+* Description
+The new_task represents creating a new decoder without including the decoding process. Since the decoding process is done by reading line by line, the readline series is used to separately test the performance of reading one line, which best represents the decoding performance of protocols like http and smtp. Each line has 25 bytes, with a total of 100 packets. readline100 represents 100 bytes per packet, readline500 represents 500 bytes per packet. readline100_new_task represents creating a new decoder plus the decoding process. http, smtp, etc. are actual pcap packet data. However, smtp and pop3 are most representative because the pcap in these test cases is completely constructed line by line. The others have size-based reading, so they are faster. When calculating statistics, bytes are used as the unit, and only the packet payload is counted without including the packet header.
+
+* Throughput
+
+| Test Item | mamini m4 | linux | linux jemalloc |
+|----------|------------|--------|---------------|
+| new_task | 3.1871 Melem/s | 1.4949 Melem/s | 2.6928 Melem/s |
+| readline100 | 1.0737 GiB/s | 110.24 MiB/s | 223.94 MiB/s |
+| readline100_new_task | 1.0412 GiB/s | 108.03 MiB/s | 219.07 MiB/s |
+| readline500 | 1.8520 GiB/s | 333.28 MiB/s | 489.13 MiB/s |
+| readline500_new_task | 1.8219 GiB/s | 328.57 MiB/s | 479.83 MiB/s |
+| readline1000 | 1.9800 GiB/s | 455.42 MiB/s | 578.43 MiB/s |
+| readline1000_new_task | 1.9585 GiB/s | 443.52 MiB/s | 574.97 MiB/s |
+| http | 1.7723 GiB/s | 575.57 MiB/s | 560.65 MiB/s |
+| http_new_task | 1.6484 GiB/s | 532.36 MiB/s | 524.03 MiB/s |
+| smtp | 2.6351 GiB/s | 941.07 MiB/s | 831.52 MiB/s |
+| smtp_new_task | 2.4620 GiB/s | 859.07 MiB/s | 793.54 MiB/s |
+| pop3 | 1.8620 GiB/s | 682.17 MiB/s | 579.70 MiB/s |
+| pop3_new_task | 1.8041 GiB/s | 648.92 MiB/s | 575.87 MiB/s |
+| imap | 5.0228 GiB/s | 1.6325 GiB/s | 1.2515 GiB/s |
+| imap_new_task | 4.9488 GiB/s | 1.5919 GiB/s | 1.2562 GiB/s |
+| sip (udp) | 2.2227 GiB/s | 684.06 MiB/s | 679.15 MiB/s |
+| sip_new_task (udp) | 2.1643 GiB/s | 659.30 MiB/s | 686.12 MiB/s |
+        
 ## Build and Run
 
 ### Rust Part (protolens library and rust_example)
@@ -58,7 +89,12 @@ This project is managed using Cargo workspace (see [`Cargo.toml`](Cargo.toml)).
     cd protolens
     ```
     ```bash
-    cargo bench --features bench
+    cargo bench --features bench smtp_new_task
+    ```
+
+    with jemalloc:
+    ```bash
+    cargo bench --features bench,jemalloc smtp_new_task
     ```
 
 ### C Example (c_example)
