@@ -74,17 +74,20 @@ typedef struct {
     uint8_t octets[16];
 } CIpAddr;
 
+typedef void (*PacketFree)(void *pkt_ptr);
+
 typedef struct {
-    TransProto (*trans_proto)(void* pkt_ptr);
-    CIpAddr (*sip)(void* pkt_ptr);
-    CIpAddr (*dip)(void* pkt_ptr);
-    uint16_t (*tu_sport)(void* pkt_ptr);
-    uint16_t (*tu_dport)(void* pkt_ptr);
-    uint32_t (*seq)(void* pkt_ptr);
-    bool (*syn)(void* pkt_ptr);
-    bool (*fin)(void* pkt_ptr);
-    size_t (*payload_len)(void* pkt_ptr);
-    const uint8_t* (*payload)(void* pkt_ptr);
+    TransProto (*trans_proto)(void *pkt_ptr);
+    CIpAddr (*sip)(void *pkt_ptr);
+    CIpAddr (*dip)(void *pkt_ptr);
+    uint16_t (*tu_sport)(void *pkt_ptr);
+    uint16_t (*tu_dport)(void *pkt_ptr);
+    uint32_t (*seq)(void *pkt_ptr);
+    bool (*syn)(void *pkt_ptr);
+    bool (*fin)(void *pkt_ptr);
+    size_t (*payload_len)(void *pkt_ptr);
+    const uint8_t* (*payload)(void *pkt_ptr);
+    PacketFree free;
 } PacketVTable;
 
 typedef void (*CbStm)(const uint8_t *data, size_t data_len, uint32_t seq, const void *ctx);

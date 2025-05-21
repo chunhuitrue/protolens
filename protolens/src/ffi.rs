@@ -30,6 +30,7 @@ pub struct PacketVTable {
     pub fin: extern "C" fn(*mut std::ffi::c_void) -> bool,
     pub payload_len: extern "C" fn(*mut std::ffi::c_void) -> usize,
     pub payload: extern "C" fn(*mut std::ffi::c_void) -> *const u8,
+    pub free: extern "C" fn(*mut std::ffi::c_void),
 }
 
 extern "C" fn missing_trans_proto(_: *mut std::ffi::c_void) -> TransProto {
@@ -63,6 +64,10 @@ extern "C" fn missing_ptr(_: *mut std::ffi::c_void) -> *const u8 {
     panic!("VTABLE not initialized")
 }
 
+extern "C" fn missing_free(_: *mut std::ffi::c_void) {
+    panic!("VTABLE not initialized")
+}
+
 thread_local! {
     static VTABLE: RefCell<PacketVTable> = RefCell::new(PacketVTable {
         trans_proto: missing_trans_proto,
@@ -75,6 +80,7 @@ thread_local! {
         fin: missing_bool,
         payload_len: missing_usize,
         payload: missing_ptr,
+        free: missing_free,
     });
 }
 
@@ -153,6 +159,12 @@ impl crate::Packet for FfiPacket {
             let len = self.payload_len();
             std::slice::from_raw_parts(ptr, len)
         })
+    }
+}
+
+impl Drop for FfiPacket {
+    fn drop(&mut self) {
+        VTABLE.with(|vtable| (vtable.borrow().free)(self.packet_ptr))
     }
 }
 

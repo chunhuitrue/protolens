@@ -81,6 +81,10 @@ const uint8_t* packet_payload(void* packet) {
     return pkt->payload;
 }
 
+void packet_free(void* pkt) {
+    return;
+}
+
 static uint8_t payload[] = "EHLO\r\nAUTH LOGIN\r\nUSER root\r\nPASS 1234\r\n";
 static TestPacket test_packet = {
     .seq         = 1,
@@ -119,6 +123,7 @@ void* thread_main(void* arg) {
         .fin         = packet_fin,
         .payload_len = packet_payload_len,
         .payload     = packet_payload,
+        .free        = packet_free,
     };
     protolens_init_vtable(vtable);
     printf("after protolens_init_vtable\n");

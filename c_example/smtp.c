@@ -86,6 +86,10 @@ const uint8_t* packet_payload(void* packet) {
     return pkt->payload;
 }
 
+void packet_free(void* pkt) {
+    return;
+}
+
 void callback_task_c2s(const uint8_t *data, size_t data_len, uint32_t seq, const void *ctx) {
     printf("Received task c2s data (seq=%u): len: %d\n", seq, (int)data_len);
 }
@@ -176,6 +180,7 @@ int main(void) {
         .fin         = packet_fin,
         .payload_len = packet_payload_len,
         .payload     = packet_payload,
+        .free        = packet_free,
     };
     protolens_init_vtable(vtable);
 
