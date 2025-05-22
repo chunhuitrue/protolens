@@ -1,4 +1,4 @@
-# Protolens: High-Performance Network Protocol Analysis Library
+# Protolens: High-Performance TCP Reassembly And Application-layer Analysis Library
 
 Protolens is a high-performance network protocol analysis and reconstruction library written in Rust. It aims to provide efficient and accurate network traffic parsing capabilities, excelling particularly in handling TCP stream reassembly and complete reconstruction of application-layer protocols.
 
@@ -17,19 +17,6 @@ Protolens is a high-performance network protocol analysis and reconstruction lib
     *   Offline PCAP Protocol Parsing
     *   Protocol Analysis Research
 
-## Project Structure
-
-- **`protolens`**: [`protolens`](protolens) directory. The core library implementing TCP stream reassembly and protocol parsing logic.
-    - Compiles into a Rust library (`rlib`) and a C dynamic library (`cdylib`).
-    - Includes benchmarks (`benches`).
-- **`imap-proto`**: [`imap-proto`](imap-proto) directory. (Derived from [djc/tokio-imap](https://github.com/djc/tokio-imap)). This project uses parts of its code with minor modifications.
-- **`rust_example`**: [`rust_example`](rust_example) directory. A Rust example project using the `protolens` library.
-    - Demonstrates how to use `protolens` to process online packets using pcap as an example.
-    - More examples can be found in the test cases.
-- **`c_example`**: [`c_example`](c_example) directory. A C language example project using the `protolens` C dynamic library.
-    - Includes examples like `simple.c`, `simple_thread.c`, `smtp.c`.
-    - Demonstrates how to integrate `protolens` into C projects.
-          
 ## Performance
 * Environment
   * rust 1.87.0

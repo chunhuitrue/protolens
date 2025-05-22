@@ -3,9 +3,9 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <stdint.h>
-#include "../protolens/dist/protolens.h"
+#include "../dist/protolens.h"
 
-#define SMTP_PCAP "../protolens/tests/pcap/smtp.pcap"
+#define SMTP_PCAP "../tests/pcap/smtp.pcap"
 
 typedef struct {
     uint32_t       seq;

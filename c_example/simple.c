@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include "../protolens/dist/protolens.h"
+#include "../dist/protolens.h"
 
 // 模拟一个简单的数据包结构
 typedef struct {

@@ -1,4 +1,4 @@
-# Protolens: 高性能网络协议分析库
+# Protolens: 高性能流重组络协议解析库
 
 Protolens 是一个使用 Rust 编写的高性能网络协议解码与还原库。它旨在提供高效、准确的网络流量重组，协议解码，协议还原能力。
 
@@ -16,19 +16,6 @@ Protolens 是一个使用 Rust 编写的高性能网络协议解码与还原库�
     *   在线实时网络流量协议解析
     *   离线 pcap 协议解析
     *   协议分析研究
-
-## 项目结构
-
-- **`protolens`**: [`protolens`](protolens) 目录，核心库，实现了TCP流重组和协议解析逻辑。
-    - 编译为 Rust 库 (`rlib`) 和 C 动态库 (`cdylib`)。
-    - 包含基准测试 (`benches`)。
-- **`imap-proto`**: [`imap-proto`](imap-proto) 目录（源自 [djc/tokio-imap](https://github.com/djc/tokio-imap)），本项目使用到了其中的部分代码，并作了小幅改动。
-- **`rust_example`**: [`rust_example`](rust_example) 目录，使用 `protolens` 库的 Rust 示例项目。
-    - 以 pcap 为例，演示了如何调用 `protolens` 处理在线数据包。
-    - 更多示例可以参考测试用例。
-- **`c_example`**: [`c_example`](c_example) 目录，使用 `protolens` C 动态库的 C 语言示例项目。
-    - 包含 `simple.c`, `simple_thread.c`, `smtp.c` 等示例。
-    - 演示了 C 项目如何集成 `protolens`。
 
 ## 性能
 * 环境

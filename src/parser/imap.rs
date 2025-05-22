@@ -19,7 +19,7 @@ use crate::header;
 use crate::mime_body;
 use crate::packet::*;
 use crate::preamble;
-use imap_proto::{
+use imapprotolens::{
     AttributeValue2, BodyStructParser2, ContentEncoding, follow_rsp_fetch, rsp_fetch,
 };
 use memchr::memmem::Finder;
