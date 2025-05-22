@@ -1,3 +1,0 @@
-cargo run --example protolens_example -- ./tests/pcap/smtp.pcap
-
-

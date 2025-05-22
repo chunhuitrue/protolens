@@ -59,22 +59,14 @@ This project is managed using Cargo workspace (see [`Cargo.toml`](Cargo.toml)).
     ```bash
     cargo build
     ```
-    This will compile the `protolens` library (rlib and cdylib), the `imap-proto` library, and the `rust_example` executable. Build artifacts are located in the `target/` directory at the root.
 
 2.  **Run Rust Example**:
-    According to the instructions in [`rust_example/README`](rust_example/README), run the following commands in the project root directory:
-    ```bash
-    cd rust_example
-    ```
     ```bash
     cargo run -- ../protolens/tests/pcap/smtp.pcap
     ```
 
 3.  **Run Benchmarks (protolens)**:
     Requires the `bench` feature to be enabled. Run the following commands in the project root directory:
-    ```bash
-    cd protolens
-    ```
     ```bash
     cargo bench --features bench smtp_new_task
     ```

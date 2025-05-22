@@ -59,22 +59,12 @@ Protolens 是一个使用 Rust 编写的高性能网络协议解码与还原库�
     ```bash
     cargo build
     ```
-    这将编译 `protolens` 库 (rlib 和 cdylib)、`imap-proto` 库以及 `rust_example` 可执行文件。编译产物位于根目录下的 `target/` 文件夹。
-
 2.  **运行 Rust 示例**:
-    根据 [`rust_example/README`](rust_example/README) 的说明，在项目根目录运行：
     ```bash
-    cd rust_example
+    cargo run --example protolens_example -- ./tests/pcap/smtp.pcap
     ```
-    ```bash
-    cargo run -- ../protolens/tests/pcap/smtp.pcap
-    ```
-
 3.  **运行基准测试 (protolens)**:
     需要启用 `bench` feature。在项目根目录运行：
-    ```bash
-    cd protolens
-    ```
     ```bash
     cargo bench --features bench smtp_new_task
     ```

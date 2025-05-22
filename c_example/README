@@ -1,5 +1,0 @@
-# 编译
-make
-
-# 运行
-LD_LIBRARY_PATH=../target/debug/ ./smtp
