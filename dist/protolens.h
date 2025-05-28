@@ -27,6 +27,7 @@ typedef enum {
     HTTP,
     FTPCMD,
     FTPDATA,
+    SIP,
     L7UNKNOWN,
 } L7Proto;
 
