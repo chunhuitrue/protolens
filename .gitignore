@@ -19,3 +19,4 @@ c_example/simple_thread
 .vscode
 .cursor
 *flamegraph.svg
+.trae/

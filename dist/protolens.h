@@ -156,12 +156,153 @@ void protolens_set_cb_ftp_body_start(FfiProlens *prolens, CbDirEvt callback);
 void protolens_set_cb_ftp_body(FfiProlens *prolens, CbFtpBody callback);
 void protolens_set_cb_ftp_body_stop(FfiProlens *prolens, CbDirEvt callback);
 
-
 void protolens_set_cb_sip_start_line(FfiProlens *prolens, CbDirData callback);
 void protolens_set_cb_sip_header(FfiProlens *prolens, CbDirData callback);
 void protolens_set_cb_sip_body_start(FfiProlens *prolens, CbDirEvt callback);
 void protolens_set_cb_sip_body(FfiProlens *prolens, CbSipBody callback);
 void protolens_set_cb_sip_body_stop(FfiProlens *prolens, CbDirEvt callback);
+
+typedef void (*CbSipBody)(const uint8_t *data, size_t len, uint32_t seq, const void *ctx, ProlensDirection dir);
+
+typedef enum {
+    QUERY  = 0,
+    IQUERY = 1,
+    STATUS = 2,
+    NOTIFY = 4,
+    UPDATE = 5,
+} COpcode;
+
+typedef enum {
+    NOERROR   = 0,
+    FORMERR   = 1,
+    SERVFAIL  = 2,
+    NXDOMAIN  = 3,
+    NOTIMP    = 4,
+    REFUSED   = 5,
+    YXDOMAIN  = 6,
+    YXRRSET   = 7,
+    NXRRSET   = 8,
+    NOTAUTH   = 9,
+    NOTZONE   = 10,
+    BADVERS   = 16,
+    BADSIG    = 16,
+    BADKEY    = 17,
+    BADTIME   = 18,
+    BADMODE   = 19,
+    BADNAME   = 20,
+    BADALG    = 21,
+    BADTRUNC  = 22,
+    BADCOOKIE = 23,
+} CRcode;
+
+typedef enum {
+    A     = 1,
+    NS    = 2,
+    CNAME = 5,
+    SOA   = 6,
+    PTR   = 12,
+    MX    = 15,
+    TXT   = 16,
+    AAAA  = 28,
+    SRV   = 33,
+    OPT   = 41,
+} CQtype;
+
+typedef enum {
+    IN  = 1,
+    CS  = 2,
+    CH  = 3,
+    HS  = 4,
+    ANY = 255,
+} CQclass;
+
+typedef struct {
+    uint16_t id;
+    bool     qr;
+    COpcode  opcode;
+    bool     aa;
+    bool     tc;
+    bool     rd;
+    bool     ra;
+    bool     z;
+    bool     ad;
+    bool     cd;
+    CRcode   rcode;
+    uint16_t qdcount;
+    uint16_t ancount;
+    uint16_t nscount;
+    uint16_t arcount;
+} CHeader;
+
+typedef struct {
+    uint32_t serial;
+    uint32_t refresh;
+    uint32_t retry;
+    uint32_t expire;
+    uint32_t minimum_ttl;
+    uint8_t  primary_ns[256];
+    size_t   primary_ns_len;
+    uint8_t  mailbox[256];
+    size_t   mailbox_len;
+} CRdSoa;
+
+typedef struct {
+    uint16_t priority;
+    uint16_t weight;
+    uint16_t port;
+    uint8_t  target[256];
+    size_t   target_len;
+} CRdSrv;
+
+typedef struct {
+    uint16_t preference;
+    uint8_t  exchange[256];
+    size_t   exchange_len;
+} CRdMx;
+
+typedef struct {
+    uint8_t        name[256];
+    size_t         name_len;
+    CQtype         qtype;
+    CQclass        qclass;
+    uint32_t       ttl;
+    const uint8_t* rdata_ptr;
+    size_t         rdata_len;
+    uint8_t        ipv4_addr[4];
+    uint8_t        ipv6_addr[16];
+    CRdSoa         soa;
+    CRdSrv         srv;
+    CRdMx          mx;
+} CRR;
+
+typedef struct {
+    uint8_t        name[256];
+    size_t         name_len;
+    CQtype         qtype;
+    CQclass        qclass;
+    uint32_t       ttl;
+    const uint8_t* rdata_ptr;
+    size_t         rdata_len;
+    uint8_t        ipv4_addr[4];
+    uint8_t        ipv6_addr[16];
+    CRdSoa         soa;
+    CRdSrv         srv;
+    CRdMx          mx;
+} COptRR;
+
+typedef void (*CbDnsHeader)(const CHeader *header, const void *ctx);
+typedef void (*CbDnsQuery)(const uint8_t *name, size_t name_len, CQtype qtype, CQclass qclass, const void *ctx);
+typedef void (*CbDnsRr)(const CRR *rr, const void *ctx);
+typedef void (*CbDnsOptRr)(const COptRR *opt_rr, const void *ctx);
+typedef void (*CbDnsEnd)(const void *ctx);
+
+void protolens_set_cb_dns_header(FfiProlens *prolens, CbDnsHeader callback);
+void protolens_set_cb_dns_query(FfiProlens *prolens, CbDnsQuery callback);
+void protolens_set_cb_dns_answer(FfiProlens *prolens, CbDnsRr callback);
+void protolens_set_cb_dns_auth(FfiProlens *prolens, CbDnsRr callback);
+void protolens_set_cb_dns_add(FfiProlens *prolens, CbDnsRr callback);
+void protolens_set_cb_dns_opt_add(FfiProlens *prolens, CbDnsOptRr callback);
+void protolens_set_cb_dns_end(FfiProlens *prolens, CbDnsEnd callback);
 
 #ifdef __cplusplus
 }

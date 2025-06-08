@@ -30,6 +30,7 @@ use crate::readn::*;
 use jemallocator::Jemalloc;
 
 use crate::config::*;
+use crate::dnsudp::*;
 use crate::enum_map::EnumMap;
 use crate::ftpcmd::*;
 use crate::ftpdata::*;
@@ -117,6 +118,14 @@ where
     cb_sip_body: Option<CbSipBody>,
     cb_sip_body_stop: Option<CbBodyEvt>,
 
+    cb_dns_header: Option<CbDnsHeader>,
+    cb_dns_query: Option<CbDnsQuery>,
+    cb_dns_answer: Option<CbDnsAnswer>,
+    cb_dns_auth: Option<CbDnsAuth>,
+    cb_dns_add: Option<CbDnsAdd>,
+    cb_dns_opt_add: Option<CbDnsOptAdd>,
+    cb_dns_end: Option<CbDnsEnd>,
+
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
     #[cfg(test)]
@@ -146,7 +155,60 @@ where
 
             cb_task_c2s: None,
             cb_task_s2c: None,
+
             cb_ord_pkt: None,
+
+            cb_smtp_user: None,
+            cb_smtp_pass: None,
+            cb_smtp_mailfrom: None,
+            cb_smtp_rcpt: None,
+            cb_smtp_header: None,
+            cb_smtp_body_start: None,
+            cb_smtp_body: None,
+            cb_smtp_body_stop: None,
+            cb_smtp_srv: None,
+
+            cb_pop3_header: None,
+            cb_pop3_body_start: None,
+            cb_pop3_body: None,
+            cb_pop3_body_stop: None,
+            cb_pop3_clt: None,
+            cb_pop3_srv: None,
+
+            cb_imap_header: None,
+            cb_imap_body_start: None,
+            cb_imap_body: None,
+            cb_imap_body_stop: None,
+            cb_imap_clt: None,
+            cb_imap_srv: None,
+
+            cb_http_start_line: None,
+            cb_http_header: None,
+            cb_http_body_start: None,
+            cb_http_body: None,
+            cb_http_body_stop: None,
+
+            cb_ftp_clt: None,
+            cb_ftp_srv: None,
+            cb_ftp_link: None,
+            cb_ftp_body_start: None,
+            cb_ftp_body: None,
+            cb_ftp_body_stop: None,
+
+            cb_sip_start_line: None,
+            cb_sip_header: None,
+            cb_sip_body_start: None,
+            cb_sip_body: None,
+            cb_sip_body_stop: None,
+
+            cb_dns_header: None,
+            cb_dns_query: None,
+            cb_dns_answer: None,
+            cb_dns_auth: None,
+            cb_dns_add: None,
+            cb_dns_opt_add: None,
+            cb_dns_end: None,
+
             #[cfg(test)]
             cb_raw_pkt: None,
             #[cfg(test)]
@@ -161,43 +223,6 @@ where
             cb_readoctet: None,
             #[cfg(test)]
             cb_readeof: None,
-            cb_smtp_user: None,
-            cb_smtp_pass: None,
-            cb_smtp_mailfrom: None,
-            cb_smtp_rcpt: None,
-            cb_smtp_header: None,
-            cb_smtp_body_start: None,
-            cb_smtp_body: None,
-            cb_smtp_body_stop: None,
-            cb_smtp_srv: None,
-            cb_pop3_header: None,
-            cb_pop3_body_start: None,
-            cb_pop3_body: None,
-            cb_pop3_body_stop: None,
-            cb_pop3_clt: None,
-            cb_pop3_srv: None,
-            cb_imap_header: None,
-            cb_imap_body_start: None,
-            cb_imap_body: None,
-            cb_imap_body_stop: None,
-            cb_imap_clt: None,
-            cb_imap_srv: None,
-            cb_http_start_line: None,
-            cb_http_header: None,
-            cb_http_body_start: None,
-            cb_http_body: None,
-            cb_http_body_stop: None,
-            cb_ftp_clt: None,
-            cb_ftp_srv: None,
-            cb_ftp_link: None,
-            cb_ftp_body_start: None,
-            cb_ftp_body: None,
-            cb_ftp_body_stop: None,
-            cb_sip_start_line: None,
-            cb_sip_header: None,
-            cb_sip_body_start: None,
-            cb_sip_body: None,
-            cb_sip_body_stop: None,
         };
         prolens.regist_parsers();
         prolens
@@ -224,6 +249,8 @@ where
             .insert(L7Proto::FtpData, Box::new(FtpDataFactory::<T>::new()));
         self.parsers
             .insert(L7Proto::Sip, Box::new(SipFactory::<T>::new()));
+        self.parsers
+            .insert(L7Proto::DnsUdp, Box::new(DnsUdpFactory::<T>::new()));
 
         #[cfg(test)]
         {
@@ -623,6 +650,55 @@ where
         F: EvtCbFn + 'static,
     {
         self.cb_sip_body_stop = Some(Rc::new(RefCell::new(callback)) as CbBodyEvt);
+    }
+
+    pub fn set_cb_dns_header<F>(&mut self, callback: F)
+    where
+        F: DnsHeaderCbFn + 'static,
+    {
+        self.cb_dns_header = Some(Rc::new(RefCell::new(callback)) as CbDnsHeader);
+    }
+
+    pub fn set_cb_dns_query<F>(&mut self, callback: F)
+    where
+        F: DnsQueryCbFn + 'static,
+    {
+        self.cb_dns_query = Some(Rc::new(RefCell::new(callback)) as CbDnsQuery);
+    }
+
+    pub fn set_cb_dns_answer<F>(&mut self, callback: F)
+    where
+        F: DnsRrCbFn + 'static,
+    {
+        self.cb_dns_answer = Some(Rc::new(RefCell::new(callback)) as CbDnsAnswer);
+    }
+
+    pub fn set_cb_dns_auth<F>(&mut self, callback: F)
+    where
+        F: DnsRrCbFn + 'static,
+    {
+        self.cb_dns_auth = Some(Rc::new(RefCell::new(callback)) as CbDnsAuth);
+    }
+
+    pub fn set_cb_dns_add<F>(&mut self, callback: F)
+    where
+        F: DnsRrCbFn + 'static,
+    {
+        self.cb_dns_add = Some(Rc::new(RefCell::new(callback)) as CbDnsAdd);
+    }
+
+    pub fn set_cb_dns_opt_add<F>(&mut self, callback: F)
+    where
+        F: DnsOptRrCbFn + 'static,
+    {
+        self.cb_dns_opt_add = Some(Rc::new(RefCell::new(callback)) as CbDnsOptAdd);
+    }
+
+    pub fn set_cb_dns_end<F>(&mut self, callback: F)
+    where
+        F: DnsEndCbFn + 'static,
+    {
+        self.cb_dns_end = Some(Rc::new(RefCell::new(callback)) as CbDnsEnd);
     }
 }
 

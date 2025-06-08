@@ -1,6 +1,6 @@
 [package]
 name          = "protolens"
-version       = "0.2.1"
+version       = "0.2.2"
 edition       = "2024"
 description   = "TCP stream reassembly，application layer protocol parsing"
 documentation = "https://docs.rs/protolens"
@@ -10,7 +10,7 @@ homepage      = "https://github.com/chunhuitrue/protolens"
 repository    = "https://github.com/chunhuitrue/protolens"
 license       = "MIT/Apache-2.0"
 readme        = "README.md"
-authors       = ["李春辉"]
+authors       = ["李春辉 <chunhui_true@163.com>"]
 
 [lib]
 name       = "protolens"
@@ -23,6 +23,7 @@ futures-util    = "0.3.31"
 nom             = "7.1.3"
 memchr          = "2.7.4"
 imapprotolens   = "0.16.6"
+byteorder       = "1.5.0"
 phf             = { version = "0.11", features = ["macros"] }
 pcap            = { version = "2.2.0", optional = true }
 etherparse      = { version = "0.13.0", optional = true }

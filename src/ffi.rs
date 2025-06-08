@@ -6,6 +6,7 @@ use crate::Task;
 use crate::TransferEncoding;
 use crate::packet::Direction;
 use crate::packet::TransProto;
+use crate::parser::dnsudp::{Class, Header, Opcode, OptRR, Qclass, Qtype, RR, Rcode, Rdata, Type};
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::net::IpAddr;
@@ -1050,4 +1051,785 @@ pub extern "C" fn protolens_set_cb_sip_body_stop(
         callback.unwrap()(ctx, dir);
     };
     prolens.0.set_cb_sip_body_stop(wrapper);
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum COpcode {
+    Query = 0,
+    IQuery = 1,
+    Status = 2,
+    Reserved = 255,
+}
+
+impl From<Opcode> for COpcode {
+    fn from(opcode: Opcode) -> Self {
+        match opcode {
+            Opcode::Query => COpcode::Query,
+            Opcode::IQuery => COpcode::IQuery,
+            Opcode::Status => COpcode::Status,
+            Opcode::Reserved(_) => COpcode::Reserved,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum CRcode {
+    NoError = 0,
+    FormatError = 1,
+    ServerFailure = 2,
+    NameError = 3,
+    NotImplemented = 4,
+    Refused = 5,
+    Reserved = 255,
+}
+
+impl From<Rcode> for CRcode {
+    fn from(rcode: Rcode) -> Self {
+        match rcode {
+            Rcode::NoError => CRcode::NoError,
+            Rcode::FormatError => CRcode::FormatError,
+            Rcode::ServerFailure => CRcode::ServerFailure,
+            Rcode::NameError => CRcode::NameError,
+            Rcode::NotImplemented => CRcode::NotImplemented,
+            Rcode::Refused => CRcode::Refused,
+            Rcode::Reserved(_) => CRcode::Reserved,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct CHeader {
+    pub id: u16,
+    pub qr: bool,
+    pub opcode: COpcode,
+    pub aa: bool,
+    pub tc: bool,
+    pub rd: bool,
+    pub ra: bool,
+    pub ad: bool,
+    pub cd: bool,
+    pub rcode: CRcode,
+    pub qcount: u16,
+    pub ancount: u16,
+    pub nscount: u16,
+    pub arcount: u16,
+}
+
+impl From<Header> for CHeader {
+    fn from(header: Header) -> Self {
+        CHeader {
+            id: header.id,
+            qr: header.qr,
+            opcode: header.opcode.into(),
+            aa: header.aa,
+            tc: header.tc,
+            rd: header.rd,
+            ra: header.ra,
+            ad: header.ad,
+            cd: header.cd,
+            rcode: header.rcode.into(),
+            qcount: header.qcount,
+            ancount: header.ancount,
+            nscount: header.nscount,
+            arcount: header.arcount,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum CQtype {
+    A = 1,
+    NS = 2,
+    MD = 3,
+    MF = 4,
+    Cname = 5,
+    Soa = 6,
+    MB = 7,
+    MG = 8,
+    MR = 9,
+    Null = 10,
+    Wks = 11,
+    Ptr = 12,
+    Hinfo = 13,
+    Minfo = 14,
+    MX = 15,
+    Txt = 16,
+    Aaaa = 28,
+    Srv = 33,
+    Axfr = 252,
+    Mailb = 253,
+    Maila = 254,
+    All = 255,
+}
+
+impl From<Qtype> for CQtype {
+    fn from(qtype: Qtype) -> Self {
+        match qtype {
+            Qtype::A => CQtype::A,
+            Qtype::NS => CQtype::NS,
+            Qtype::MD => CQtype::MD,
+            Qtype::MF => CQtype::MF,
+            Qtype::Cname => CQtype::Cname,
+            Qtype::Soa => CQtype::Soa,
+            Qtype::MB => CQtype::MB,
+            Qtype::MG => CQtype::MG,
+            Qtype::MR => CQtype::MR,
+            Qtype::Null => CQtype::Null,
+            Qtype::Wks => CQtype::Wks,
+            Qtype::Ptr => CQtype::Ptr,
+            Qtype::Hinfo => CQtype::Hinfo,
+            Qtype::Minfo => CQtype::Minfo,
+            Qtype::MX => CQtype::MX,
+            Qtype::Txt => CQtype::Txt,
+            Qtype::Aaaa => CQtype::Aaaa,
+            Qtype::Srv => CQtype::Srv,
+            Qtype::Axfr => CQtype::Axfr,
+            Qtype::Mailb => CQtype::Mailb,
+            Qtype::Maila => CQtype::Maila,
+            Qtype::All => CQtype::All,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum CQclass {
+    IN = 1,
+    CS = 2,
+    CH = 3,
+    HS = 4,
+    Any = 255,
+}
+
+impl From<Qclass> for CQclass {
+    fn from(qclass: Qclass) -> Self {
+        match qclass {
+            Qclass::IN => CQclass::IN,
+            Qclass::CS => CQclass::CS,
+            Qclass::CH => CQclass::CH,
+            Qclass::HS => CQclass::HS,
+            Qclass::Any => CQclass::Any,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum CType {
+    A = 1,
+    NS = 2,
+    MD = 3,
+    MF = 4,
+    Cname = 5,
+    Soa = 6,
+    MB = 7,
+    MG = 8,
+    MR = 9,
+    Null = 10,
+    Wks = 11,
+    Ptr = 12,
+    Hinfo = 13,
+    Minfo = 14,
+    MX = 15,
+    Txt = 16,
+    Aaaa = 28,
+    Srv = 33,
+    Opt = 41,
+    Nsec = 47,
+}
+
+impl From<Type> for CType {
+    fn from(rtype: Type) -> Self {
+        match rtype {
+            Type::A => CType::A,
+            Type::NS => CType::NS,
+            Type::MD => CType::MD,
+            Type::MF => CType::MF,
+            Type::Cname => CType::Cname,
+            Type::Soa => CType::Soa,
+            Type::MB => CType::MB,
+            Type::MG => CType::MG,
+            Type::MR => CType::MR,
+            Type::Null => CType::Null,
+            Type::Wks => CType::Wks,
+            Type::Ptr => CType::Ptr,
+            Type::Hinfo => CType::Hinfo,
+            Type::Minfo => CType::Minfo,
+            Type::MX => CType::MX,
+            Type::Txt => CType::Txt,
+            Type::Aaaa => CType::Aaaa,
+            Type::Srv => CType::Srv,
+            Type::Opt => CType::Opt,
+            Type::Nsec => CType::Nsec,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum CClass {
+    IN = 1,
+    CS = 2,
+    CH = 3,
+    HS = 4,
+}
+
+impl From<Class> for CClass {
+    fn from(class: Class) -> Self {
+        match class {
+            Class::IN => CClass::IN,
+            Class::CS => CClass::CS,
+            Class::CH => CClass::CH,
+            Class::HS => CClass::HS,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct Crr {
+    pub unicast: bool,
+    pub name_ptr: *const u8,
+    pub name_len: usize,
+    pub rtype: CType,
+    pub class: CClass,
+    pub ttl: u32,
+    pub rdata_ptr: *const u8,
+    pub rdata_len: usize,
+    pub soa_data: CRdSoa,
+    pub srv_data: CRdSrv,
+    pub mx_data: CRdMx,
+    pub ipv4_addr: [u8; 4],
+    pub ipv6_addr: [u8; 16],
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct COptRR {
+    pub payload_size: u16,
+    pub extrcode: u8,
+    pub version: u8,
+    pub flags: u16,
+    pub rdata_ptr: *const u8,
+    pub rdata_len: usize,
+    pub ipv4_addr: [u8; 4],
+    pub ipv6_addr: [u8; 16],
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct CRdSoa {
+    pub primary_ns_ptr: *const u8,
+    pub primary_ns_len: usize,
+    pub mailbox_ptr: *const u8,
+    pub mailbox_len: usize,
+    pub serial: u32,
+    pub refresh: u32,
+    pub retry: u32,
+    pub expire: u32,
+    pub minimum_ttl: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct CRdSrv {
+    pub priority: u16,
+    pub weight: u16,
+    pub port: u16,
+    pub target_ptr: *const u8,
+    pub target_len: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct CRdMx {
+    pub preference: u16,
+    pub exchange_ptr: *const u8,
+    pub exchange_len: usize,
+}
+
+type DnsHeaderCbFn = extern "C" fn(header: CHeader, offset: usize, ctx: *mut c_void);
+type DnsQueryCbFn = extern "C" fn(
+    name_ptr: *const u8,
+    name_len: usize,
+    qtype: CQtype,
+    qclass: CQclass,
+    unicast: bool,
+    offset: usize,
+    ctx: *mut c_void,
+);
+type DnsRrCbFn = extern "C" fn(rr: Crr, offset: usize, ctx: *mut c_void);
+type DnsOptRrCbFn = extern "C" fn(opt_rr: COptRR, offset: usize, ctx: *mut c_void);
+type DnsEndCbFn = extern "C" fn(ctx: *mut c_void);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_dns_header(
+    prolens: *mut FfiProlens,
+    callback: Option<DnsHeaderCbFn>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |header: Header, offset: usize, ctx: *mut c_void| {
+        callback.unwrap()(header.into(), offset, ctx);
+    };
+    prolens.0.set_cb_dns_header(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_dns_query(
+    prolens: *mut FfiProlens,
+    callback: Option<DnsQueryCbFn>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |name: &[u8],
+                        qtype: Qtype,
+                        qclass: Qclass,
+                        unicast: bool,
+                        offset: usize,
+                        ctx: *mut c_void| {
+        callback.unwrap()(
+            name.as_ptr(),
+            name.len(),
+            qtype.into(),
+            qclass.into(),
+            unicast,
+            offset,
+            ctx,
+        );
+    };
+    prolens.0.set_cb_dns_query(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_dns_answer(
+    prolens: *mut FfiProlens,
+    callback: Option<DnsRrCbFn>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |rr: RR, offset: usize, ctx: *mut c_void| {
+        let mut c_rr = Crr {
+            unicast: rr.unicast,
+            name_ptr: rr.name.as_ptr(),
+            name_len: rr.name.len(),
+            rtype: rr.rtype.into(),
+            class: rr.class.into(),
+            ttl: rr.ttl,
+            rdata_ptr: std::ptr::null(),
+            rdata_len: 0,
+            soa_data: CRdSoa {
+                primary_ns_ptr: std::ptr::null(),
+                primary_ns_len: 0,
+                mailbox_ptr: std::ptr::null(),
+                mailbox_len: 0,
+                serial: 0,
+                refresh: 0,
+                retry: 0,
+                expire: 0,
+                minimum_ttl: 0,
+            },
+            srv_data: CRdSrv {
+                priority: 0,
+                weight: 0,
+                port: 0,
+                target_ptr: std::ptr::null(),
+                target_len: 0,
+            },
+            mx_data: CRdMx {
+                preference: 0,
+                exchange_ptr: std::ptr::null(),
+                exchange_len: 0,
+            },
+            ipv4_addr: [0; 4],
+            ipv6_addr: [0; 16],
+        };
+
+        match &rr.rdata {
+            Rdata::A(addr) => {
+                c_rr.ipv4_addr = addr.octets();
+                c_rr.rdata_ptr = c_rr.ipv4_addr.as_ptr();
+                c_rr.rdata_len = 4;
+            }
+            Rdata::Aaaa(addr) => {
+                c_rr.ipv6_addr = addr.octets();
+                c_rr.rdata_ptr = c_rr.ipv6_addr.as_ptr();
+                c_rr.rdata_len = 16;
+            }
+            Rdata::Cname(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::MX(mx) => {
+                c_rr.mx_data.preference = mx.preference;
+                c_rr.mx_data.exchange_ptr = mx.exchange.as_ptr();
+                c_rr.mx_data.exchange_len = mx.exchange.len();
+                c_rr.rdata_ptr = mx.exchange.as_ptr();
+                c_rr.rdata_len = mx.exchange.len();
+            }
+            Rdata::NS(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::Ptr(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::Soa(soa) => {
+                c_rr.soa_data.primary_ns_ptr = soa.primary_ns.as_ptr();
+                c_rr.soa_data.primary_ns_len = soa.primary_ns.len();
+                c_rr.soa_data.mailbox_ptr = soa.mailbox.as_ptr();
+                c_rr.soa_data.mailbox_len = soa.mailbox.len();
+                c_rr.soa_data.serial = soa.serial;
+                c_rr.soa_data.refresh = soa.refresh;
+                c_rr.soa_data.retry = soa.retry;
+                c_rr.soa_data.expire = soa.expire;
+                c_rr.soa_data.minimum_ttl = soa.minimum_ttl;
+                c_rr.rdata_ptr = soa.primary_ns.as_ptr();
+                c_rr.rdata_len = soa.primary_ns.len();
+            }
+            Rdata::Srv(srv) => {
+                c_rr.srv_data.priority = srv.priority;
+                c_rr.srv_data.weight = srv.weight;
+                c_rr.srv_data.port = srv.port;
+                c_rr.srv_data.target_ptr = srv.target.as_ptr();
+                c_rr.srv_data.target_len = srv.target.len();
+                c_rr.rdata_ptr = srv.target.as_ptr();
+                c_rr.rdata_len = srv.target.len();
+            }
+            Rdata::Txt(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::Unknown(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+        };
+
+        callback.unwrap()(c_rr, offset, ctx);
+    };
+    prolens.0.set_cb_dns_answer(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_dns_auth(prolens: *mut FfiProlens, callback: Option<DnsRrCbFn>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |rr: RR, offset: usize, ctx: *mut c_void| {
+        let mut c_rr = Crr {
+            unicast: rr.unicast,
+            name_ptr: rr.name.as_ptr(),
+            name_len: rr.name.len(),
+            rtype: rr.rtype.into(),
+            class: rr.class.into(),
+            ttl: rr.ttl,
+            rdata_ptr: std::ptr::null(),
+            rdata_len: 0,
+            soa_data: CRdSoa {
+                primary_ns_ptr: std::ptr::null(),
+                primary_ns_len: 0,
+                mailbox_ptr: std::ptr::null(),
+                mailbox_len: 0,
+                serial: 0,
+                refresh: 0,
+                retry: 0,
+                expire: 0,
+                minimum_ttl: 0,
+            },
+            srv_data: CRdSrv {
+                priority: 0,
+                weight: 0,
+                port: 0,
+                target_ptr: std::ptr::null(),
+                target_len: 0,
+            },
+            mx_data: CRdMx {
+                preference: 0,
+                exchange_ptr: std::ptr::null(),
+                exchange_len: 0,
+            },
+            ipv4_addr: [0; 4],
+            ipv6_addr: [0; 16],
+        };
+
+        match &rr.rdata {
+            Rdata::A(addr) => {
+                c_rr.ipv4_addr = addr.octets();
+                c_rr.rdata_ptr = c_rr.ipv4_addr.as_ptr();
+                c_rr.rdata_len = 4;
+            }
+            Rdata::Aaaa(addr) => {
+                c_rr.ipv6_addr = addr.octets();
+                c_rr.rdata_ptr = c_rr.ipv6_addr.as_ptr();
+                c_rr.rdata_len = 16;
+            }
+            Rdata::Cname(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::MX(mx) => {
+                c_rr.mx_data.preference = mx.preference;
+                c_rr.mx_data.exchange_ptr = mx.exchange.as_ptr();
+                c_rr.mx_data.exchange_len = mx.exchange.len();
+                c_rr.rdata_ptr = mx.exchange.as_ptr();
+                c_rr.rdata_len = mx.exchange.len();
+            }
+            Rdata::NS(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::Ptr(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::Soa(soa) => {
+                c_rr.soa_data.primary_ns_ptr = soa.primary_ns.as_ptr();
+                c_rr.soa_data.primary_ns_len = soa.primary_ns.len();
+                c_rr.soa_data.mailbox_ptr = soa.mailbox.as_ptr();
+                c_rr.soa_data.mailbox_len = soa.mailbox.len();
+                c_rr.soa_data.serial = soa.serial;
+                c_rr.soa_data.refresh = soa.refresh;
+                c_rr.soa_data.retry = soa.retry;
+                c_rr.soa_data.expire = soa.expire;
+                c_rr.soa_data.minimum_ttl = soa.minimum_ttl;
+                c_rr.rdata_ptr = soa.primary_ns.as_ptr();
+                c_rr.rdata_len = soa.primary_ns.len();
+            }
+            Rdata::Srv(srv) => {
+                c_rr.srv_data.priority = srv.priority;
+                c_rr.srv_data.weight = srv.weight;
+                c_rr.srv_data.port = srv.port;
+                c_rr.srv_data.target_ptr = srv.target.as_ptr();
+                c_rr.srv_data.target_len = srv.target.len();
+                c_rr.rdata_ptr = srv.target.as_ptr();
+                c_rr.rdata_len = srv.target.len();
+            }
+            Rdata::Txt(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::Unknown(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+        };
+
+        callback.unwrap()(c_rr, offset, ctx);
+    };
+    prolens.0.set_cb_dns_auth(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_dns_add(prolens: *mut FfiProlens, callback: Option<DnsRrCbFn>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |rr: RR, offset: usize, ctx: *mut c_void| {
+        // 使用与dns_answer相同的逻辑
+        let mut c_rr = Crr {
+            unicast: rr.unicast,
+            name_ptr: rr.name.as_ptr(),
+            name_len: rr.name.len(),
+            rtype: rr.rtype.into(),
+            class: rr.class.into(),
+            ttl: rr.ttl,
+            rdata_ptr: std::ptr::null(),
+            rdata_len: 0,
+            soa_data: CRdSoa {
+                primary_ns_ptr: std::ptr::null(),
+                primary_ns_len: 0,
+                mailbox_ptr: std::ptr::null(),
+                mailbox_len: 0,
+                serial: 0,
+                refresh: 0,
+                retry: 0,
+                expire: 0,
+                minimum_ttl: 0,
+            },
+            srv_data: CRdSrv {
+                priority: 0,
+                weight: 0,
+                port: 0,
+                target_ptr: std::ptr::null(),
+                target_len: 0,
+            },
+            mx_data: CRdMx {
+                preference: 0,
+                exchange_ptr: std::ptr::null(),
+                exchange_len: 0,
+            },
+            ipv4_addr: [0; 4],
+            ipv6_addr: [0; 16],
+        };
+
+        match &rr.rdata {
+            Rdata::A(addr) => {
+                c_rr.ipv4_addr = addr.octets();
+                c_rr.rdata_ptr = c_rr.ipv4_addr.as_ptr();
+                c_rr.rdata_len = 4;
+            }
+            Rdata::Aaaa(addr) => {
+                c_rr.ipv6_addr = addr.octets();
+                c_rr.rdata_ptr = c_rr.ipv6_addr.as_ptr();
+                c_rr.rdata_len = 16;
+            }
+            Rdata::Cname(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::MX(mx) => {
+                c_rr.mx_data.preference = mx.preference;
+                c_rr.mx_data.exchange_ptr = mx.exchange.as_ptr();
+                c_rr.mx_data.exchange_len = mx.exchange.len();
+                c_rr.rdata_ptr = mx.exchange.as_ptr();
+                c_rr.rdata_len = mx.exchange.len();
+            }
+            Rdata::NS(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::Ptr(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::Soa(soa) => {
+                c_rr.soa_data.primary_ns_ptr = soa.primary_ns.as_ptr();
+                c_rr.soa_data.primary_ns_len = soa.primary_ns.len();
+                c_rr.soa_data.mailbox_ptr = soa.mailbox.as_ptr();
+                c_rr.soa_data.mailbox_len = soa.mailbox.len();
+                c_rr.soa_data.serial = soa.serial;
+                c_rr.soa_data.refresh = soa.refresh;
+                c_rr.soa_data.retry = soa.retry;
+                c_rr.soa_data.expire = soa.expire;
+                c_rr.soa_data.minimum_ttl = soa.minimum_ttl;
+                c_rr.rdata_ptr = soa.primary_ns.as_ptr();
+                c_rr.rdata_len = soa.primary_ns.len();
+            }
+            Rdata::Srv(srv) => {
+                c_rr.srv_data.priority = srv.priority;
+                c_rr.srv_data.weight = srv.weight;
+                c_rr.srv_data.port = srv.port;
+                c_rr.srv_data.target_ptr = srv.target.as_ptr();
+                c_rr.srv_data.target_len = srv.target.len();
+                c_rr.rdata_ptr = srv.target.as_ptr();
+                c_rr.rdata_len = srv.target.len();
+            }
+            Rdata::Txt(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+            Rdata::Unknown(data) => {
+                c_rr.rdata_ptr = data.as_ptr();
+                c_rr.rdata_len = data.len();
+            }
+        };
+
+        callback.unwrap()(c_rr, offset, ctx);
+    };
+    prolens.0.set_cb_dns_add(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_dns_opt_add(
+    prolens: *mut FfiProlens,
+    callback: Option<DnsOptRrCbFn>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |opt_rr: OptRR, offset: usize, ctx: *mut c_void| {
+        let mut c_opt_rr = COptRR {
+            payload_size: opt_rr.payload_size,
+            extrcode: opt_rr.extrcode,
+            version: opt_rr.version,
+            flags: opt_rr.flags,
+            rdata_ptr: std::ptr::null(),
+            rdata_len: 0,
+            ipv4_addr: [0; 4],
+            ipv6_addr: [0; 16],
+        };
+
+        // 根据rdata类型设置相应的数据
+        match &opt_rr.rdata {
+            Rdata::A(addr) => {
+                c_opt_rr.ipv4_addr = addr.octets();
+                c_opt_rr.rdata_ptr = c_opt_rr.ipv4_addr.as_ptr();
+                c_opt_rr.rdata_len = 4;
+            }
+            Rdata::Aaaa(addr) => {
+                c_opt_rr.ipv6_addr = addr.octets();
+                c_opt_rr.rdata_ptr = c_opt_rr.ipv6_addr.as_ptr();
+                c_opt_rr.rdata_len = 16;
+            }
+            Rdata::Cname(data) => {
+                c_opt_rr.rdata_ptr = data.as_ptr();
+                c_opt_rr.rdata_len = data.len();
+            }
+            Rdata::MX(mx) => {
+                c_opt_rr.rdata_ptr = mx.exchange.as_ptr();
+                c_opt_rr.rdata_len = mx.exchange.len();
+            }
+            Rdata::NS(data) => {
+                c_opt_rr.rdata_ptr = data.as_ptr();
+                c_opt_rr.rdata_len = data.len();
+            }
+            Rdata::Ptr(data) => {
+                c_opt_rr.rdata_ptr = data.as_ptr();
+                c_opt_rr.rdata_len = data.len();
+            }
+            Rdata::Soa(soa) => {
+                c_opt_rr.rdata_ptr = soa.primary_ns.as_ptr();
+                c_opt_rr.rdata_len = soa.primary_ns.len();
+            }
+            Rdata::Srv(srv) => {
+                c_opt_rr.rdata_ptr = srv.target.as_ptr();
+                c_opt_rr.rdata_len = srv.target.len();
+            }
+            Rdata::Txt(data) => {
+                c_opt_rr.rdata_ptr = data.as_ptr();
+                c_opt_rr.rdata_len = data.len();
+            }
+            Rdata::Unknown(data) => {
+                c_opt_rr.rdata_ptr = data.as_ptr();
+                c_opt_rr.rdata_len = data.len();
+            }
+        };
+
+        callback.unwrap()(c_opt_rr, offset, ctx);
+    };
+    prolens.0.set_cb_dns_opt_add(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_dns_end(prolens: *mut FfiProlens, callback: Option<DnsEndCbFn>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void| {
+        callback.unwrap()(ctx);
+    };
+    prolens.0.set_cb_dns_end(wrapper);
 }

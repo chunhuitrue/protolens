@@ -13,6 +13,7 @@ pub enum L7Proto {
     FtpCmd,
     FtpData,
     Sip,
+    DnsUdp,
 
     #[cfg(test)]
     RawPacket,

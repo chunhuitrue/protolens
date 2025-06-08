@@ -1,3 +1,4 @@
+pub mod dnsudp;
 pub mod ftpcmd;
 pub mod ftpdata;
 pub mod http;
@@ -23,10 +24,15 @@ pub mod readline;
 pub mod readn;
 
 use crate::Direction;
+use crate::Header;
+use crate::OptRR;
 use crate::Packet;
 use crate::PktStrm;
 use crate::Prolens;
+use crate::Qtype;
+use crate::RR;
 use crate::ReadRet;
+use dnsudp::Qclass;
 use futures::Future;
 use memchr::memmem::Finder;
 use nom::{
@@ -161,6 +167,21 @@ impl<F: FnMut(Option<IpAddr>, u16, *mut c_void, Direction)> FtpLinkCbFn for F {}
 pub trait SipBodyCbFn: FnMut(&[u8], u32, *mut c_void, Direction) {}
 impl<F: FnMut(&[u8], u32, *mut c_void, Direction)> SipBodyCbFn for F {}
 
+pub trait DnsHeaderCbFn: FnMut(Header, usize, *mut c_void) {}
+impl<F: FnMut(Header, usize, *mut c_void)> DnsHeaderCbFn for F {}
+
+pub trait DnsQueryCbFn: FnMut(&[u8], Qtype, Qclass, bool, usize, *mut c_void) {}
+impl<F: FnMut(&[u8], Qtype, Qclass, bool, usize, *mut c_void)> DnsQueryCbFn for F {}
+
+pub trait DnsRrCbFn: FnMut(RR, usize, *mut c_void) {}
+impl<F: FnMut(RR, usize, *mut c_void)> DnsRrCbFn for F {}
+
+pub trait DnsOptRrCbFn: FnMut(OptRR, usize, *mut c_void) {}
+impl<F: FnMut(OptRR, usize, *mut c_void)> DnsOptRrCbFn for F {}
+
+pub trait DnsEndCbFn: FnMut(*mut c_void) {}
+impl<F: FnMut(*mut c_void)> DnsEndCbFn for F {}
+
 pub(crate) type CbOrdPkt<T> = Rc<RefCell<dyn OrdPktCbFn<T> + 'static>>;
 pub(crate) type CbUser = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbPass = Rc<RefCell<dyn DataCbFn + 'static>>;
@@ -176,6 +197,13 @@ pub(crate) type CbHttpBody = Rc<RefCell<dyn HttpBodyCbFn + 'static>>;
 pub(crate) type CbFtpLink = Rc<RefCell<dyn FtpLinkCbFn + 'static>>;
 pub(crate) type CbFtpBody = Rc<RefCell<dyn DataCbDirFn + 'static>>;
 pub(crate) type CbSipBody = Rc<RefCell<dyn SipBodyCbFn + 'static>>;
+pub(crate) type CbDnsHeader = Rc<RefCell<dyn DnsHeaderCbFn + 'static>>;
+pub(crate) type CbDnsQuery = Rc<RefCell<dyn DnsQueryCbFn + 'static>>;
+pub(crate) type CbDnsAnswer = Rc<RefCell<dyn DnsRrCbFn + 'static>>;
+pub(crate) type CbDnsAuth = Rc<RefCell<dyn DnsRrCbFn + 'static>>;
+pub(crate) type CbDnsAdd = Rc<RefCell<dyn DnsRrCbFn + 'static>>;
+pub(crate) type CbDnsOptAdd = Rc<RefCell<dyn DnsOptRrCbFn + 'static>>;
+pub(crate) type CbDnsEnd = Rc<RefCell<dyn DnsEndCbFn + 'static>>;
 
 #[derive(Clone)]
 pub(crate) struct Callbacks {
