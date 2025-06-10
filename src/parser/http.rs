@@ -1,21 +1,8 @@
-use crate::CbBodyEvt;
-use crate::CbHeader;
-use crate::CbHttpBody;
-use crate::CbStartLine;
-use crate::DirConfirmFn;
-use crate::Direction;
-use crate::Encoding;
-use crate::HTTP_PORT;
-use crate::Parser;
-use crate::ParserFactory;
-use crate::ParserFuture;
-use crate::PktStrm;
-use crate::Prolens;
-use crate::ReadRet;
-use crate::content_length;
-use crate::content_type;
-use crate::content_type_ext;
-use crate::packet::*;
+use crate::{
+    CbBodyEvt, CbHeader, CbHttpBody, CbStartLine, DirConfirmFn, Direction, Encoding, HTTP_PORT,
+    Parser, ParserFactory, ParserFuture, PktStrm, Prolens, ReadRet, content_length, content_type,
+    content_type_ext, packet::*,
+};
 use memchr::memmem::Finder;
 use nom::{
     IResult,

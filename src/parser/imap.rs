@@ -1,24 +1,8 @@
-use crate::Callbacks;
-use crate::CbBody;
-use crate::CbBodyEvt;
-use crate::CbClt;
-use crate::CbHeader;
-use crate::CbSrv;
-use crate::DirConfirmFn;
-use crate::Direction;
-use crate::IMAP_PORT;
-use crate::MimeBodyParams;
-use crate::Parser;
-use crate::ParserFactory;
-use crate::ParserFuture;
-use crate::PktStrm;
-use crate::Prolens;
-use crate::TransferEncoding;
-use crate::dash_bdry;
-use crate::header;
-use crate::mime_body;
-use crate::packet::*;
-use crate::preamble;
+use crate::{
+    Callbacks, CbBody, CbBodyEvt, CbClt, CbHeader, CbSrv, DirConfirmFn, Direction, IMAP_PORT,
+    MimeBodyParams, Parser, ParserFactory, ParserFuture, PktStrm, Prolens, TransferEncoding,
+    dash_bdry, header, mime_body, packet::*, preamble,
+};
 use imapprotolens::{
     AttributeValue2, BodyStructParser2, ContentEncoding, follow_rsp_fetch, rsp_fetch,
 };

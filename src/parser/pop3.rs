@@ -1,21 +1,7 @@
-use crate::Callbacks;
-use crate::CbBody;
-use crate::CbBodyEvt;
-use crate::CbClt;
-use crate::CbHeader;
-use crate::CbSrv;
-use crate::DirConfirmFn;
-use crate::Direction;
-use crate::POP3_PORT;
-use crate::Parser;
-use crate::ParserFactory;
-use crate::ParserFuture;
-use crate::PktStrm;
-use crate::Prolens;
-use crate::body;
-use crate::header;
-use crate::multi_body;
-use crate::packet::*;
+use crate::{
+    Callbacks, CbBody, CbBodyEvt, CbClt, CbHeader, CbSrv, DirConfirmFn, Direction, POP3_PORT,
+    Parser, ParserFactory, ParserFuture, PktStrm, Prolens, body, header, multi_body, packet::*,
+};
 use nom::{
     IResult,
     bytes::complete::{tag, take_till},

@@ -1,25 +1,8 @@
-use crate::Callbacks;
-use crate::CbBody;
-use crate::CbBodyEvt;
-use crate::CbClt;
-use crate::CbHeader;
-use crate::CbMailFrom;
-use crate::CbPass;
-use crate::CbRcpt;
-use crate::CbSrv;
-use crate::CbUser;
-use crate::DirConfirmFn;
-use crate::Direction;
-use crate::Parser;
-use crate::ParserFactory;
-use crate::ParserFuture;
-use crate::PktStrm;
-use crate::Prolens;
-use crate::SMTP_PORT;
-use crate::body;
-use crate::header;
-use crate::multi_body;
-use crate::packet::*;
+use crate::{
+    Callbacks, CbBody, CbBodyEvt, CbClt, CbHeader, CbMailFrom, CbPass, CbRcpt, CbSrv, CbUser,
+    DirConfirmFn, Direction, Parser, ParserFactory, ParserFuture, PktStrm, Prolens, SMTP_PORT,
+    body, header, multi_body, packet::*,
+};
 use nom::{
     IResult, Offset,
     bytes::complete::{tag, take_till, take_while},

@@ -11,44 +11,18 @@ mod task;
 #[cfg(any(test, feature = "bench"))]
 mod test_utils;
 
-#[cfg(test)]
-use crate::byte::*;
-#[cfg(test)]
-use crate::eof::*;
-#[cfg(test)]
-use crate::octet::*;
-#[cfg(test)]
-use crate::rawpacket::*;
-#[cfg(test)]
-use crate::read::*;
 #[cfg(any(test, feature = "bench"))]
 use crate::readline::*;
 #[cfg(test)]
-use crate::readn::*;
+use crate::{byte::*, eof::*, octet::*, rawpacket::*, read::*, readn::*};
+use crate::{
+    config::*, dnstcp::*, dnsudp::*, enum_map::EnumMap, ftpcmd::*, ftpdata::*, heap::*, http::*,
+    imap::*, ordpacket::*, parser::*, pktstrm::*, pop3::*, sip::*, smtp::*, stats::*,
+};
+use std::{cell::RefCell, ffi::c_void, marker::PhantomData, ptr, rc::Rc};
 
 #[cfg(feature = "jemalloc")]
 use jemallocator::Jemalloc;
-
-use crate::config::*;
-use crate::dnsudp::*;
-use crate::enum_map::EnumMap;
-use crate::ftpcmd::*;
-use crate::ftpdata::*;
-use crate::heap::*;
-use crate::http::*;
-use crate::imap::*;
-use crate::ordpacket::*;
-use crate::parser::*;
-use crate::pktstrm::*;
-use crate::pop3::*;
-use crate::sip::*;
-use crate::smtp::*;
-use crate::stats::*;
-use std::cell::RefCell;
-use std::ffi::c_void;
-use std::marker::PhantomData;
-use std::ptr;
-use std::rc::Rc;
 
 pub use crate::packet::Direction;
 pub use crate::packet::L7Proto;
@@ -251,6 +225,8 @@ where
             .insert(L7Proto::Sip, Box::new(SipFactory::<T>::new()));
         self.parsers
             .insert(L7Proto::DnsUdp, Box::new(DnsUdpFactory::<T>::new()));
+        self.parsers
+            .insert(L7Proto::DnsTcp, Box::new(DnsTcpFactory::<T>::new()));
 
         #[cfg(test)]
         {

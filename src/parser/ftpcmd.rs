@@ -1,14 +1,7 @@
-use crate::CbClt;
-use crate::CbFtpLink;
-use crate::CbSrv;
-use crate::DirConfirmFn;
-use crate::FTP_PORT;
-use crate::Parser;
-use crate::ParserFactory;
-use crate::ParserFuture;
-use crate::PktStrm;
-use crate::Prolens;
-use crate::packet::*;
+use crate::{
+    CbClt, CbFtpLink, CbSrv, DirConfirmFn, FTP_PORT, Parser, ParserFactory, ParserFuture, PktStrm,
+    Prolens, packet::*,
+};
 use nom::{
     IResult,
     bytes::complete::{tag, take_until, take_while},

@@ -1,15 +1,7 @@
-use crate::CbBodyEvt;
-use crate::CbHeader;
-use crate::CbSipBody;
-use crate::CbStartLine;
-use crate::Parser;
-use crate::ParserFactory;
-use crate::Prolens;
-use crate::UdpParser;
-use crate::UdpParserFn;
-use crate::content_length;
-use crate::packet::*;
-use crate::pktdata::*;
+use crate::{
+    CbBodyEvt, CbHeader, CbSipBody, CbStartLine, Parser, ParserFactory, Prolens, UdpParser,
+    UdpParserFn, content_length, packet::*, pktdata::*,
+};
 use phf::phf_set;
 use std::ffi::c_void;
 use std::marker::PhantomData;

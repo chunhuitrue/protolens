@@ -191,22 +191,37 @@ impl CapPacket {
                     headers.payload.as_ptr() as usize - self.data.as_ptr() as usize;
                 let mut payload_len = 0;
 
-                if let (Some(IpHeader::Version4(ipv4, _)), Some(transport)) =
-                    (&headers.ip, &headers.transport)
-                {
-                    let ip_total_len = ipv4.total_len() as usize;
-                    let ip_header_len = ipv4.ihl() as usize * 4;
+                match (&headers.ip, &headers.transport) {
+                    (Some(IpHeader::Version4(ipv4, _)), Some(transport)) => {
+                        let ip_total_len = ipv4.total_len() as usize;
+                        let ip_header_len = ipv4.ihl() as usize * 4;
 
-                    match transport {
-                        TransportHeader::Tcp(tcp_header) => {
-                            let tcp_header_len = tcp_header.header_len() as usize;
-                            payload_len = ip_total_len - ip_header_len - tcp_header_len;
+                        match transport {
+                            TransportHeader::Tcp(tcp_header) => {
+                                let tcp_header_len = tcp_header.header_len() as usize;
+                                payload_len = ip_total_len - ip_header_len - tcp_header_len;
+                            }
+                            TransportHeader::Udp(_) => {
+                                payload_len = ip_total_len - ip_header_len - 8;
+                            }
+                            _ => {}
                         }
-                        TransportHeader::Udp(_) => {
-                            payload_len = ip_total_len - ip_header_len - 8;
-                        }
-                        _ => {}
                     }
+                    (Some(IpHeader::Version6(ipv6, _)), Some(transport)) => {
+                        let ip_payload_len = ipv6.payload_length as usize;
+
+                        match transport {
+                            TransportHeader::Tcp(tcp_header) => {
+                                let tcp_header_len = tcp_header.header_len() as usize;
+                                payload_len = ip_payload_len - tcp_header_len;
+                            }
+                            TransportHeader::Udp(_) => {
+                                payload_len = ip_payload_len - 8;
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
                 }
 
                 self.header.replace(Some(PktHeader {

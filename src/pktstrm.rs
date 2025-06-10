@@ -1,18 +1,16 @@
-use crate::Heap;
-use crate::packet::*;
-use futures::Future;
-use futures::future::poll_fn;
-use memchr::memchr;
-use memchr::memmem::Finder;
-use std::cell::RefCell;
-use std::cmp::min;
-use std::ffi::c_void;
-use std::fmt;
-use std::ptr::copy;
-use std::ptr::copy_nonoverlapping;
-use std::rc::Rc;
-use std::str::from_utf8_unchecked;
-use std::task::Poll;
+use crate::{Heap, packet::*};
+use futures::{Future, future::poll_fn};
+use memchr::{memchr, memmem::Finder};
+use std::{
+    cell::RefCell,
+    cmp::min,
+    ffi::c_void,
+    fmt,
+    ptr::{copy, copy_nonoverlapping},
+    rc::Rc,
+    str::from_utf8_unchecked,
+    task::Poll,
+};
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ReadError {

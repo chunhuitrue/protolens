@@ -1,14 +1,8 @@
-use crate::CbBodyEvt;
-use crate::CbFtpBody;
-use crate::Parser;
-use crate::ParserFactory;
-use crate::ParserFuture;
-use crate::PktStrm;
-use crate::Prolens;
-use crate::ReadError;
-use crate::packet::*;
-use std::ffi::c_void;
-use std::marker::PhantomData;
+use crate::{
+    CbBodyEvt, CbFtpBody, Parser, ParserFactory, ParserFuture, PktStrm, Prolens, ReadError,
+    packet::*,
+};
+use std::{ffi::c_void, marker::PhantomData};
 
 pub struct FtpDataParser<T>
 where

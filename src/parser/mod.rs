@@ -1,3 +1,4 @@
+pub mod dnstcp;
 pub mod dnsudp;
 pub mod ftpcmd;
 pub mod ftpdata;
@@ -23,15 +24,7 @@ pub mod readline;
 #[cfg(test)]
 pub mod readn;
 
-use crate::Direction;
-use crate::Header;
-use crate::OptRR;
-use crate::Packet;
-use crate::PktStrm;
-use crate::Prolens;
-use crate::Qtype;
-use crate::RR;
-use crate::ReadRet;
+use crate::{Direction, Header, OptRR, Packet, PktStrm, Prolens, Qtype, RR, ReadRet};
 use dnsudp::Qclass;
 use futures::Future;
 use memchr::memmem::Finder;

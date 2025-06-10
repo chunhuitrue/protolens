@@ -1,16 +1,7 @@
-use crate::CbDnsAdd;
-use crate::CbDnsAnswer;
-use crate::CbDnsAuth;
-use crate::CbDnsEnd;
-use crate::CbDnsHeader;
-use crate::CbDnsOptAdd;
-use crate::CbDnsQuery;
-use crate::Parser;
-use crate::ParserFactory;
-use crate::Prolens;
-use crate::UdpParser;
-use crate::UdpParserFn;
-use crate::packet::*;
+use crate::{
+    CbDnsAdd, CbDnsAnswer, CbDnsAuth, CbDnsEnd, CbDnsHeader, CbDnsOptAdd, CbDnsQuery, Parser,
+    ParserFactory, Prolens, UdpParser, UdpParserFn, packet::*,
+};
 use byteorder::{BigEndian, ByteOrder};
 use std::ffi::c_void;
 use std::marker::PhantomData;
@@ -49,7 +40,7 @@ where
     }
 
     fn bdir_parser(pkt: T, callbacks: DnsCallbacks, cb_ctx: *mut c_void) -> Result<(), ()> {
-        dns_parser(pkt.payload(), callbacks, cb_ctx)
+        dns_parser(pkt.payload(), &callbacks, cb_ctx)
     }
 }
 
@@ -122,13 +113,14 @@ where
 
 const MAX_NAME: usize = 1024;
 
-pub(crate) fn dns_parser(data: &[u8], cb: DnsCallbacks, cb_ctx: *mut c_void) -> Result<(), ()> {
+pub(crate) fn dns_parser(data: &[u8], cb: &DnsCallbacks, cb_ctx: *mut c_void) -> Result<(), ()> {
     const OPT_RECORD: [u8; 3] = [0, 0, 41];
     const HEADER_SIZE: usize = 12;
     let mut offset = HEADER_SIZE;
     let mut name = [0u8; MAX_NAME];
     let mut rd_name = [0u8; MAX_NAME];
     let mut soa_name = [0u8; MAX_NAME];
+    let pkt = data;
 
     let header = header_parser(data)?;
     if let Some(ref cb) = cb.header {
@@ -137,7 +129,7 @@ pub(crate) fn dns_parser(data: &[u8], cb: DnsCallbacks, cb_ctx: *mut c_void) -> 
 
     for _ in 0..header.qcount {
         name.fill(0);
-        let label_len = name_parser(&data[offset..], data, &mut name)?;
+        let label_len = name_parser(&data[offset..], pkt, &mut name)?;
 
         offset += label_len;
         let qtype = qtype_parser(&data[offset..])?;
@@ -163,7 +155,7 @@ pub(crate) fn dns_parser(data: &[u8], cb: DnsCallbacks, cb_ctx: *mut c_void) -> 
         rd_name.fill(0);
         soa_name.fill(0);
         let (record_len, record) =
-            record_parser(&data[offset..], &mut name, &mut rd_name, &mut soa_name)?;
+            record_parser(&data[offset..], pkt, &mut name, &mut rd_name, &mut soa_name)?;
         offset += record_len;
 
         if let Some(ref cb) = cb.answer {
@@ -176,7 +168,7 @@ pub(crate) fn dns_parser(data: &[u8], cb: DnsCallbacks, cb_ctx: *mut c_void) -> 
         rd_name.fill(0);
         soa_name.fill(0);
         let (record_len, record) =
-            record_parser(&data[offset..], &mut name, &mut rd_name, &mut soa_name)?;
+            record_parser(&data[offset..], pkt, &mut name, &mut rd_name, &mut soa_name)?;
         offset += record_len;
 
         if let Some(ref cb) = cb.auth {
@@ -190,7 +182,7 @@ pub(crate) fn dns_parser(data: &[u8], cb: DnsCallbacks, cb_ctx: *mut c_void) -> 
         soa_name.fill(0);
         if offset + 3 <= data.len() && data[offset..offset + 3] == OPT_RECORD {
             let (record_len, opt_record) =
-                opt_record_parser(&data[offset..], &mut rd_name, &mut soa_name)?;
+                opt_record_parser(&data[offset..], pkt, &mut rd_name, &mut soa_name)?;
             offset += record_len;
 
             if let Some(ref cb) = cb.opt_add {
@@ -198,7 +190,7 @@ pub(crate) fn dns_parser(data: &[u8], cb: DnsCallbacks, cb_ctx: *mut c_void) -> 
             }
         } else {
             let (record_len, record) =
-                record_parser(&data[offset..], &mut name, &mut rd_name, &mut soa_name)?;
+                record_parser(&data[offset..], pkt, &mut name, &mut rd_name, &mut soa_name)?;
             offset += record_len;
 
             if let Some(ref cb) = cb.add {
@@ -226,7 +218,7 @@ fn header_parser(data: &[u8]) -> Result<Header, ()> {
 
     let header = Header {
         id: BigEndian::read_u16(&data[..2]),
-        qr: flags & mask::QR == 0,
+        qr: flags & mask::QR != 0,
         opcode: ((flags & mask::OPCODE) >> mask::OPCODE.trailing_zeros()).into(),
         aa: flags & mask::AA != 0,
         tc: flags & mask::TC != 0,
@@ -244,8 +236,18 @@ fn header_parser(data: &[u8]) -> Result<Header, ()> {
 }
 
 fn name_parser(data: &[u8], pkt: &[u8], name: &mut [u8]) -> Result<usize, ()> {
+    name_parser_acc(data, pkt, name, 0)
+}
+
+const MAX_JUMPS: usize = 3;
+
+fn name_parser_acc(data: &[u8], pkt: &[u8], name: &mut [u8], count: usize) -> Result<usize, ()> {
     let mut pos = 0;
     let mut name_pos = 0;
+
+    if count > MAX_JUMPS {
+        return Err(());
+    }
 
     loop {
         if data.len() <= pos {
@@ -275,7 +277,8 @@ fn name_parser(data: &[u8], pkt: &[u8], name: &mut [u8]) -> Result<usize, ()> {
             if name_pos >= name.len() {
                 return Err(());
             }
-            name_parser(&pkt[offset..], pkt, &mut name[name_pos..])?;
+
+            name_parser_acc(&pkt[offset..], pkt, &mut name[name_pos..], count + 1)?;
 
             return Ok(pos + 2);
         } else if byte & 0b1100_0000 == 0 {
@@ -420,13 +423,14 @@ fn class_parser(data: &[u8]) -> Result<(bool, Class), ()> {
 
 fn record_parser<'a>(
     data: &'a [u8],
+    pkt: &'a [u8],
     name: &'a mut [u8],
     rd_name: &'a mut [u8],
     soa_name: &'a mut [u8],
 ) -> Result<(usize, RR<'a>), ()> {
     let mut offset = 0;
 
-    let name_len = name_parser(&data[offset..], data, name)?;
+    let name_len = name_parser(&data[offset..], pkt, name)?;
     offset += name_len;
 
     if offset + 10 > data.len() {
@@ -455,7 +459,7 @@ fn record_parser<'a>(
     let rdata = rdata_parser(
         rtype,
         &data[offset..offset + rdata_len],
-        data,
+        pkt,
         rd_name,
         soa_name,
     )?;
@@ -474,6 +478,7 @@ fn record_parser<'a>(
 
 fn opt_record_parser<'a>(
     data: &'a [u8],
+    pkt: &'a [u8],
     rd_name: &'a mut [u8],
     soa_name: &'a mut [u8],
 ) -> Result<(usize, OptRR<'a>), ()> {
@@ -515,13 +520,7 @@ fn opt_record_parser<'a>(
         return Err(());
     }
 
-    let rdata = rdata_parser(
-        rtype,
-        &data[offset..offset + rdlen],
-        data,
-        rd_name,
-        soa_name,
-    )?;
+    let rdata = rdata_parser(rtype, &data[offset..offset + rdlen], pkt, rd_name, soa_name)?;
     offset += rdlen;
 
     let rr = OptRR {
@@ -672,13 +671,13 @@ fn srv_parser<'a>(rdata: &[u8], pkt: &[u8], rd_name: &'a mut [u8]) -> Result<Rda
 
 #[derive(Clone)]
 pub(crate) struct DnsCallbacks {
-    header: Option<CbDnsHeader>,
-    query: Option<CbDnsQuery>,
-    answer: Option<CbDnsAnswer>,
-    auth: Option<CbDnsAuth>,
-    add: Option<CbDnsAdd>,
-    opt_add: Option<CbDnsOptAdd>,
-    end: Option<CbDnsEnd>,
+    pub(crate) header: Option<CbDnsHeader>,
+    pub(crate) query: Option<CbDnsQuery>,
+    pub(crate) answer: Option<CbDnsAnswer>,
+    pub(crate) auth: Option<CbDnsAuth>,
+    pub(crate) add: Option<CbDnsAdd>,
+    pub(crate) opt_add: Option<CbDnsOptAdd>,
+    pub(crate) end: Option<CbDnsEnd>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -951,7 +950,7 @@ mod tests {
 
         let header = header_parser(&data).unwrap();
         assert_eq!(header.id, 0x1234);
-        assert!(!header.qr);
+        assert!(header.qr);
         assert_eq!(header.opcode, Opcode::Status);
         assert!(header.aa);
         assert!(header.tc);
@@ -992,7 +991,7 @@ mod tests {
         data[2] = 0;
         let header1 = header_parser(&data).unwrap();
         assert_eq!(header1.opcode, Opcode::Query);
-        assert!(header1.qr);
+        assert!(!header1.qr);
 
         // IQuery (1)
         data[2] = (1 << 3) as u8;
@@ -1406,7 +1405,7 @@ mod tests {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let result = record_parser(&data, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(&data, &data, &mut name, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (consumed, rr) = result.unwrap();
@@ -1454,7 +1453,7 @@ mod tests {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let result = record_parser(&data, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(&data, &data, &mut name, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (consumed, rr) = result.unwrap();
@@ -1501,7 +1500,7 @@ mod tests {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let result = record_parser(&data, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(&data, &data, &mut name, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (consumed, rr) = result.unwrap();
@@ -1545,7 +1544,7 @@ mod tests {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let result = record_parser(&data, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(&data, &data, &mut name, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (consumed, rr) = result.unwrap();
@@ -1586,7 +1585,7 @@ mod tests {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let result = record_parser(&data, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(&data, &data, &mut name, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (consumed, rr) = result.unwrap();
@@ -1631,7 +1630,7 @@ mod tests {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let result = record_parser(&data, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(&data, &data, &mut name, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (consumed, rr) = result.unwrap();
@@ -1672,7 +1671,7 @@ mod tests {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let result = record_parser(&data, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(&data, &data, &mut name, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (_, rr) = result.unwrap();
@@ -1687,7 +1686,13 @@ mod tests {
 
         // 测试数据长度不足（少于最小记录长度）
         let short_data = [0; 5];
-        let result = record_parser(&short_data, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(
+            &short_data,
+            &short_data,
+            &mut name,
+            &mut rd_name,
+            &mut soa_name,
+        );
         assert!(result.is_err());
 
         // 测试域名解析失败
@@ -1699,7 +1704,13 @@ mod tests {
             0x00, 0x04, // RDATA长度
             192, 168, 1, 1, // RDATA
         ];
-        let result = record_parser(&invalid_name_data, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(
+            &invalid_name_data,
+            &invalid_name_data,
+            &mut name,
+            &mut rd_name,
+            &mut soa_name,
+        );
         assert!(result.is_err());
 
         // 测试RDATA长度超出剩余数据
@@ -1710,7 +1721,13 @@ mod tests {
         invalid_rdata_len.extend_from_slice(&[0x00, 0x00, 0x0E, 0x10]); // TTL
         invalid_rdata_len.extend_from_slice(&[0x00, 0x10]); // RDATA长度：16字节（但实际只有4字节）
         invalid_rdata_len.extend_from_slice(&[1, 2, 3, 4]); // RDATA：只有4字节
-        let result = record_parser(&invalid_rdata_len, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(
+            &invalid_rdata_len,
+            &invalid_rdata_len,
+            &mut name,
+            &mut rd_name,
+            &mut soa_name,
+        );
         assert!(result.is_err());
 
         // 测试无效的记录类型
@@ -1721,7 +1738,13 @@ mod tests {
         invalid_type.extend_from_slice(&[0x00, 0x00, 0x0E, 0x10]); // TTL
         invalid_type.extend_from_slice(&[0x00, 0x04]); // RDATA长度
         invalid_type.extend_from_slice(&[1, 2, 3, 4]); // RDATA
-        let result = record_parser(&invalid_type, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(
+            &invalid_type,
+            &invalid_type,
+            &mut name,
+            &mut rd_name,
+            &mut soa_name,
+        );
         assert!(result.is_err());
 
         // 测试无效的类
@@ -1732,61 +1755,67 @@ mod tests {
         invalid_class.extend_from_slice(&[0x00, 0x00, 0x0E, 0x10]); // TTL
         invalid_class.extend_from_slice(&[0x00, 0x04]); // RDATA长度
         invalid_class.extend_from_slice(&[1, 2, 3, 4]); // RDATA
-        let result = record_parser(&invalid_class, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(
+            &invalid_class,
+            &invalid_class,
+            &mut name,
+            &mut rd_name,
+            &mut soa_name,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_record_parser_unknown_type() {
-        // 测试未知记录类型（应该返回Unknown类型的Rdata）
+        // Test unknown record type (should return Unknown type Rdata)
         let mut data = Vec::new();
 
-        // 域名：test.com
+        // Domain: test.com
         data.extend_from_slice(&[4, b't', b'e', b's', b't', 3, b'c', b'o', b'm', 0]);
-        // 类型：99（未知类型）
+        // Type: 99 (unknown type)
         data.extend_from_slice(&[0x00, 0x63]);
-        // 类：IN (1)
+        // Class: IN (1)
         data.extend_from_slice(&[0x00, 0x01]);
-        // TTL：3600秒
+        // TTL: 3600 seconds
         data.extend_from_slice(&[0x00, 0x00, 0x0E, 0x10]);
-        // RDATA长度：8字节
+        // RDATA length: 8 bytes
         data.extend_from_slice(&[0x00, 0x08]);
 
-        // RDATA：任意数据
+        // RDATA: arbitrary data
         data.extend_from_slice(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
 
         let mut name = [0u8; MAX_NAME];
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let result = record_parser(&data, &mut name, &mut rd_name, &mut soa_name);
+        let result = record_parser(&data, &data, &mut name, &mut rd_name, &mut soa_name);
         assert!(result.is_err());
     }
 
-    // OPT 记录解析 - 正常情况
+    // OPT record parsing - normal case
     #[test]
     fn test_opt_record_parser_valid() {
         let mut data = Vec::new();
 
-        // NAME: 根域名（单个 0 字节）
+        // NAME: root domain (single 0 byte)
         data.push(0x00);
         // TYPE: OPT (41)
         data.extend_from_slice(&[0x00, 0x29]);
         // CLASS: UDP payload size (4096)
         data.extend_from_slice(&[0x10, 0x00]);
-        // TTL 字段（4字节）Extended RCODE: 0
+        // TTL field (4 bytes) Extended RCODE: 0
         data.push(0x00);
         // Version: 0
         data.push(0x00);
         // Flags: DO bit set (0x8000)
         data.extend_from_slice(&[0x80, 0x00]);
-        // RDLEN: 0（无 RDATA）
+        // RDLEN: 0 (no RDATA)
         data.extend_from_slice(&[0x00, 0x00]);
 
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let result = opt_record_parser(&data, &mut rd_name, &mut soa_name);
+        let result = opt_record_parser(&data, &data, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (offset, opt_rr) = result.unwrap();
@@ -1797,7 +1826,7 @@ mod tests {
         assert_eq!(opt_rr.flags, 0x8000);
     }
 
-    // OPT 记录解析 - 带 RDATA
+    // OPT record parsing - with RDATA
     #[test]
     fn test_opt_record_parser_with_rdata() {
         let mut data = Vec::new();
@@ -1823,7 +1852,7 @@ mod tests {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let result = opt_record_parser(&data, &mut rd_name, &mut soa_name);
+        let result = opt_record_parser(&data, &data, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (offset, opt_rr) = result.unwrap();
@@ -1834,63 +1863,68 @@ mod tests {
         assert_eq!(opt_rr.flags, 0x0000);
     }
 
-    // 测试 OPT 记录解析错误情况
+    // Test OPT record parsing error cases
     #[test]
     fn test_opt_record_parser_errors() {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        // 测试数据长度不足（少于最小 11 字节）
+        // Test insufficient data length (less than minimum 11 bytes)
         let short_data = [0; 10];
-        let result = opt_record_parser(&short_data, &mut rd_name, &mut soa_name);
+        let result = opt_record_parser(&short_data, &short_data, &mut rd_name, &mut soa_name);
         assert!(result.is_err());
 
-        // 测试 NAME 不是根域名（非 0 字节开头）
+        // Test NAME is not root domain (not starting with 0 byte)
         let mut invalid_name = Vec::new();
-        invalid_name.push(0x01); // 非根域名
+        invalid_name.push(0x01); // Not root domain
         invalid_name.extend_from_slice(&[0x00, 0x29]); // TYPE: OPT
         invalid_name.extend_from_slice(&[0x10, 0x00]); // CLASS
         invalid_name.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // TTL
         invalid_name.extend_from_slice(&[0x00, 0x00]); // RDLEN
-        let result = opt_record_parser(&invalid_name, &mut rd_name, &mut soa_name);
+        let result = opt_record_parser(&invalid_name, &invalid_name, &mut rd_name, &mut soa_name);
         assert!(result.is_err());
 
-        // 测试无效的记录类型（非 OPT）
+        // Test invalid record type (not OPT)
         let mut invalid_type = Vec::new();
-        invalid_type.push(0x00); // NAME: 根域名
-        invalid_type.extend_from_slice(&[0x00, 0x01]); // TYPE: A（非 OPT）
+        invalid_type.push(0x00); // NAME: root domain
+        invalid_type.extend_from_slice(&[0x00, 0x01]); // TYPE: A (not OPT)
         invalid_type.extend_from_slice(&[0x10, 0x00]); // CLASS
         invalid_type.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // TTL
         invalid_type.extend_from_slice(&[0x00, 0x00]); // RDLEN
-        let result = opt_record_parser(&invalid_type, &mut rd_name, &mut soa_name);
+        let result = opt_record_parser(&invalid_type, &invalid_type, &mut rd_name, &mut soa_name);
         assert!(result.is_err());
 
-        // 测试 RDATA 长度超出剩余数据
+        // Test RDATA length exceeds remaining data
         let mut invalid_rdata_len = Vec::new();
         invalid_rdata_len.push(0x00); // NAME
         invalid_rdata_len.extend_from_slice(&[0x00, 0x29]); // TYPE: OPT
         invalid_rdata_len.extend_from_slice(&[0x10, 0x00]); // CLASS
         invalid_rdata_len.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // TTL
-        invalid_rdata_len.extend_from_slice(&[0x00, 0x10]); // RDLEN: 16字节
-        invalid_rdata_len.extend_from_slice(&[0x01, 0x02]); // 只有2字节数据
-        let result = opt_record_parser(&invalid_rdata_len, &mut rd_name, &mut soa_name);
+        invalid_rdata_len.extend_from_slice(&[0x00, 0x10]); // RDLEN: 16 bytes
+        invalid_rdata_len.extend_from_slice(&[0x01, 0x02]); // Only 2 bytes of data
+        let result = opt_record_parser(
+            &invalid_rdata_len,
+            &invalid_rdata_len,
+            &mut rd_name,
+            &mut soa_name,
+        );
         assert!(result.is_err());
     }
 
-    // 测试 OPT 记录解析 - 边界情况
+    // Test OPT record parsing - edge cases
     #[test]
     fn test_opt_record_parser_edge_cases() {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        // 测试最大 payload size
+        // Test maximum payload size
         let mut max_payload = Vec::new();
         max_payload.push(0x00); // NAME
         max_payload.extend_from_slice(&[0x00, 0x29]); // TYPE: OPT
-        max_payload.extend_from_slice(&[0xFF, 0xFF]); // CLASS: 最大 payload size (65535)
-        max_payload.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]); // TTL: 所有位设置
+        max_payload.extend_from_slice(&[0xFF, 0xFF]); // CLASS: maximum payload size (65535)
+        max_payload.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]); // TTL: all bits set
         max_payload.extend_from_slice(&[0x00, 0x00]); // RDLEN: 0
-        let result = opt_record_parser(&max_payload, &mut rd_name, &mut soa_name);
+        let result = opt_record_parser(&max_payload, &max_payload, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (_, opt_rr) = result.unwrap();
@@ -1899,7 +1933,7 @@ mod tests {
         assert_eq!(opt_rr.version, 255);
         assert_eq!(opt_rr.flags, 0xFFFF);
 
-        // 测试最小有效记录（正好 11 字节）
+        // Test minimum valid record (exactly 11 bytes)
         let min_valid = [
             0x00, // NAME
             0x00, 0x29, // TYPE: OPT
@@ -1907,7 +1941,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, // TTL
             0x00, 0x00, // RDLEN: 0
         ];
-        let result = opt_record_parser(&min_valid, &mut rd_name, &mut soa_name);
+        let result = opt_record_parser(&min_valid, &min_valid, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (offset, opt_rr) = result.unwrap();
@@ -1915,29 +1949,29 @@ mod tests {
         assert_eq!(opt_rr.payload_size, 512);
     }
 
-    // 测试 OptRR 结构体字段验证
+    // Test OptRR struct field validation
     #[test]
     fn test_opt_record_parser_optrr_fields() {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        // 测试各种 payload size 值
+        // Test various payload size values
         let test_cases = [
-            (512u16, "标准 DNS UDP payload size"),
-            (1232u16, "常见的 EDNS payload size"),
-            (4096u16, "较大的 payload size"),
-            (65535u16, "最大 payload size"),
+            (512u16, "Standard DNS UDP payload size"),
+            (1232u16, "Common EDNS payload size"),
+            (4096u16, "Large payload size"),
+            (65535u16, "Maximum payload size"),
         ];
 
         for (payload_size, description) in test_cases {
             let mut data = Vec::new();
-            data.push(0x00); // NAME: 根域名
+            data.push(0x00); // NAME: root domain
             data.extend_from_slice(&[0x00, 0x29]); // TYPE: OPT
             data.extend_from_slice(&payload_size.to_be_bytes()); // CLASS: payload size
             data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // TTL
             data.extend_from_slice(&[0x00, 0x00]); // RDLEN: 0
 
-            let result = opt_record_parser(&data, &mut rd_name, &mut soa_name);
+            let result = opt_record_parser(&data, &data, &mut rd_name, &mut soa_name);
             assert!(result.is_ok(), "Failed for {}", description);
 
             let (_, opt_rr) = result.unwrap();
@@ -1949,13 +1983,13 @@ mod tests {
         }
     }
 
-    // OptRR 的 extended RCODE 字段
+    // Extended RCODE field of OptRR
     #[test]
     fn test_opt_record_parser_extended_rcode() {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let test_rcodes = [0u8, 1, 15, 255]; // 测试不同的 extended RCODE 值
+        let test_rcodes = [0u8, 1, 15, 255]; // Test different extended RCODE values
         for extrcode in test_rcodes {
             let mut data = Vec::new();
             data.push(0x00); // NAME
@@ -1966,7 +2000,7 @@ mod tests {
             data.extend_from_slice(&[0x00, 0x00]); // Flags
             data.extend_from_slice(&[0x00, 0x00]); // RDLEN
 
-            let result = opt_record_parser(&data, &mut rd_name, &mut soa_name);
+            let result = opt_record_parser(&data, &data, &mut rd_name, &mut soa_name);
             assert!(result.is_ok(), "Failed for extended RCODE {}", extrcode);
 
             let (_, opt_rr) = result.unwrap();
@@ -1974,13 +2008,13 @@ mod tests {
         }
     }
 
-    // OptRR 的 version 字段
+    // Version field of OptRR
     #[test]
     fn test_opt_record_parser_version() {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        let test_versions = [0u8, 1, 2, 255]; // 测试不同的版本值
+        let test_versions = [0u8, 1, 2, 255]; // Test different version values
 
         for version in test_versions {
             let mut data = Vec::new();
@@ -1992,7 +2026,7 @@ mod tests {
             data.extend_from_slice(&[0x00, 0x00]); // Flags
             data.extend_from_slice(&[0x00, 0x00]); // RDLEN
 
-            let result = opt_record_parser(&data, &mut rd_name, &mut soa_name);
+            let result = opt_record_parser(&data, &data, &mut rd_name, &mut soa_name);
             assert!(result.is_ok(), "Failed for version {}", version);
 
             let (_, opt_rr) = result.unwrap();
@@ -2000,17 +2034,17 @@ mod tests {
         }
     }
 
-    // OptRR 的 flags 字段
+    // Flags field of OptRR
     #[test]
     fn test_opt_record_parser_flags() {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
         let test_flags = [
-            (0x0000u16, "无标志位"),
-            (0x8000u16, "DO bit 设置"),
-            (0x4000u16, "其他标志位"),
-            (0xFFFFu16, "所有标志位设置"),
+            (0x0000u16, "No flags set"),
+            (0x8000u16, "DO bit set"),
+            (0x4000u16, "Other flag bit"),
+            (0xFFFFu16, "All flags set"),
         ];
 
         for (flags, description) in test_flags {
@@ -2023,7 +2057,7 @@ mod tests {
             data.extend_from_slice(&flags.to_be_bytes()); // Flags
             data.extend_from_slice(&[0x00, 0x00]); // RDLEN
 
-            let result = opt_record_parser(&data, &mut rd_name, &mut soa_name);
+            let result = opt_record_parser(&data, &data, &mut rd_name, &mut soa_name);
             assert!(result.is_ok(), "Failed for {}", description);
 
             let (_, opt_rr) = result.unwrap();
@@ -2031,21 +2065,21 @@ mod tests {
         }
     }
 
-    // OptRR 的 rdata 字段（包含 EDNS 选项）
+    // OptRR rdata field (containing EDNS options)
     #[test]
     fn test_opt_record_parser_rdata_options() {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        // 测试包含 EDNS 选项的 RDATA
+        // Test RDATA containing EDNS options
         let mut data = Vec::new();
         data.push(0x00); // NAME
         data.extend_from_slice(&[0x00, 0x29]); // TYPE: OPT
         data.extend_from_slice(&[0x10, 0x00]); // CLASS: 4096
-        data.extend_from_slice(&[0x00, 0x00, 0x80, 0x00]); // TTL (DO bit 设置)
-        data.extend_from_slice(&[0x00, 0x08]); // RDLEN: 8 字节
+        data.extend_from_slice(&[0x00, 0x00, 0x80, 0x00]); // TTL (DO bit set)
+        data.extend_from_slice(&[0x00, 0x08]); // RDLEN: 8 bytes
 
-        // RDATA: 模拟 EDNS 选项
+        // RDATA: simulate EDNS options
         // Option Code: 3 (NSID)
         data.extend_from_slice(&[0x00, 0x03]);
         // Option Length: 4
@@ -2053,7 +2087,7 @@ mod tests {
         // Option Data: "test"
         data.extend_from_slice(&[0x74, 0x65, 0x73, 0x74]);
 
-        let result = opt_record_parser(&data, &mut rd_name, &mut soa_name);
+        let result = opt_record_parser(&data, &data, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (offset, opt_rr) = result.unwrap();
@@ -2061,7 +2095,7 @@ mod tests {
         assert_eq!(opt_rr.payload_size, 4096);
         assert_eq!(opt_rr.extrcode, 0);
         assert_eq!(opt_rr.version, 0);
-        assert_eq!(opt_rr.flags, 0x8000); // DO bit 设置
+        assert_eq!(opt_rr.flags, 0x8000); // DO bit set
 
         match opt_rr.rdata {
             Rdata::Unknown(rdata_bytes) => {
@@ -2074,29 +2108,29 @@ mod tests {
         }
     }
 
-    // OptRR 的完整字段组合
+    // Complete field combination for OptRR
     #[test]
     fn test_opt_record_parser_complete_optrr() {
         let mut rd_name = [0u8; MAX_NAME];
         let mut soa_name = [0u8; MAX_NAME];
 
-        // 构造一个包含所有字段的完整 OPT 记录
+        // Construct a complete OPT record with all fields
         let mut data = Vec::new();
-        data.push(0x00); // NAME: 根域名
+        data.push(0x00); // NAME: root domain
         data.extend_from_slice(&[0x00, 0x29]); // TYPE: OPT (41)
         data.extend_from_slice(&[0x04, 0xD0]); // CLASS: payload size = 1232
         data.push(0x01); // Extended RCODE: 1
         data.push(0x00); // Version: 0
-        data.extend_from_slice(&[0x80, 0x00]); // Flags: DO bit 设置
-        data.extend_from_slice(&[0x00, 0x0C]); // RDLEN: 12 字节
+        data.extend_from_slice(&[0x80, 0x00]); // Flags: DO bit set
+        data.extend_from_slice(&[0x00, 0x0C]); // RDLEN: 12 bytes
 
-        // RDATA: 两个 EDNS 选项
-        // 第一个选项: NSID (3)
+        // RDATA: two EDNS options
+        // First option: NSID (3)
         data.extend_from_slice(&[0x00, 0x03, 0x00, 0x02, 0x41, 0x42]); // Code=3, Len=2, Data="AB"
-        // 第二个选项: 自定义选项 (65001)
+        // Second option: Custom option (65001)
         data.extend_from_slice(&[0xFD, 0xE9, 0x00, 0x02, 0x43, 0x44]); // Code=65001, Len=2, Data="CD"
 
-        let result = opt_record_parser(&data, &mut rd_name, &mut soa_name);
+        let result = opt_record_parser(&data, &data, &mut rd_name, &mut soa_name);
         assert!(result.is_ok());
 
         let (offset, opt_rr) = result.unwrap();
@@ -2278,51 +2312,51 @@ mod tests {
         let answers_guard = captured_answers.borrow();
         let end_guard = dns_end_called.borrow();
 
-        // 验证应该有2个DNS消息（请求和应答）
-        assert_eq!(headers_guard.len(), 2, "应该有2个DNS消息");
-        assert_eq!(*end_guard, 2, "DNS end回调应该被调用2次");
+        // Verify there should be 2 DNS messages (request and response)
+        assert_eq!(headers_guard.len(), 2, "Should have 2 DNS messages");
+        assert_eq!(*end_guard, 2, "DNS end callback should be called 2 times");
 
-        // 验证第一个包是查询（QR=true表示查询）
+        // Verify the first packet is a query (QR=false indicates query)
         let query_header = &headers_guard[0];
-        assert!(query_header.qr, "第一个包应该是DNS查询");
-        assert_eq!(query_header.qcount, 1, "查询包应该有1个查询");
-        assert_eq!(query_header.ancount, 0, "查询包应该没有答案");
+        assert!(!query_header.qr, "First packet should be a DNS query");
+        assert_eq!(query_header.qcount, 1, "Query packet should have 1 query");
+        assert_eq!(query_header.ancount, 0, "Query packet should have no answers");
 
-        // 验证第二个包是应答（QR=false表示应答）
+        // Verify the second packet is a response (QR=true indicates response)
         let response_header = &headers_guard[1];
-        assert!(!response_header.qr, "第二个包应该是DNS应答");
-        assert_eq!(response_header.qcount, 1, "应答包应该有1个查询");
-        assert!(response_header.ancount > 0, "应答包应该有答案记录");
+        assert!(response_header.qr, "Second packet should be a DNS response");
+        assert_eq!(response_header.qcount, 1, "Response packet should have 1 query");
+        assert!(response_header.ancount > 0, "Response packet should have answer records");
 
-        // 验证查询内容
+        // Verify query content
         assert_eq!(
             queries_guard.len(),
             2,
-            "应该有2个查询记录（请求和应答中各一个）"
+            "Should have 2 query records (one in request and one in response)"
         );
 
-        // 根据Wireshark截图，查询的是server1.somewebsite15.com的CNAME记录
+        // According to Wireshark capture, the query is for CNAME record of server1.somewebsite15.com
         let query_name = String::from_utf8_lossy(&queries_guard[0].0);
         assert!(
             query_name.contains("server1.somewebsite15.com"),
-            "查询域名应该包含server1.somewebsite15.com"
+            "Query domain should contain server1.somewebsite15.com"
         );
-        assert_eq!(queries_guard[0].1, Qtype::Cname, "查询类型应该是CNAME");
-        assert_eq!(queries_guard[0].2, Qclass::IN, "查询类别应该是IN");
+        assert_eq!(queries_guard[0].1, Qtype::Cname, "Query type should be CNAME");
+        assert_eq!(queries_guard[0].2, Qclass::IN, "Query class should be IN");
 
-        assert!(!answers_guard.is_empty(), "应该有答案记录");
+        assert!(!answers_guard.is_empty(), "Should have answer records");
 
-        println!("所有答案记录:");
+        println!("All answer records:");
         for (i, answer) in answers_guard.iter().enumerate() {
-            println!("  答案 {}: {}", i, answer);
+            println!("  Answer {}: {}", i, answer);
         }
 
         let has_cname_record = answers_guard.iter().any(|answer| answer.contains("CNAME"));
-        assert!(has_cname_record, "应答中应该包含CNAME记录类型");
+        assert!(has_cname_record, "Response should contain CNAME record type");
 
         let has_target_ip = answers_guard
             .iter()
             .any(|answer| answer.contains("60.1.1.15"));
-        assert!(has_target_ip, "应答中应该包含目标IP地址60.1.1.15");
+        assert!(has_target_ip, "Response should contain target IP address 60.1.1.15");
     }
 }

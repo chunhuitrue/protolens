@@ -50,8 +50,8 @@ mod tests {
 
         #[cfg(test)]
         {
-            assert_eq!(L7Proto::RawPacket as u32, 9);
-            assert_eq!(L7Proto::Byte as u32, 10);
+            assert_eq!(L7Proto::RawPacket as u32, 10);
+            assert_eq!(L7Proto::Byte as u32, 11);
         }
     }
 
