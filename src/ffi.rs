@@ -6,7 +6,9 @@ use crate::Task;
 use crate::TransferEncoding;
 use crate::packet::Direction;
 use crate::packet::TransProto;
-use crate::parser::dnsudp::{Class, Header, Opcode, OptRR, Qclass, Qtype, RR, Rcode, Rdata, Type};
+use crate::parser::dnsudp::{
+    Class, DnsHeader, Opcode, OptRR, Qclass, Qtype, RR, Rcode, Rdata, Type,
+};
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::net::IpAddr;
@@ -233,6 +235,11 @@ pub enum CL7Proto {
     Http,
     FtpCmd,
     FtpData,
+    Sip,
+    DnsUdp,
+    DnsTcp,
+    Smb,
+
     Unknown,
 }
 
@@ -246,6 +253,10 @@ impl From<CL7Proto> for L7Proto {
             CL7Proto::Http => L7Proto::Http,
             CL7Proto::FtpCmd => L7Proto::FtpCmd,
             CL7Proto::FtpData => L7Proto::FtpData,
+            CL7Proto::Sip => L7Proto::Sip,
+            CL7Proto::DnsUdp => L7Proto::DnsUdp,
+            CL7Proto::DnsTcp => L7Proto::DnsTcp,
+            CL7Proto::Smb => L7Proto::Smb,
             CL7Proto::Unknown => L7Proto::Unknown,
         }
     }
@@ -1118,8 +1129,8 @@ pub struct CHeader {
     pub arcount: u16,
 }
 
-impl From<Header> for CHeader {
-    fn from(header: Header) -> Self {
+impl From<DnsHeader> for CHeader {
+    fn from(header: DnsHeader) -> Self {
         CHeader {
             id: header.id,
             qr: header.qr,
@@ -1376,7 +1387,7 @@ pub extern "C" fn protolens_set_cb_dns_header(
     }
 
     let prolens = unsafe { &mut *prolens };
-    let wrapper = move |header: Header, offset: usize, ctx: *mut c_void| {
+    let wrapper = move |header: DnsHeader, offset: usize, ctx: *mut c_void| {
         callback.unwrap()(header.into(), offset, ctx);
     };
     prolens.0.set_cb_dns_header(wrapper);
@@ -1832,4 +1843,100 @@ pub extern "C" fn protolens_set_cb_dns_end(prolens: *mut FfiProlens, callback: O
         callback.unwrap()(ctx);
     };
     prolens.0.set_cb_dns_end(wrapper);
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct CSmbHeader {
+    pub protocol_id: u32,
+    pub structure_size: u16,
+    pub credit_charge: u16,
+    pub status: u32,
+    pub command: u16,
+    pub credit: u16,
+    pub flags: u32,
+    pub next_command: u32,
+    pub message_id: u64,
+    pub reserved: u32,
+    pub tree_id: u32,
+    pub session_id: u64,
+    pub signature: [u8; 16],
+}
+
+impl From<&crate::parser::smb::SmbHeader> for CSmbHeader {
+    fn from(header: &crate::parser::smb::SmbHeader) -> Self {
+        let signature_bytes = header.signature.to_le_bytes();
+        CSmbHeader {
+            protocol_id: header.protocol_id,
+            structure_size: header.structure_size,
+            credit_charge: header.credit_charge,
+            status: header.status,
+            command: header.command,
+            credit: header.credit,
+            flags: header.flags,
+            next_command: header.next_command,
+            message_id: header.message_id,
+            reserved: header.reserved,
+            tree_id: header.tree_id,
+            session_id: header.session_id,
+            signature: signature_bytes,
+        }
+    }
+}
+
+type CbSmbFileStart =
+    extern "C" fn(header: CSmbHeader, len: u32, offset: u64, fid: [u8; 16], ctx: *const c_void);
+
+type CbSmbFileStop = extern "C" fn(header: CSmbHeader, ctx: *const c_void);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_smb_file_start(
+    prolens: *mut FfiProlens,
+    callback: Option<CbSmbFileStart>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |header: &crate::parser::smb::SmbHeader,
+                        len: u32,
+                        offset: u64,
+                        fid: u128,
+                        ctx: *mut c_void| {
+        let c_header = CSmbHeader::from(header);
+        let fid_bytes = fid.to_le_bytes();
+        callback.unwrap()(c_header, len, offset, fid_bytes, ctx);
+    };
+    prolens.0.set_cb_smb_file_start(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_smb_file(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_smb_file(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_smb_file_stop(
+    prolens: *mut FfiProlens,
+    callback: Option<CbSmbFileStop>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |header: &crate::parser::smb::SmbHeader, ctx: *mut c_void| {
+        let c_header = CSmbHeader::from(header);
+        callback.unwrap()(c_header, ctx);
+    };
+    prolens.0.set_cb_smb_file_stop(wrapper);
 }

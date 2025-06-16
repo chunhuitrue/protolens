@@ -6,6 +6,7 @@ pub(crate) const POP3_PORT: u16 = 110;
 pub(crate) const IMAP_PORT: u16 = 143;
 pub(crate) const HTTP_PORT: u16 = 80;
 pub(crate) const FTP_PORT: u16 = 21;
+pub(crate) const SMB_PORT: u16 = 445;
 
 #[derive(Clone, Debug)]
 pub struct Config {

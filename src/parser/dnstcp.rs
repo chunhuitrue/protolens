@@ -135,7 +135,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Header, OptRR, Qclass, Qtype, RR, Rdata, test_utils::*};
+    use crate::{DnsHeader, OptRR, Qclass, Qtype, RR, Rdata, test_utils::*};
     use std::cell::RefCell;
     use std::env;
     use std::ffi::c_void;
@@ -148,7 +148,7 @@ mod tests {
         let file_path = project_root.join("tests/pcap/dns_tcp.pcap");
         let mut cap = Capture::init(file_path).unwrap();
 
-        let captured_headers = Rc::new(RefCell::new(Vec::<Header>::new()));
+        let captured_headers = Rc::new(RefCell::new(Vec::<DnsHeader>::new()));
         let captured_queries = Rc::new(RefCell::new(Vec::<(Vec<u8>, Qtype, Qclass, bool)>::new()));
         let captured_answers = Rc::new(RefCell::new(Vec::<String>::new()));
         let captured_authorities = Rc::new(RefCell::new(Vec::<String>::new()));
@@ -158,7 +158,7 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: Header, _offset: usize, _cb_ctx: *mut c_void| {
+            move |header: DnsHeader, _offset: usize, _cb_ctx: *mut c_void| {
                 let mut headers_guard = headers_clone.borrow_mut();
                 headers_guard.push(header);
                 println!(

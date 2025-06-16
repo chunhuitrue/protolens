@@ -1,3 +1,4 @@
+// #![allow(unused)]
 pub mod common;
 pub mod dnstcp;
 pub mod dnsudp;
@@ -8,6 +9,7 @@ pub mod imap;
 pub mod ordpacket;
 pub mod pop3;
 pub mod sip;
+pub mod smb;
 pub mod smtp;
 
 #[cfg(test)]
@@ -29,6 +31,8 @@ use crate::{Packet, PktStrm, Prolens};
 use futures::Future;
 use std::ffi::c_void;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 pub(crate) type ParserFuture = Pin<Box<dyn Future<Output = Result<(), ()>>>>;
 pub(crate) type DirConfirmFn<T> = fn(*mut PktStrm<T>, *mut PktStrm<T>, u16, u16) -> Option<bool>;
@@ -102,4 +106,107 @@ where
     where
         Self: Sized;
     fn create(&self, prolens: &Prolens<T>) -> Box<dyn Parser<T = T>>;
+}
+
+pub(crate) struct SharedState<T> {
+    data: Option<T>,
+}
+
+impl<T> SharedState<T> {
+    pub(crate) fn new() -> Self {
+        Self { data: None }
+    }
+
+    #[allow(unused)]
+    pub(crate) fn is_ready(&self) -> bool {
+        self.data.is_some()
+    }
+
+    pub(crate) fn get(&self) -> Option<&T> {
+        self.data.as_ref()
+    }
+
+    pub(crate) fn set(&mut self, data: T) {
+        self.data = Some(data);
+    }
+}
+
+pub(crate) struct SharedStateFuture<T> {
+    shared_state: Arc<Mutex<SharedState<T>>>,
+}
+
+impl<T: Clone> SharedStateFuture<T> {
+    pub(crate) fn new(shared_state: Arc<Mutex<SharedState<T>>>) -> Self {
+        Self { shared_state }
+    }
+}
+
+impl<T: Clone> Future for SharedStateFuture<T> {
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Ok(state) = self.shared_state.try_lock() {
+            if let Some(data) = state.get() {
+                Poll::Ready(data.clone())
+            } else {
+                Poll::Pending
+            }
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+pub(crate) struct SharedStateManager<T> {
+    state: Arc<Mutex<SharedState<T>>>,
+}
+
+impl<T: Clone> SharedStateManager<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(SharedState::new())),
+        }
+    }
+
+    pub(crate) fn wait_for(&self) -> SharedStateFuture<T> {
+        SharedStateFuture::new(Arc::clone(&self.state))
+    }
+
+    pub(crate) fn set(&self, data: T) -> Result<(), &'static str> {
+        if let Ok(mut state) = self.state.try_lock() {
+            state.set(data);
+            Ok(())
+        } else {
+            Err("Failed to acquire lock")
+        }
+    }
+
+    #[allow(unused)]
+    pub(crate) fn is_ready(&self) -> bool {
+        if let Ok(state) = self.state.try_lock() {
+            state.is_ready()
+        } else {
+            false
+        }
+    }
+
+    #[allow(unused)]
+    pub(crate) fn try_get(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        if let Ok(state) = self.state.try_lock() {
+            state.get().cloned()
+        } else {
+            None
+        }
+    }
+}
+
+impl<T> Clone for SharedStateManager<T> {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+        }
+    }
 }

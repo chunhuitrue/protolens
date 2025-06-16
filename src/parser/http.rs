@@ -217,7 +217,7 @@ where
         }
         loop {
             let (ret, content, seq) = stm
-                .read_mime_octet2(params.bdry_finder.unwrap(), params.bdry)
+                .read_mime_octet(params.bdry_finder.unwrap(), params.bdry)
                 .await?;
 
             if let Some(cb) = params.cb_body {

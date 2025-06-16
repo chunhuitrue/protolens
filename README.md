@@ -12,7 +12,7 @@ Protolens is a high-performance network protocol analysis and reconstruction lib
 *   **Currently Supported Protocols**: SMTP, POP3, IMAP, HTTP, FTP, etc.
 *   **Cross-Platform**: Supports Linux, macOS, Windows, and other operating systems.
 *   **Use Cases**:
-    *   Network Security Monitoring and Analysis (NIDS/NSM/Full Packet Capture Analysis/APM/Audit)
+    *   Network Security Monitoring and Analysis (DPI/NIDS/NSM/Full Packet Capture Analysis/APM/Audit)
     *   Real-time Network Traffic Protocol Parsing
     *   Offline PCAP Protocol Parsing
     *   Protocol Analysis Research

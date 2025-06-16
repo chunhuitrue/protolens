@@ -12,7 +12,7 @@ Protolens 是一个使用 Rust 编写的高性能网络协议解码与还原库�
 *   **当前支持协议**: SMTP, POP3，IMAP, HTTP，FTP 等。
 *   **跨平台**: 支持 Linux, macOS, Windows 等操作系统。
 *   **适用场景**:
-    *   网络安全监控与分析 (NIDS/NSM/全流量分析/APM/Audit)
+    *   网络安全监控与分析 (DPI/NIDS/NSM/全流量分析/APM/Audit)
     *   在线实时网络流量协议解析
     *   离线 pcap 协议解析
     *   协议分析研究

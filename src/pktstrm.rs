@@ -579,7 +579,7 @@ where
     // 读到\r\n--bdry
     // 或者读到--bdry
     // 但不包括bdry后面的\r\n
-    pub(crate) async fn read_mime_octet_err2(
+    pub(crate) async fn read_mime_octet_err(
         &mut self,
         finder: &Finder<'_>,
         bdry: &str,
@@ -633,12 +633,12 @@ where
         }
     }
 
-    pub(crate) async fn read_mime_octet2(
+    pub(crate) async fn read_mime_octet(
         &mut self,
         finder: &Finder<'_>,
         bdry: &str,
     ) -> Result<(ReadRet, &[u8], u32), ()> {
-        match self.read_mime_octet_err2(finder, bdry).await {
+        match self.read_mime_octet_err(finder, bdry).await {
             Ok(result) => Ok(result),
             Err(_) => Err(()),
         }
@@ -661,6 +661,27 @@ where
 
     pub(crate) async fn readn(&mut self, n: usize) -> Result<(&[u8], u32), ()> {
         match self.readn_err(n).await {
+            Ok(result) => Ok(result),
+            Err(_) => Err(()),
+        }
+    }
+
+    pub(crate) async fn peekn_err(&mut self, n: usize) -> Result<&[u8], ReadError> {
+        if n > self.max_buff {
+            return Err(ReadError::NoData);
+        }
+
+        loop {
+            if self.buff_len >= n {
+                let data = &self.buff[self.buff_start..(self.buff_start + n)];
+                return Ok(data);
+            }
+            self.buff_fill().await?;
+        }
+    }
+
+    pub(crate) async fn peekn(&mut self, n: usize) -> Result<&[u8], ()> {
+        match self.peekn_err(n).await {
             Ok(result) => Ok(result),
             Err(_) => Err(()),
         }

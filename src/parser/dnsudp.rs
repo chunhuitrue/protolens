@@ -206,7 +206,7 @@ pub(crate) fn dns_parser(data: &[u8], cb: &DnsCallbacks, cb_ctx: *mut c_void) ->
     Ok(())
 }
 
-fn header_parser(data: &[u8]) -> Result<Header, ()> {
+fn header_parser(data: &[u8]) -> Result<DnsHeader, ()> {
     if data.len() < 12 {
         return Err(());
     }
@@ -216,7 +216,7 @@ fn header_parser(data: &[u8]) -> Result<Header, ()> {
         return Err(());
     }
 
-    let header = Header {
+    let header = DnsHeader {
         id: BigEndian::read_u16(&data[..2]),
         qr: flags & mask::QR != 0,
         opcode: ((flags & mask::OPCODE) >> mask::OPCODE.trailing_zeros()).into(),
@@ -681,7 +681,7 @@ pub(crate) struct DnsCallbacks {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct Header {
+pub struct DnsHeader {
     pub id: u16,
     pub qr: bool,
     pub opcode: Opcode,
@@ -2157,7 +2157,7 @@ mod tests {
         let file_path = project_root.join("tests/pcap/dns_udp_qa.pcap");
         let mut cap = Capture::init(file_path).unwrap();
 
-        let captured_headers = Rc::new(RefCell::new(Vec::<Header>::new()));
+        let captured_headers = Rc::new(RefCell::new(Vec::<DnsHeader>::new()));
         let captured_queries = Rc::new(RefCell::new(Vec::<(Vec<u8>, Qtype, Qclass, bool)>::new()));
         let captured_answers = Rc::new(RefCell::new(Vec::<String>::new()));
         let captured_authorities = Rc::new(RefCell::new(Vec::<String>::new()));
@@ -2166,7 +2166,7 @@ mod tests {
 
         let header_callback = {
             let headers_clone = captured_headers.clone();
-            move |header: Header, _offset: usize, _cb_ctx: *mut c_void| {
+            move |header: DnsHeader, _offset: usize, _cb_ctx: *mut c_void| {
                 let mut headers_guard = headers_clone.borrow_mut();
                 headers_guard.push(header);
                 println!(
@@ -2320,13 +2320,22 @@ mod tests {
         let query_header = &headers_guard[0];
         assert!(!query_header.qr, "First packet should be a DNS query");
         assert_eq!(query_header.qcount, 1, "Query packet should have 1 query");
-        assert_eq!(query_header.ancount, 0, "Query packet should have no answers");
+        assert_eq!(
+            query_header.ancount, 0,
+            "Query packet should have no answers"
+        );
 
         // Verify the second packet is a response (QR=true indicates response)
         let response_header = &headers_guard[1];
         assert!(response_header.qr, "Second packet should be a DNS response");
-        assert_eq!(response_header.qcount, 1, "Response packet should have 1 query");
-        assert!(response_header.ancount > 0, "Response packet should have answer records");
+        assert_eq!(
+            response_header.qcount, 1,
+            "Response packet should have 1 query"
+        );
+        assert!(
+            response_header.ancount > 0,
+            "Response packet should have answer records"
+        );
 
         // Verify query content
         assert_eq!(
@@ -2341,7 +2350,11 @@ mod tests {
             query_name.contains("server1.somewebsite15.com"),
             "Query domain should contain server1.somewebsite15.com"
         );
-        assert_eq!(queries_guard[0].1, Qtype::Cname, "Query type should be CNAME");
+        assert_eq!(
+            queries_guard[0].1,
+            Qtype::Cname,
+            "Query type should be CNAME"
+        );
         assert_eq!(queries_guard[0].2, Qclass::IN, "Query class should be IN");
 
         assert!(!answers_guard.is_empty(), "Should have answer records");
@@ -2352,11 +2365,17 @@ mod tests {
         }
 
         let has_cname_record = answers_guard.iter().any(|answer| answer.contains("CNAME"));
-        assert!(has_cname_record, "Response should contain CNAME record type");
+        assert!(
+            has_cname_record,
+            "Response should contain CNAME record type"
+        );
 
         let has_target_ip = answers_guard
             .iter()
             .any(|answer| answer.contains("60.1.1.15"));
-        assert!(has_target_ip, "Response should contain target IP address 60.1.1.15");
+        assert!(
+            has_target_ip,
+            "Response should contain target IP address 60.1.1.15"
+        );
     }
 }

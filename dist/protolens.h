@@ -28,6 +28,9 @@ typedef enum {
     FTPCMD,
     FTPDATA,
     SIP,
+    DNSUDP,
+    DNSTCP,
+    SMB,
     L7UNKNOWN,
 } L7Proto;
 
@@ -303,6 +306,29 @@ void protolens_set_cb_dns_auth(FfiProlens *prolens, CbDnsRr callback);
 void protolens_set_cb_dns_add(FfiProlens *prolens, CbDnsRr callback);
 void protolens_set_cb_dns_opt_add(FfiProlens *prolens, CbDnsOptRr callback);
 void protolens_set_cb_dns_end(FfiProlens *prolens, CbDnsEnd callback);
+
+typedef struct {
+    uint32_t protocol_id;
+    uint16_t structure_size;
+    uint16_t credit_charge;
+    uint32_t status;
+    uint16_t command;
+    uint16_t credit;
+    uint32_t flags;
+    uint32_t next_command;
+    uint64_t message_id;
+    uint32_t reserved;
+    uint32_t tree_id;
+    uint64_t session_id;
+    uint8_t  signature[16];
+} CSmbHeader;
+
+typedef void (*CbSmbFileStart)(CSmbHeader header, uint32_t len, uint64_t offset, uint8_t fid[16], const void *ctx);
+typedef void (*CbSmbFileStop)(CSmbHeader header, const void *ctx);
+
+void protolens_set_cb_smb_file_start(FfiProlens *prolens, CbSmbFileStart callback);
+void protolens_set_cb_smb_file(FfiProlens *prolens, CbData callback);
+void protolens_set_cb_smb_file_stop(FfiProlens *prolens, CbSmbFileStop callback);
 
 #ifdef __cplusplus
 }

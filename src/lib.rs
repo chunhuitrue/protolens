@@ -23,6 +23,7 @@ use std::{cell::RefCell, ffi::c_void, marker::PhantomData, ptr, rc::Rc};
 
 #[cfg(feature = "jemalloc")]
 use jemallocator::Jemalloc;
+use parser::smb::SmbFactory;
 
 pub use crate::packet::Direction;
 pub use crate::packet::L7Proto;
@@ -99,6 +100,10 @@ where
     cb_dns_add: Option<CbDnsAdd>,
     cb_dns_opt_add: Option<CbDnsOptAdd>,
     cb_dns_end: Option<CbDnsEnd>,
+
+    cb_smb_file_start: Option<CbSmbFileStart>,
+    cb_smb_file: Option<CbSmbFile>,
+    cb_smb_file_stop: Option<CbSmbFileStop>,
 
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
@@ -183,6 +188,10 @@ where
             cb_dns_opt_add: None,
             cb_dns_end: None,
 
+            cb_smb_file_start: None,
+            cb_smb_file: None,
+            cb_smb_file_stop: None,
+
             #[cfg(test)]
             cb_raw_pkt: None,
             #[cfg(test)]
@@ -227,6 +236,8 @@ where
             .insert(L7Proto::DnsUdp, Box::new(DnsUdpFactory::<T>::new()));
         self.parsers
             .insert(L7Proto::DnsTcp, Box::new(DnsTcpFactory::<T>::new()));
+        self.parsers
+            .insert(L7Proto::Smb, Box::new(SmbFactory::<T>::new()));
 
         #[cfg(test)]
         {
@@ -675,6 +686,27 @@ where
         F: DnsEndCbFn + 'static,
     {
         self.cb_dns_end = Some(Rc::new(RefCell::new(callback)) as CbDnsEnd);
+    }
+
+    pub fn set_cb_smb_file_start<F>(&mut self, callback: F)
+    where
+        F: SmbFileStartCbFn + 'static,
+    {
+        self.cb_smb_file_start = Some(Rc::new(RefCell::new(callback)) as CbSmbFileStart);
+    }
+
+    pub fn set_cb_smb_file<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_smb_file = Some(Rc::new(RefCell::new(callback)) as CbSmbFile);
+    }
+
+    pub fn set_cb_smb_file_stop<F>(&mut self, callback: F)
+    where
+        F: SmbFileStopCbFn + 'static,
+    {
+        self.cb_smb_file_stop = Some(Rc::new(RefCell::new(callback)) as CbSmbFileStop);
     }
 }
 

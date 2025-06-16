@@ -46,7 +46,7 @@ where
         let finder = Finder::new(BDRY);
 
         loop {
-            let (ret, bytes, seq) = stm.read_mime_octet2(&finder, BDRY).await?;
+            let (ret, bytes, seq) = stm.read_mime_octet(&finder, BDRY).await?;
             if !bytes.is_empty() {
                 if let Some(ref cb) = cb_read {
                     cb.borrow_mut()(bytes, seq, cb_ctx);

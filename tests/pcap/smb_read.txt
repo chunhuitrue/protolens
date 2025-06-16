@@ -1,0 +1,222 @@
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+
+/* 大小写不敏感比较字符串 */
+static int strncmpi(const char *first, const char *last, uint32_t count) {
+    if(count)
+    {
+        int32_t f=0;
+        int32_t l=0;
+        do
+        {
+            if ( ((f = (unsigned char)(*(first++))) >= 'A') &&
+                 (f <= 'Z') )
+                f -= 'A' - 'a';
+            if ( ((l = (unsigned char)(*(last++))) >= 'A') &&
+                 (l <= 'Z') )
+                l -= 'A' - 'a';
+        }
+        while ( --count && f && (f == l) );
+        return ( f - l );
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+
+
+char str1[] = "111111";
+char str2[] = "2222";
+
+char *get_buf(char **str, int *len)
+{
+    *str = str1;
+    *len = strlen(str1);
+
+    return str1;
+}
+
+
+int main1() {
+    int ret;
+
+    /*
+     * ret = strncmpi("content-type", "CONTENT-TYPE", 12);
+     * printf("ret: %d\n", ret);
+     */
+
+    char *tmp;
+    char *str;
+    int len;
+    tmp = get_buf(&str, &len);
+
+    printf("str: %s len: %d\n", str, len);
+
+    return 0;
+}
+
+
+
+struct hdf_list_node {
+    struct hdf_list_node *next;
+    struct hdf_list_node *prev;
+};
+
+
+int main_x() {
+    char name[128];
+
+    /*
+     * name[0] = '\0';
+     */
+    if (name == NULL) {
+        printf("name null.\n");
+    }
+
+    bzero(name, sizeof(name));
+    if (name[0] == '\0') {
+        printf("name 0.\n");
+    }
+
+    return 0;
+}
+
+
+int main_33() {
+    char *str = "   234\r\n";
+
+    printf("atoi: %d\n", atoi(str));
+
+    return 0;
+}
+
+
+int main_4() {
+    char *str = "{1234}\r\n";
+
+    printf("atoi: %d\n", atoi(str + 1));
+
+    return 0;
+}
+
+
+int tarray(int array[][3]) {
+/*
+ * int tarray(int **array) {
+ */
+    array[1][1] = 88;
+    array[2][2] = 99;
+
+    return 0;
+}
+
+int main5() {
+    int array[3][3];
+
+    tarray(array);
+    printf("1.1: %d\n", array[1][1]);
+    printf("1.2: %d\n", array[1][2]);
+    printf("2.2: %d\n", array[2][2]);
+
+    return 0;
+}
+
+
+
+int main6() {
+    char tmp1[16];
+    char tmp2[16];
+    int from;
+    int to;
+    int all;
+    char *str = "bytes */8888\r\n";
+    /*
+     * char *str = "bytes 123-555/\*\r\n";
+     */
+    /*
+     * char *str = "bytes 123-555/8888\r\n";
+     */
+
+
+    sscanf(str, "%*s %[^/]/%s", tmp1, tmp2);
+    printf("tmp1: %s, tmp2: %s\n", tmp1, tmp2);
+    if (*tmp1 == '*') {
+        printf("tmp1 is *\n");
+    }
+    return 0;
+
+
+    sscanf(str, "%d-%d/%d", &from, &to, &all);
+
+
+    sscanf(str, "%d-%d/%d", &from, &to, &all);
+    printf("from: %d, to: %d, all: %d\n", from, to, all);
+
+    return 0;
+}
+
+struct flow {
+    int a;
+    int b;
+};
+
+struct flow_info {
+    int a;
+    struct flow flow;
+};
+
+int main7() {
+    struct flow flow;
+    struct flow_info flow_info;
+
+    struct flow *pf;
+    struct flow_info *pi;
+
+    flow.a = 11;
+    flow.b = 22;
+    flow_info.a = 33;
+
+    pf = &flow;
+    pi = &flow_info;
+
+    /* ok */
+    /*
+     * memcpy(&(flow_info.flow), &flow, sizeof(struct flow));
+     */
+
+    memcpy(&(pi->flow), pf, sizeof(struct flow));
+
+    printf("flowinfo: a: %d, ifa: %d, ifb: %d\n", flow_info.a, flow_info.flow.a, flow_info.flow.b);
+}
+
+
+int main() {
+    FILE *fp; 
+    char *buf;
+    int n = 0;
+    int all = 0;
+    int i;
+    int ret;
+
+    buf = malloc(100);
+
+    fp = fopen("/root/download/test_write", "wb");
+    if (fp == NULL) {
+        printf("open err\n");
+    }
+
+    for (i = 0; i < 1000; i++) {
+        n = 4;
+        all += n;
+        ret = fwrite(buf, n, 1, fp);
+        printf("size buf: %d, ret: %d\n", all, ret);
+    }
+
+    fclose(fp);
+
+    return 0;
+}

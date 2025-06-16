@@ -1,5 +1,5 @@
 use crate::dnsudp::Qclass;
-use crate::{Direction, Header, OptRR, Packet, PktStrm, Qtype, RR, ReadRet};
+use crate::{Direction, DnsHeader, OptRR, Packet, PktStrm, Qtype, RR, ReadRet};
 use memchr::memmem::Finder;
 use nom::{
     IResult,
@@ -12,6 +12,8 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::net::IpAddr;
 use std::rc::Rc;
+
+use super::smb::SmbHeader;
 
 pub trait OrdPktCbFn<T>: FnMut(T, *mut c_void, Direction) {}
 impl<F, T> OrdPktCbFn<T> for F where F: FnMut(T, *mut c_void, Direction) {}
@@ -58,8 +60,8 @@ impl<F: FnMut(Option<IpAddr>, u16, *mut c_void, Direction)> FtpLinkCbFn for F {}
 pub trait SipBodyCbFn: FnMut(&[u8], u32, *mut c_void, Direction) {}
 impl<F: FnMut(&[u8], u32, *mut c_void, Direction)> SipBodyCbFn for F {}
 
-pub trait DnsHeaderCbFn: FnMut(Header, usize, *mut c_void) {}
-impl<F: FnMut(Header, usize, *mut c_void)> DnsHeaderCbFn for F {}
+pub trait DnsHeaderCbFn: FnMut(DnsHeader, usize, *mut c_void) {}
+impl<F: FnMut(DnsHeader, usize, *mut c_void)> DnsHeaderCbFn for F {}
 
 pub trait DnsQueryCbFn: FnMut(&[u8], Qtype, Qclass, bool, usize, *mut c_void) {}
 impl<F: FnMut(&[u8], Qtype, Qclass, bool, usize, *mut c_void)> DnsQueryCbFn for F {}
@@ -72,6 +74,12 @@ impl<F: FnMut(OptRR, usize, *mut c_void)> DnsOptRrCbFn for F {}
 
 pub trait DnsEndCbFn: FnMut(*mut c_void) {}
 impl<F: FnMut(*mut c_void)> DnsEndCbFn for F {}
+
+pub trait SmbFileStartCbFn: FnMut(&SmbHeader, u32, u64, u128, *mut c_void) {}
+impl<F: FnMut(&SmbHeader, u32, u64, u128, *mut c_void)> SmbFileStartCbFn for F {}
+
+pub trait SmbFileStopCbFn: FnMut(&SmbHeader, *mut c_void) {}
+impl<F: FnMut(&SmbHeader, *mut c_void)> SmbFileStopCbFn for F {}
 
 pub(crate) type CbOrdPkt<T> = Rc<RefCell<dyn OrdPktCbFn<T> + 'static>>;
 pub(crate) type CbUser = Rc<RefCell<dyn DataCbFn + 'static>>;
@@ -95,6 +103,9 @@ pub(crate) type CbDnsAuth = Rc<RefCell<dyn DnsRrCbFn + 'static>>;
 pub(crate) type CbDnsAdd = Rc<RefCell<dyn DnsRrCbFn + 'static>>;
 pub(crate) type CbDnsOptAdd = Rc<RefCell<dyn DnsOptRrCbFn + 'static>>;
 pub(crate) type CbDnsEnd = Rc<RefCell<dyn DnsEndCbFn + 'static>>;
+pub(crate) type CbSmbFileStart = Rc<RefCell<dyn SmbFileStartCbFn + 'static>>;
+pub(crate) type CbSmbFile = Rc<RefCell<dyn DataCbFn + 'static>>;
+pub(crate) type CbSmbFileStop = Rc<RefCell<dyn SmbFileStopCbFn + 'static>>;
 
 #[derive(Clone)]
 pub(crate) struct Callbacks {
@@ -286,7 +297,7 @@ where
     }
     loop {
         let (ret, content, seq) = stm
-            .read_mime_octet2(params.bdry_finder.unwrap(), params.bdry)
+            .read_mime_octet(params.bdry_finder.unwrap(), params.bdry)
             .await?;
 
         if let Some(cb) = params.cb_body {

@@ -43,8 +43,19 @@ where
         let stm = unsafe { &mut *strm };
 
         while !stm.fin() {
+            #[cfg(not(feature = "bench"))]
+            let peek_bytes = stm.peekn(read_size).await?;
+            #[cfg(not(feature = "bench"))]
+            let peek_vec = peek_bytes.to_vec();
+
             match stm.readn_err(read_size).await {
                 Ok((bytes, seq)) => {
+                    #[cfg(not(feature = "bench"))]
+                    assert_eq!(
+                        peek_vec, bytes,
+                        "The content of peek_bytes and bytes should be consistent."
+                    );
+
                     if let Some(ref cb) = cb_readn {
                         cb.borrow_mut()(bytes, seq, cb_ctx);
                     }
