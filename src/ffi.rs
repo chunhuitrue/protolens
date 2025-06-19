@@ -239,6 +239,7 @@ pub enum CL7Proto {
     DnsUdp,
     DnsTcp,
     Smb,
+    Tls,
 
     Unknown,
 }
@@ -257,6 +258,7 @@ impl From<CL7Proto> for L7Proto {
             CL7Proto::DnsUdp => L7Proto::DnsUdp,
             CL7Proto::DnsTcp => L7Proto::DnsTcp,
             CL7Proto::Smb => L7Proto::Smb,
+            CL7Proto::Tls => L7Proto::Tls,
             CL7Proto::Unknown => L7Proto::Unknown,
         }
     }
@@ -1939,4 +1941,109 @@ pub extern "C" fn protolens_set_cb_smb_file_stop(
         callback.unwrap()(c_header, ctx);
     };
     prolens.0.set_cb_smb_file_stop(wrapper);
+}
+
+type CbTlsEvt = extern "C" fn(ctx: *const c_void);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_tls_clt_random(
+    prolens: *mut FfiProlens,
+    callback: Option<CbData>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_tls_clt_random(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_tls_clt_key(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_tls_clt_key(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_tls_srv_random(
+    prolens: *mut FfiProlens,
+    callback: Option<CbData>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_tls_srv_random(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_tls_srv_key(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_tls_srv_key(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_tls_cert_start(
+    prolens: *mut FfiProlens,
+    callback: Option<CbTlsEvt>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void| {
+        callback.unwrap()(ctx);
+    };
+    prolens.0.set_cb_tls_cert_start(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_tls_cert(prolens: *mut FfiProlens, callback: Option<CbData>) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |data: &[u8], seq: u32, ctx: *mut c_void| {
+        callback.unwrap()(data.as_ptr(), data.len(), seq, ctx);
+    };
+    prolens.0.set_cb_tls_cert(wrapper);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn protolens_set_cb_tls_cert_stop(
+    prolens: *mut FfiProlens,
+    callback: Option<CbTlsEvt>,
+) {
+    if prolens.is_null() || callback.is_none() {
+        return;
+    }
+
+    let prolens = unsafe { &mut *prolens };
+    let wrapper = move |ctx: *mut c_void| {
+        callback.unwrap()(ctx);
+    };
+    prolens.0.set_cb_tls_cert_stop(wrapper);
 }

@@ -81,6 +81,9 @@ impl<F: FnMut(&SmbHeader, u32, u64, u128, *mut c_void)> SmbFileStartCbFn for F {
 pub trait SmbFileStopCbFn: FnMut(&SmbHeader, *mut c_void) {}
 impl<F: FnMut(&SmbHeader, *mut c_void)> SmbFileStopCbFn for F {}
 
+pub trait TlsCertEvtCbFn: FnMut(*mut c_void) {}
+impl<F: FnMut(*mut c_void)> TlsCertEvtCbFn for F {}
+
 pub(crate) type CbOrdPkt<T> = Rc<RefCell<dyn OrdPktCbFn<T> + 'static>>;
 pub(crate) type CbUser = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbPass = Rc<RefCell<dyn DataCbFn + 'static>>;
@@ -106,6 +109,11 @@ pub(crate) type CbDnsEnd = Rc<RefCell<dyn DnsEndCbFn + 'static>>;
 pub(crate) type CbSmbFileStart = Rc<RefCell<dyn SmbFileStartCbFn + 'static>>;
 pub(crate) type CbSmbFile = Rc<RefCell<dyn DataCbFn + 'static>>;
 pub(crate) type CbSmbFileStop = Rc<RefCell<dyn SmbFileStopCbFn + 'static>>;
+pub(crate) type CbTlsRandom = Rc<RefCell<dyn DataCbFn + 'static>>;
+pub(crate) type CbTlsKey = Rc<RefCell<dyn DataCbFn + 'static>>;
+pub(crate) type CbTlsCertStart = Rc<RefCell<dyn TlsCertEvtCbFn + 'static>>;
+pub(crate) type CbTlsCert = Rc<RefCell<dyn DataCbFn + 'static>>;
+pub(crate) type CbTlsCertStop = Rc<RefCell<dyn TlsCertEvtCbFn + 'static>>;
 
 #[derive(Clone)]
 pub(crate) struct Callbacks {

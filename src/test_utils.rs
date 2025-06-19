@@ -3,6 +3,7 @@ use crate::Direction;
 use crate::{L7Proto, Packet, TransProto};
 use etherparse::*;
 use pcap::Capture as PcapCap;
+use pcap::Linktype;
 use pcap::Offline;
 use std::cell::RefCell;
 use std::fmt;
@@ -184,7 +185,7 @@ impl CapPacket {
         match PacketHeaders::from_ethernet_slice(self) {
             Ok(headers) => {
                 if headers.ip.is_none() || headers.transport.is_none() {
-                    return Err(PacketError::DecodeErr);
+                    return self.decode_ip_packet();
                 }
 
                 let payload_offset =
@@ -230,6 +231,77 @@ impl CapPacket {
                     ip: headers.ip,
                     transport: headers.transport,
                     payload_offset,
+                    payload_len,
+                    l7_proto: L7Proto::Unknown,
+                    direction: Direction::C2s,
+                }));
+                Ok(())
+            }
+            Err(_) => self.decode_ip_packet(),
+        }
+    }
+
+    pub(crate) fn decode_ip_packet(&self) -> Result<(), PacketError> {
+        // For loopback interfaces, skip the first 4 bytes (loopback header)
+        let ip_data = if self.data.len() > 4 {
+            &self.data[4..]
+        } else {
+            &self.data
+        };
+
+        match PacketHeaders::from_ip_slice(ip_data) {
+            Ok(headers) => {
+                if headers.ip.is_none() || headers.transport.is_none() {
+                    return Err(PacketError::DecodeErr);
+                }
+
+                let payload_offset = headers.payload.as_ptr() as usize - ip_data.as_ptr() as usize;
+                let mut payload_len = 0;
+
+                match (&headers.ip, &headers.transport) {
+                    (Some(IpHeader::Version4(ipv4, _)), Some(transport)) => {
+                        let ip_total_len = ipv4.total_len() as usize;
+                        let ip_header_len = ipv4.ihl() as usize * 4;
+
+                        match transport {
+                            TransportHeader::Tcp(tcp_header) => {
+                                let tcp_header_len = tcp_header.header_len() as usize;
+                                payload_len = ip_total_len - ip_header_len - tcp_header_len;
+                            }
+                            TransportHeader::Udp(_) => {
+                                payload_len = ip_total_len - ip_header_len - 8;
+                            }
+                            _ => {}
+                        }
+                    }
+                    (Some(IpHeader::Version6(ipv6, _)), Some(transport)) => {
+                        let ip_payload_len = ipv6.payload_length as usize;
+
+                        match transport {
+                            TransportHeader::Tcp(tcp_header) => {
+                                let tcp_header_len = tcp_header.header_len() as usize;
+                                payload_len = ip_payload_len - tcp_header_len;
+                            }
+                            TransportHeader::Udp(_) => {
+                                payload_len = ip_payload_len - 8;
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {
+                        return Err(PacketError::DecodeErr);
+                    }
+                }
+
+                // Adjust payload_offset to account for the 4-byte loopback header we skipped
+                let adjusted_payload_offset = payload_offset + 4;
+
+                self.header.replace(Some(PktHeader {
+                    link: None, // No ethernet header for loopback
+                    vlan: headers.vlan,
+                    ip: headers.ip,
+                    transport: headers.transport,
+                    payload_offset: adjusted_payload_offset,
                     payload_len,
                     l7_proto: L7Proto::Unknown,
                     direction: Direction::C2s,
@@ -424,14 +496,19 @@ pub(crate) enum CaptureError {}
 
 pub(crate) struct Capture {
     cap: PcapCap<Offline>,
+    datalink: Linktype,
     pkt_num: u64,
 }
 
 impl Capture {
     pub(crate) fn init<P: AsRef<Path>>(path: P) -> Result<Capture, CaptureError> {
+        let cap = PcapCap::from_file(path).unwrap();
+        let datalink = cap.get_datalink();
+
         let capture = Capture {
-            cap: PcapCap::from_file(path).unwrap(),
+            cap,
             pkt_num: 0,
+            datalink,
         };
         Ok(capture)
     }

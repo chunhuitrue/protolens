@@ -31,6 +31,7 @@ typedef enum {
     DNSUDP,
     DNSTCP,
     SMB,
+    TLS,
     L7UNKNOWN,
 } L7Proto;
 
@@ -329,6 +330,16 @@ typedef void (*CbSmbFileStop)(CSmbHeader header, const void *ctx);
 void protolens_set_cb_smb_file_start(FfiProlens *prolens, CbSmbFileStart callback);
 void protolens_set_cb_smb_file(FfiProlens *prolens, CbData callback);
 void protolens_set_cb_smb_file_stop(FfiProlens *prolens, CbSmbFileStop callback);
+
+typedef void (*CbTlsEvt)(const void *ctx);
+
+void protolens_set_cb_tls_clt_random(FfiProlens *prolens, CbData callback);
+void protolens_set_cb_tls_clt_key(FfiProlens *prolens, CbData callback);
+void protolens_set_cb_tls_srv_random(FfiProlens *prolens, CbData callback);
+void protolens_set_cb_tls_srv_key(FfiProlens *prolens, CbData callback);
+void protolens_set_cb_tls_cert_start(FfiProlens *prolens, CbTlsEvt callback);
+void protolens_set_cb_tls_cert(FfiProlens *prolens, CbData callback);
+void protolens_set_cb_tls_cert_stop(FfiProlens *prolens, CbTlsEvt callback);
 
 #ifdef __cplusplus
 }

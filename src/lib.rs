@@ -17,13 +17,13 @@ use crate::readline::*;
 use crate::{byte::*, eof::*, octet::*, rawpacket::*, read::*, readn::*};
 use crate::{
     common::*, config::*, dnstcp::*, dnsudp::*, enum_map::EnumMap, ftpcmd::*, ftpdata::*, heap::*,
-    http::*, imap::*, ordpacket::*, parser::*, pktstrm::*, pop3::*, sip::*, smtp::*, stats::*,
+    http::*, imap::*, ordpacket::*, parser::*, pktstrm::*, pop3::*, sip::*, smb::SmbFactory,
+    smtp::*, stats::*, tls::TlsFactory,
 };
 use std::{cell::RefCell, ffi::c_void, marker::PhantomData, ptr, rc::Rc};
 
 #[cfg(feature = "jemalloc")]
 use jemallocator::Jemalloc;
-use parser::smb::SmbFactory;
 
 pub use crate::packet::Direction;
 pub use crate::packet::L7Proto;
@@ -104,6 +104,14 @@ where
     cb_smb_file_start: Option<CbSmbFileStart>,
     cb_smb_file: Option<CbSmbFile>,
     cb_smb_file_stop: Option<CbSmbFileStop>,
+
+    cb_tls_clt_random: Option<CbTlsRandom>,
+    cb_tls_clt_key: Option<CbTlsKey>,
+    cb_tls_srv_random: Option<CbTlsRandom>,
+    cb_tls_srv_key: Option<CbTlsKey>,
+    cb_tls_cert_start: Option<CbTlsCertStart>,
+    cb_tls_cert: Option<CbTlsCert>,
+    cb_tls_cert_stop: Option<CbTlsCertStop>,
 
     #[cfg(test)]
     cb_raw_pkt: Option<CbRawPkt<T>>,
@@ -192,6 +200,14 @@ where
             cb_smb_file: None,
             cb_smb_file_stop: None,
 
+            cb_tls_clt_random: None,
+            cb_tls_clt_key: None,
+            cb_tls_srv_random: None,
+            cb_tls_srv_key: None,
+            cb_tls_cert_start: None,
+            cb_tls_cert: None,
+            cb_tls_cert_stop: None,
+
             #[cfg(test)]
             cb_raw_pkt: None,
             #[cfg(test)]
@@ -238,6 +254,8 @@ where
             .insert(L7Proto::DnsTcp, Box::new(DnsTcpFactory::<T>::new()));
         self.parsers
             .insert(L7Proto::Smb, Box::new(SmbFactory::<T>::new()));
+        self.parsers
+            .insert(L7Proto::Tls, Box::new(TlsFactory::<T>::new()));
 
         #[cfg(test)]
         {
@@ -707,6 +725,55 @@ where
         F: SmbFileStopCbFn + 'static,
     {
         self.cb_smb_file_stop = Some(Rc::new(RefCell::new(callback)) as CbSmbFileStop);
+    }
+
+    pub fn set_cb_tls_clt_random<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_tls_clt_random = Some(Rc::new(RefCell::new(callback)) as CbTlsRandom);
+    }
+
+    pub fn set_cb_tls_clt_key<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_tls_clt_key = Some(Rc::new(RefCell::new(callback)) as CbTlsKey);
+    }
+
+    pub fn set_cb_tls_srv_random<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_tls_srv_random = Some(Rc::new(RefCell::new(callback)) as CbTlsRandom);
+    }
+
+    pub fn set_cb_tls_srv_key<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_tls_srv_key = Some(Rc::new(RefCell::new(callback)) as CbTlsKey);
+    }
+
+    pub fn set_cb_tls_cert_start<F>(&mut self, callback: F)
+    where
+        F: TlsCertEvtCbFn + 'static,
+    {
+        self.cb_tls_cert_start = Some(Rc::new(RefCell::new(callback)) as CbTlsCertStart);
+    }
+
+    pub fn set_cb_tls_cert<F>(&mut self, callback: F)
+    where
+        F: DataCbFn + 'static,
+    {
+        self.cb_tls_cert = Some(Rc::new(RefCell::new(callback)) as CbTlsCert);
+    }
+
+    pub fn set_cb_tls_cert_stop<F>(&mut self, callback: F)
+    where
+        F: TlsCertEvtCbFn + 'static,
+    {
+        self.cb_tls_cert_stop = Some(Rc::new(RefCell::new(callback)) as CbTlsCertStop);
     }
 }
 

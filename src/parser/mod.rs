@@ -1,4 +1,3 @@
-// #![allow(unused)]
 pub mod common;
 pub mod dnstcp;
 pub mod dnsudp;
@@ -11,6 +10,7 @@ pub mod pop3;
 pub mod sip;
 pub mod smb;
 pub mod smtp;
+pub mod tls;
 
 #[cfg(test)]
 pub mod byte;

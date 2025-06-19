@@ -16,6 +16,7 @@ pub enum L7Proto {
     DnsUdp,
     DnsTcp,
     Smb,
+    Tls,
 
     #[cfg(test)]
     RawPacket,
