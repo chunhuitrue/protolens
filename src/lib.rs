@@ -1187,7 +1187,7 @@ pub mod bench {
     }
 
     fn readline_packets(payload_len: usize) -> Vec<Box<CapPacket>> {
-        let _: () = assert!(payload_len % LINE_LEN == 0);
+        let _: () = assert!(payload_len.is_multiple_of(LINE_LEN));
         let lines_per_pkt = payload_len / LINE_LEN;
 
         let mut payload = Vec::with_capacity(payload_len);

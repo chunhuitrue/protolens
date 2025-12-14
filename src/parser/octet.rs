@@ -47,11 +47,10 @@ where
 
         loop {
             let (ret, bytes, seq) = stm.read_mime_octet(&finder, BDRY).await?;
-            if !bytes.is_empty() {
-                if let Some(ref cb) = cb_read {
+            if !bytes.is_empty()
+                && let Some(ref cb) = cb_read {
                     cb.borrow_mut()(bytes, seq, cb_ctx);
                 }
-            }
 
             match ret {
                 ReadRet::Data => {}

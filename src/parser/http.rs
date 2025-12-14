@@ -346,11 +346,10 @@ where
                 }
             }
 
-            if let Ok(payload) = payload_s2c {
-                if req(unsafe { std::str::from_utf8_unchecked(payload) }) {
+            if let Ok(payload) = payload_s2c
+                && req(unsafe { std::str::from_utf8_unchecked(payload) }) {
                     return Some(false);
                 }
-            }
 
             Some(true)
         }

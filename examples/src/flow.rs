@@ -42,12 +42,12 @@ impl Flow {
         }
     }
 
-    pub fn get(&self, pkt: &CapPacket) -> Option<Ref<FlowNode>> {
+    pub fn get(&self, pkt: &CapPacket) -> Option<Ref<'_, FlowNode>> {
         make_key(pkt.header.borrow().as_ref().unwrap())
             .map(|key| Ref::map(self.table.borrow(), |tbl| tbl.get(&key).unwrap()))
     }
 
-    pub fn get_mut(&self, pkt: &CapPacket) -> Option<RefMut<FlowNode>> {
+    pub fn get_mut(&self, pkt: &CapPacket) -> Option<RefMut<'_, FlowNode>> {
         make_key(pkt.header.borrow().as_ref().unwrap())
             .map(|key| RefMut::map(self.table.borrow_mut(), |tbl| tbl.get_mut(&key).unwrap()))
     }
@@ -57,7 +57,7 @@ impl Flow {
         pkt: &CapPacket,
         now: u128,
         prolens: &mut Prolens<CapPacket>,
-    ) -> Option<RefMut<FlowNode>> {
+    ) -> Option<RefMut<'_, FlowNode>> {
         if let Some(mut node) = self.get_mut_node(pkt, now) {
             // [插入点] 数据包处理
             recognize_pkt(pkt, &mut node); // 协议识别
@@ -81,7 +81,7 @@ impl Flow {
 
     pub fn clear(&self) {}
 
-    fn get_node(&self, pkt: &CapPacket, now: u128) -> Option<Ref<FlowNode>> {
+    fn get_node(&self, pkt: &CapPacket, now: u128) -> Option<Ref<'_, FlowNode>> {
         let key = make_key(pkt.header.borrow().as_ref().unwrap())?;
         if !self.table.borrow().contains_key(&key) {
             self.table
@@ -91,7 +91,7 @@ impl Flow {
         self.get(pkt)
     }
 
-    fn get_mut_node(&self, pkt: &CapPacket, now: u128) -> Option<RefMut<FlowNode>> {
+    fn get_mut_node(&self, pkt: &CapPacket, now: u128) -> Option<RefMut<'_, FlowNode>> {
         let key = make_key(pkt.header.borrow().as_ref().unwrap())?;
         if !self.table.borrow().contains_key(&key) {
             self.table

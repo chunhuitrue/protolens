@@ -137,12 +137,11 @@ where
                 }
             }
 
-            if let Ok(payload) = payload_c2s {
-                if payload.len() >= 4 && srv_cmd(unsafe { std::str::from_utf8_unchecked(payload) })
+            if let Ok(payload) = payload_c2s
+                && payload.len() >= 4 && srv_cmd(unsafe { std::str::from_utf8_unchecked(payload) })
                 {
                     return Some(false);
                 }
-            }
 
             Some(true)
         }

@@ -158,11 +158,10 @@ where
         }
 
         self.top_dedup();
-        if let Some(pkt) = self.peek() {
-            if pkt.seq() <= self.next_seq {
+        if let Some(pkt) = self.peek()
+            && pkt.seq() <= self.next_seq {
                 return Some((pkt, self.next_seq));
             }
-        }
         None
     }
 

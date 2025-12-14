@@ -34,11 +34,10 @@ where
         while !stm.fin() {
             let pkt = stm.next_ord_pkt().await;
 
-            if let Some(ref cb) = cb_ord_pkt {
-                if let Some(pkt) = pkt {
+            if let Some(ref cb) = cb_ord_pkt
+                && let Some(pkt) = pkt {
                     cb.borrow_mut()(pkt, cb_ctx, dir);
                 }
-            }
         }
         Ok(())
     }

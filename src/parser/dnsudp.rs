@@ -554,7 +554,7 @@ fn rdata_parser<'a>(
     }
 }
 
-fn a_parser(rdata: &[u8]) -> Result<Rdata, ()> {
+fn a_parser(rdata: &[u8]) -> Result<Rdata<'_>, ()> {
     if rdata.len() != 4 {
         return Err(());
     }
@@ -563,7 +563,7 @@ fn a_parser(rdata: &[u8]) -> Result<Rdata, ()> {
     Ok(Rdata::A(ip))
 }
 
-fn aaaa_parser(rdata: &[u8]) -> Result<Rdata, ()> {
+fn aaaa_parser(rdata: &[u8]) -> Result<Rdata<'_>, ()> {
     if rdata.len() != 16 {
         return Err(());
     }

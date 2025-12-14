@@ -37,11 +37,10 @@ where
 
         while !stm.fin() {
             let pkt = stm.next_raw_pkt().await;
-            if let Some(ref cb) = cb_raw_pkt {
-                if let Some(pkt) = pkt {
+            if let Some(ref cb) = cb_raw_pkt
+                && let Some(pkt) = pkt {
                     cb.borrow_mut()(pkt.clone(), cb_ctx);
                 }
-            }
         }
         Ok(())
     }

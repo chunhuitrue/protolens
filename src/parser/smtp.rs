@@ -192,8 +192,8 @@ where
                 }
             }
 
-            if let Ok(payload) = payload_c2s {
-                if payload.len() >= 4
+            if let Ok(payload) = payload_c2s
+                && payload.len() >= 4
                     && (payload.starts_with(b"220 ")
                         || payload.starts_with(b"220-")
                         || payload.starts_with(b"421 ")
@@ -201,7 +201,6 @@ where
                 {
                     return Some(false);
                 }
-            }
 
             Some(true)
         }

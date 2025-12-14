@@ -295,8 +295,8 @@ where
                 return None;
             }
 
-            if let Ok(payload) = payload_c2s {
-                if payload.len() >= 32 {
+            if let Ok(payload) = payload_c2s
+                && payload.len() >= 32 {
                     let flags = LittleEndian::read_u32(&payload[28..32]);
                     if (flags & HEADER_FLAGS_SERVER_TO_REDIR) == 0 {
                         return Some(true);
@@ -304,10 +304,9 @@ where
                         return Some(false);
                     }
                 }
-            }
 
-            if let Ok(payload) = payload_s2c {
-                if payload.len() >= 32 {
+            if let Ok(payload) = payload_s2c
+                && payload.len() >= 32 {
                     let flags = LittleEndian::read_u32(&payload[28..32]);
                     if (flags & HEADER_FLAGS_SERVER_TO_REDIR) == 1 {
                         return Some(true);
@@ -315,7 +314,6 @@ where
                         return Some(false);
                     }
                 }
-            }
 
             Some(true)
         }

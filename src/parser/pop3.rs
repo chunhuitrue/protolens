@@ -146,11 +146,10 @@ where
                 }
             }
 
-            if let Ok(payload) = payload_c2s {
-                if payload.len() >= 4 && (payload.starts_with(b"+OK ")) {
+            if let Ok(payload) = payload_c2s
+                && payload.len() >= 4 && (payload.starts_with(b"+OK ")) {
                     return Some(false);
                 }
-            }
 
             Some(true)
         }

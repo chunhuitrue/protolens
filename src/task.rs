@@ -179,8 +179,8 @@ where
     }
 
     fn confirm_dir(&mut self) {
-        if let Some(dir_confirm_parser) = &self.dir_confirm_parser {
-            if let Some(c2s_dir) = dir_confirm_parser(
+        if let Some(dir_confirm_parser) = &self.dir_confirm_parser
+            && let Some(c2s_dir) = dir_confirm_parser(
                 &mut self.strm_c2s,
                 &mut self.strm_s2c,
                 self.c2s_port,
@@ -193,7 +193,6 @@ where
                 }
                 self.dir_confirm = true;
             }
-        }
     }
 
     // None - 表示解析器还在pending状态或没有parser
@@ -411,15 +410,14 @@ where
     }
 
     fn confirm_dir(&mut self, pkt: &T) {
-        if let Some(dir_confirm_parser) = &self.dir_confirm_parser {
-            if let Some(c2s_dir) = dir_confirm_parser(pkt) {
+        if let Some(dir_confirm_parser) = &self.dir_confirm_parser
+            && let Some(c2s_dir) = dir_confirm_parser(pkt) {
                 if !c2s_dir {
                     std::mem::swap(&mut self.c2s_ip, &mut self.s2c_ip);
                     std::mem::swap(&mut self.c2s_port, &mut self.s2c_port);
                 }
                 self.dir_confirm = true;
             }
-        }
     }
 
     fn run(&mut self, pkt: T) -> Option<Result<(), ()>> {
